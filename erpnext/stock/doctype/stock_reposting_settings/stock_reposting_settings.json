@@ -12,7 +12,10 @@
   "start_time",
   "end_time",
   "limits_dont_apply_on",
-  "item_based_reposting"
+  "item_based_reposting",
+  "do_reposting_for_each_stock_transaction",
+  "errors_notification_section",
+  "notify_reposting_error_to_role"
  ],
  "fields": [
   {
@@ -48,16 +51,33 @@
    "label": "Limit timeslot for Stock Reposting"
   },
   {
-   "default": "0",
+   "default": "1",
    "fieldname": "item_based_reposting",
    "fieldtype": "Check",
    "label": "Use Item based reposting"
+  },
+  {
+   "fieldname": "notify_reposting_error_to_role",
+   "fieldtype": "Link",
+   "label": "Notify Reposting Error to Role",
+   "options": "Role"
+  },
+  {
+   "fieldname": "errors_notification_section",
+   "fieldtype": "Section Break",
+   "label": "Errors Notification"
+  },
+  {
+   "default": "0",
+   "fieldname": "do_reposting_for_each_stock_transaction",
+   "fieldtype": "Check",
+   "label": "Do reposting for each Stock Transaction"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2021-11-02 01:22:45.155841",
+ "modified": "2024-04-24 12:19:40.204888",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Stock Reposting Settings",
@@ -74,7 +94,8 @@
    "write": 1
   }
  ],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

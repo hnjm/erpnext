@@ -7,6 +7,18 @@ from frappe.model.document import Document
 
 
 class PartyType(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		account_type: DF.Literal["Payable", "Receivable"]
+		party_type: DF.Link
+	# end: auto-generated types
+
 	pass
 
 
@@ -19,10 +31,8 @@ def get_party_type(doctype, txt, searchfield, start, page_len, filters):
 		cond = "and account_type = '%s'" % account_type
 
 	return frappe.db.sql(
-		"""select name from `tabParty Type`
-			where `{key}` LIKE %(txt)s {cond}
-			order by name limit %(page_len)s offset %(start)s""".format(
-			key=searchfield, cond=cond
-		),
+		f"""select name from `tabParty Type`
+			where `{searchfield}` LIKE %(txt)s {cond}
+			order by name limit %(page_len)s offset %(start)s""",
 		{"txt": "%" + txt + "%", "start": start, "page_len": page_len},
 	)

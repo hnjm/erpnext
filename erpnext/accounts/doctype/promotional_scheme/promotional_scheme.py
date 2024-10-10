@@ -51,6 +51,7 @@ price_discount_fields = [
 	"discount_percentage",
 	"validate_applied_rule",
 	"apply_multiple_pricing_rules",
+	"for_price_list",
 ]
 
 product_discount_fields = [
@@ -60,7 +61,10 @@ product_discount_fields = [
 	"free_item_rate",
 	"same_item",
 	"is_recursive",
+	"recurse_for",
+	"apply_recursion_over",
 	"apply_multiple_pricing_rules",
+	"round_free_qty",
 ]
 
 
@@ -69,6 +73,73 @@ class TransactionExists(frappe.ValidationError):
 
 
 class PromotionalScheme(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.campaign_item.campaign_item import CampaignItem
+		from erpnext.accounts.doctype.customer_group_item.customer_group_item import CustomerGroupItem
+		from erpnext.accounts.doctype.customer_item.customer_item import CustomerItem
+		from erpnext.accounts.doctype.pricing_rule_brand.pricing_rule_brand import PricingRuleBrand
+		from erpnext.accounts.doctype.pricing_rule_item_code.pricing_rule_item_code import (
+			PricingRuleItemCode,
+		)
+		from erpnext.accounts.doctype.pricing_rule_item_group.pricing_rule_item_group import (
+			PricingRuleItemGroup,
+		)
+		from erpnext.accounts.doctype.promotional_scheme_price_discount.promotional_scheme_price_discount import (
+			PromotionalSchemePriceDiscount,
+		)
+		from erpnext.accounts.doctype.promotional_scheme_product_discount.promotional_scheme_product_discount import (
+			PromotionalSchemeProductDiscount,
+		)
+		from erpnext.accounts.doctype.sales_partner_item.sales_partner_item import SalesPartnerItem
+		from erpnext.accounts.doctype.supplier_group_item.supplier_group_item import SupplierGroupItem
+		from erpnext.accounts.doctype.supplier_item.supplier_item import SupplierItem
+		from erpnext.accounts.doctype.territory_item.territory_item import TerritoryItem
+
+		applicable_for: DF.Literal[
+			"",
+			"Customer",
+			"Customer Group",
+			"Territory",
+			"Sales Partner",
+			"Campaign",
+			"Supplier",
+			"Supplier Group",
+		]
+		apply_on: DF.Literal["", "Item Code", "Item Group", "Brand", "Transaction"]
+		apply_rule_on_other: DF.Literal["", "Item Code", "Item Group", "Brand"]
+		brands: DF.Table[PricingRuleBrand]
+		buying: DF.Check
+		campaign: DF.TableMultiSelect[CampaignItem]
+		company: DF.Link
+		currency: DF.Link | None
+		customer: DF.TableMultiSelect[CustomerItem]
+		customer_group: DF.TableMultiSelect[CustomerGroupItem]
+		disable: DF.Check
+		is_cumulative: DF.Check
+		item_groups: DF.Table[PricingRuleItemGroup]
+		items: DF.Table[PricingRuleItemCode]
+		mixed_conditions: DF.Check
+		other_brand: DF.Link | None
+		other_item_code: DF.Link | None
+		other_item_group: DF.Link | None
+		price_discount_slabs: DF.Table[PromotionalSchemePriceDiscount]
+		product_discount_slabs: DF.Table[PromotionalSchemeProductDiscount]
+		sales_partner: DF.TableMultiSelect[SalesPartnerItem]
+		selling: DF.Check
+		supplier: DF.TableMultiSelect[SupplierItem]
+		supplier_group: DF.TableMultiSelect[SupplierGroupItem]
+		territory: DF.TableMultiSelect[TerritoryItem]
+		valid_from: DF.Date | None
+		valid_upto: DF.Date | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not self.selling and not self.buying:
 			frappe.throw(_("Either 'Selling' or 'Buying' must be selected"), title=_("Mandatory"))
@@ -77,6 +148,7 @@ class PromotionalScheme(Document):
 
 		self.validate_applicable_for()
 		self.validate_pricing_rules()
+		self.validate_mixed_with_recursion()
 
 	def validate_applicable_for(self):
 		if self.applicable_for:
@@ -94,15 +166,13 @@ class PromotionalScheme(Document):
 		docnames = []
 
 		# If user has changed applicable for
-		if self._doc_before_save.applicable_for == self.applicable_for:
+		if self.get_doc_before_save() and self.get_doc_before_save().applicable_for == self.applicable_for:
 			return
 
 		docnames = frappe.get_all("Pricing Rule", filters={"promotional_scheme": self.name})
 
 		for docname in docnames:
-			if frappe.db.exists(
-				"Pricing Rule Detail", {"pricing_rule": docname.name, "docstatus": ("<", 2)}
-			):
+			if frappe.db.exists("Pricing Rule Detail", {"pricing_rule": docname.name, "docstatus": ("<", 2)}):
 				raise_for_transaction_exists(self.name)
 
 		if docnames and not transaction_exists:
@@ -110,6 +180,7 @@ class PromotionalScheme(Document):
 				frappe.delete_doc("Pricing Rule", docname.name)
 
 	def on_update(self):
+		self.validate()
 		pricing_rules = (
 			frappe.get_all(
 				"Pricing Rule",
@@ -120,6 +191,15 @@ class PromotionalScheme(Document):
 			or {}
 		)
 		self.update_pricing_rules(pricing_rules)
+
+	def validate_mixed_with_recursion(self):
+		if self.mixed_conditions:
+			if self.product_discount_slabs:
+				for slab in self.product_discount_slabs:
+					if slab.is_recursive:
+						frappe.throw(
+							_("Recursive Discounts with Mixed condition is not supported by the system")
+						)
 
 	def update_pricing_rules(self, pricing_rules):
 		rules = {}
@@ -177,7 +257,7 @@ def _get_pricing_rules(doc, child_doc, discount_fields, rules=None):
 	args = get_args_for_pricing_rule(doc)
 	applicable_for = frappe.scrub(doc.get("applicable_for"))
 
-	for idx, d in enumerate(doc.get(child_doc)):
+	for _idx, d in enumerate(doc.get(child_doc)):
 		if d.name in rules:
 			if not args.get(applicable_for):
 				docname = get_pricing_rule_docname(d)
@@ -187,7 +267,14 @@ def _get_pricing_rules(doc, child_doc, discount_fields, rules=None):
 				for applicable_for_value in args.get(applicable_for):
 					docname = get_pricing_rule_docname(d, applicable_for, applicable_for_value)
 					pr = prepare_pricing_rule(
-						args, doc, child_doc, discount_fields, d, docname, applicable_for, applicable_for_value
+						args,
+						doc,
+						child_doc,
+						discount_fields,
+						d,
+						docname,
+						applicable_for,
+						applicable_for_value,
 					)
 					new_doc.append(pr)
 
@@ -213,7 +300,7 @@ def _get_pricing_rules(doc, child_doc, discount_fields, rules=None):
 
 
 def get_pricing_rule_docname(
-	row: dict, applicable_for: str = None, applicable_for_value: str = None
+	row: dict, applicable_for: str | None = None, applicable_for_value: str | None = None
 ) -> str:
 	fields = ["promotional_scheme_id", "name"]
 	filters = {"promotional_scheme_id": row.name}

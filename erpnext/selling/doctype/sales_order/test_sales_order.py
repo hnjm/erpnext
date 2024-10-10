@@ -2,14 +2,16 @@
 # License: GNU General Public License v3. See license.txt
 
 import json
+from unittest.mock import patch
 
 import frappe
 import frappe.permissions
 from frappe.core.doctype.user_permission.test_user_permission import create_user
-from frappe.tests.utils import FrappeTestCase, change_settings
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, getdate, nowdate, today
 
-from erpnext.controllers.accounts_controller import update_child_qty_rate
+from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
+from erpnext.controllers.accounts_controller import InvalidQtyError, update_child_qty_rate
 from erpnext.maintenance.doctype.maintenance_schedule.test_maintenance_schedule import (
 	make_maintenance_schedule,
 )
@@ -20,6 +22,7 @@ from erpnext.manufacturing.doctype.blanket_order.test_blanket_order import make_
 from erpnext.selling.doctype.product_bundle.test_product_bundle import make_product_bundle
 from erpnext.selling.doctype.sales_order.sales_order import (
 	WarehouseRequired,
+	create_pick_list,
 	make_delivery_note,
 	make_material_request,
 	make_raw_material_request,
@@ -30,29 +33,80 @@ from erpnext.stock.doctype.item.test_item import make_item
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 
 
-class TestSalesOrder(FrappeTestCase):
+class TestSalesOrder(AccountsTestMixin, IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
 		cls.unlink_setting = int(
-			frappe.db.get_value(
-				"Accounts Settings", "Accounts Settings", "unlink_advance_payment_on_cancelation_of_order"
-			)
+			frappe.db.get_single_value("Accounts Settings", "unlink_advance_payment_on_cancelation_of_order")
 		)
 
 	@classmethod
 	def tearDownClass(cls) -> None:
 		# reset config to previous state
-		frappe.db.set_value(
-			"Accounts Settings",
-			"Accounts Settings",
-			"unlink_advance_payment_on_cancelation_of_order",
-			cls.unlink_setting,
+		frappe.db.set_single_value(
+			"Accounts Settings", "unlink_advance_payment_on_cancelation_of_order", cls.unlink_setting
 		)
 		super().tearDownClass()
 
+	def setUp(self):
+		self.create_customer("_Test Customer Credit")
+
 	def tearDown(self):
+		frappe.db.rollback()
 		frappe.set_user("Administrator")
+
+	def test_sales_order_with_negative_rate(self):
+		"""
+		Test if negative rate is allowed in Sales Order via doc submission and update items
+		"""
+		so = make_sales_order(qty=1, rate=100, do_not_save=True)
+		so.append("items", {"item_code": "_Test Item", "qty": 1, "rate": -10})
+		so.save()
+		so.submit()
+
+		first_item = so.get("items")[0]
+		second_item = so.get("items")[1]
+		trans_item = json.dumps(
+			[
+				{
+					"item_code": first_item.item_code,
+					"rate": first_item.rate,
+					"qty": first_item.qty,
+					"docname": first_item.name,
+				},
+				{
+					"item_code": second_item.item_code,
+					"rate": -20,
+					"qty": second_item.qty,
+					"docname": second_item.name,
+				},
+			]
+		)
+		update_child_qty_rate("Sales Order", trans_item, so.name)
+
+	def test_sales_order_qty(self):
+		so = make_sales_order(qty=1, do_not_save=True)
+
+		# NonNegativeError with qty=-1
+		so.append(
+			"items",
+			{
+				"item_code": "_Test Item",
+				"qty": -1,
+				"rate": 10,
+			},
+		)
+		self.assertRaises(frappe.NonNegativeError, so.save)
+
+		# InvalidQtyError with qty=0
+		so.items[1].qty = 0
+		self.assertRaises(InvalidQtyError, so.save)
+
+		# No error with qty=1
+		so.items[1].qty = 1
+		so.save()
+		self.assertEqual(so.items[0].qty, 1)
 
 	def test_make_material_request(self):
 		so = make_sales_order(do_not_submit=True)
@@ -279,9 +333,7 @@ class TestSalesOrder(FrappeTestCase):
 
 	def test_reserved_qty_for_partial_delivery_with_packing_list(self):
 		make_stock_entry(target="_Test Warehouse - _TC", qty=10, rate=100)
-		make_stock_entry(
-			item="_Test Item Home Desktop 100", target="_Test Warehouse - _TC", qty=10, rate=100
-		)
+		make_stock_entry(item="_Test Item Home Desktop 100", target="_Test Warehouse - _TC", qty=10, rate=100)
 
 		existing_reserved_qty_item1 = get_reserved_qty("_Test Item")
 		existing_reserved_qty_item2 = get_reserved_qty("_Test Item Home Desktop 100")
@@ -289,16 +341,12 @@ class TestSalesOrder(FrappeTestCase):
 		so = make_sales_order(item_code="_Test Product Bundle Item")
 
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 50)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20)
 
 		dn = create_dn_against_so(so.name)
 
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 25)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 10
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 10)
 
 		# close so
 		so.load_from_db()
@@ -312,15 +360,11 @@ class TestSalesOrder(FrappeTestCase):
 		so.update_status("Draft")
 
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 25)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 10
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 10)
 
 		dn.cancel()
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 50)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20)
 
 		so.load_from_db()
 		so.cancel()
@@ -336,9 +380,7 @@ class TestSalesOrder(FrappeTestCase):
 
 	def test_reserved_qty_for_over_delivery_with_packing_list(self):
 		make_stock_entry(target="_Test Warehouse - _TC", qty=10, rate=100)
-		make_stock_entry(
-			item="_Test Item Home Desktop 100", target="_Test Warehouse - _TC", qty=10, rate=100
-		)
+		make_stock_entry(item="_Test Item Home Desktop 100", target="_Test Warehouse - _TC", qty=10, rate=100)
 
 		# set over-delivery allowance
 		frappe.db.set_value("Item", "_Test Product Bundle Item", "over_delivery_receipt_allowance", 50)
@@ -349,9 +391,7 @@ class TestSalesOrder(FrappeTestCase):
 		so = make_sales_order(item_code="_Test Product Bundle Item")
 
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 50)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20)
 
 		dn = create_dn_against_so(so.name, 15)
 
@@ -360,9 +400,7 @@ class TestSalesOrder(FrappeTestCase):
 
 		dn.cancel()
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1 + 50)
-		self.assertEqual(
-			get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20
-		)
+		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2 + 20)
 
 	def test_update_child_adding_new_item(self):
 		so = make_sales_order(item_code="_Test Item", qty=4)
@@ -432,9 +470,7 @@ class TestSalesOrder(FrappeTestCase):
 		trans_item = json.dumps(
 			[{"item_code": "_Test Item 2", "qty": 2, "rate": 500, "docname": so.get("items")[1].name}]
 		)
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name
-		)
+		self.assertRaises(frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name)
 
 		# remove last added item
 		trans_item = json.dumps(
@@ -473,9 +509,7 @@ class TestSalesOrder(FrappeTestCase):
 		trans_item = json.dumps(
 			[{"item_code": "_Test Item", "rate": 200, "qty": 2, "docname": so.items[0].name}]
 		)
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name
-		)
+		self.assertRaises(frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name)
 
 	def test_update_child_with_precision(self):
 		from frappe.custom.doctype.property_setter.property_setter import make_property_setter
@@ -505,15 +539,11 @@ class TestSalesOrder(FrappeTestCase):
 		trans_item = json.dumps(
 			[{"item_code": "_Test Item", "rate": 200, "qty": 7, "docname": so.items[0].name}]
 		)
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name
-		)
+		self.assertRaises(frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name)
 
 		# add new item
 		trans_item = json.dumps([{"item_code": "_Test Item", "rate": 100, "qty": 2}])
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name
-		)
+		self.assertRaises(frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name)
 
 	def test_update_child_qty_rate_with_workflow(self):
 		from frappe.model.workflow import apply_workflow
@@ -531,9 +561,7 @@ class TestSalesOrder(FrappeTestCase):
 		trans_item = json.dumps(
 			[{"item_code": "_Test Item", "rate": 150, "qty": 2, "docname": so.items[0].name}]
 		)
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name
-		)
+		self.assertRaises(frappe.ValidationError, update_child_qty_rate, "Sales Order", trans_item, so.name)
 
 		frappe.set_user("Administrator")
 		user2 = "test2@example.com"
@@ -551,6 +579,26 @@ class TestSalesOrder(FrappeTestCase):
 		test_user2.remove_roles("Sales User", "Test Junior Approver", "Test Approver")
 		workflow.is_active = 0
 		workflow.save()
+
+	def test_material_request_for_product_bundle(self):
+		# Create the Material Request from the sales order for the Packing Items
+		# Check whether the material request has the correct packing item or not.
+		if not frappe.db.exists("Item", "_Test Product Bundle Item New 1"):
+			bundle_item = make_item("_Test Product Bundle Item New 1", {"is_stock_item": 0})
+			bundle_item.append(
+				"item_defaults", {"company": "_Test Company", "default_warehouse": "_Test Warehouse - _TC"}
+			)
+			bundle_item.save(ignore_permissions=True)
+
+		make_item("_Packed Item New 2", {"is_stock_item": 1})
+		make_product_bundle("_Test Product Bundle Item New 1", ["_Packed Item New 2"], 2)
+
+		so = make_sales_order(
+			item_code="_Test Product Bundle Item New 1",
+		)
+
+		mr = make_material_request(so.name)
+		self.assertEqual(mr.items[0].item_code, "_Packed Item New 2")
 
 	def test_bin_details_of_packed_item(self):
 		# test Update Items with product bundle
@@ -705,7 +753,7 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertEqual(so.taxes[0].total, 110)
 
 		old_stock_settings_value = frappe.db.get_single_value("Stock Settings", "default_warehouse")
-		frappe.db.set_value("Stock Settings", None, "default_warehouse", "_Test Warehouse - _TC")
+		frappe.db.set_single_value("Stock Settings", "default_warehouse", "_Test Warehouse - _TC")
 
 		items = json.dumps(
 			[
@@ -741,7 +789,7 @@ class TestSalesOrder(FrappeTestCase):
 		so.delete()
 		new_item_with_tax.delete()
 		frappe.get_doc("Item Tax Template", "Test Update Items Template - _TC").delete()
-		frappe.db.set_value("Stock Settings", None, "default_warehouse", old_stock_settings_value)
+		frappe.db.set_single_value("Stock Settings", "default_warehouse", old_stock_settings_value)
 
 	def test_warehouse_user(self):
 		test_user = create_user("test_so_warehouse_user@example.com", "Sales User", "Stock User")
@@ -771,9 +819,7 @@ class TestSalesOrder(FrappeTestCase):
 
 		frappe.set_user("Administrator")
 		frappe.permissions.remove_user_permission("Warehouse", "_Test Warehouse 1 - _TC", test_user.name)
-		frappe.permissions.remove_user_permission(
-			"Warehouse", "_Test Warehouse 2 - _TC1", test_user_2.name
-		)
+		frappe.permissions.remove_user_permission("Warehouse", "_Test Warehouse 2 - _TC1", test_user_2.name)
 		frappe.permissions.remove_user_permission("Company", "_Test Company 1", test_user_2.name)
 
 	def test_block_delivery_note_against_cancelled_sales_order(self):
@@ -820,7 +866,7 @@ class TestSalesOrder(FrappeTestCase):
 	def test_auto_insert_price(self):
 		make_item("_Test Item for Auto Price List", {"is_stock_item": 0})
 		make_item("_Test Item for Auto Price List with Discount Percentage", {"is_stock_item": 0})
-		frappe.db.set_value("Stock Settings", None, "auto_insert_price_list_rate_if_missing", 1)
+		frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 1)
 
 		item_price = frappe.db.get_value(
 			"Item Price", {"price_list": "_Test Price List", "item_code": "_Test Item for Auto Price List"}
@@ -861,7 +907,7 @@ class TestSalesOrder(FrappeTestCase):
 		)
 
 		# do not update price list
-		frappe.db.set_value("Stock Settings", None, "auto_insert_price_list_rate_if_missing", 0)
+		frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 0)
 
 		item_price = frappe.db.get_value(
 			"Item Price", {"price_list": "_Test Price List", "item_code": "_Test Item for Auto Price List"}
@@ -882,7 +928,7 @@ class TestSalesOrder(FrappeTestCase):
 			None,
 		)
 
-		frappe.db.set_value("Stock Settings", None, "auto_insert_price_list_rate_if_missing", 1)
+		frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 1)
 
 	def test_drop_shipping(self):
 		from erpnext.buying.doctype.purchase_order.purchase_order import update_status
@@ -892,9 +938,7 @@ class TestSalesOrder(FrappeTestCase):
 		from erpnext.selling.doctype.sales_order.sales_order import update_status as so_update_status
 
 		# make items
-		po_item = make_item(
-			"_Test Item for Drop Shipping", {"is_stock_item": 1, "delivered_by_supplier": 1}
-		)
+		po_item = make_item("_Test Item for Drop Shipping", {"is_stock_item": 1, "delivered_by_supplier": 1})
 		dn_item = make_item("_Test Regular Item", {"is_stock_item": 1})
 
 		so_items = [
@@ -1177,17 +1221,13 @@ class TestSalesOrder(FrappeTestCase):
 		new_so = frappe.copy_doc(so)
 		new_so.save(ignore_permissions=True)
 
-		self.assertEqual(
-			new_so.get("items")[0].rate, flt((price_list_rate * 25) / 100 + price_list_rate)
-		)
+		self.assertEqual(new_so.get("items")[0].rate, flt((price_list_rate * 25) / 100 + price_list_rate))
 		new_so.items[0].margin_rate_or_amount = 25
 		new_so.payment_schedule = []
 		new_so.save()
 		new_so.submit()
 
-		self.assertEqual(
-			new_so.get("items")[0].rate, flt((price_list_rate * 25) / 100 + price_list_rate)
-		)
+		self.assertEqual(new_so.get("items")[0].rate, flt((price_list_rate * 25) / 100 + price_list_rate))
 
 	def test_terms_auto_added(self):
 		so = make_sales_order(do_not_save=1)
@@ -1217,6 +1257,8 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertTrue(si.get("payment_schedule"))
 
 	def test_make_work_order(self):
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
+
 		# Make a new Sales Order
 		so = make_sales_order(
 			**{
@@ -1230,7 +1272,7 @@ class TestSalesOrder(FrappeTestCase):
 		# Raise Work Orders
 		po_items = []
 		so_item_name = {}
-		for item in so.get_work_order_items():
+		for item in get_work_order_items(so.name):
 			po_items.append(
 				{
 					"warehouse": item.get("warehouse"),
@@ -1252,118 +1294,10 @@ class TestSalesOrder(FrappeTestCase):
 			)
 			self.assertEqual(wo_qty[0][0], so_item_name.get(item))
 
-	def test_serial_no_based_delivery(self):
-		frappe.set_value("Stock Settings", None, "automatically_set_serial_nos_based_on_fifo", 1)
-		item = make_item(
-			"_Reserved_Serialized_Item",
-			{
-				"is_stock_item": 1,
-				"maintain_stock": 1,
-				"has_serial_no": 1,
-				"serial_no_series": "SI.####",
-				"valuation_rate": 500,
-				"item_defaults": [{"default_warehouse": "_Test Warehouse - _TC", "company": "_Test Company"}],
-			},
-		)
-		frappe.db.sql("""delete from `tabSerial No` where item_code=%s""", (item.item_code))
-		make_item(
-			"_Test Item A",
-			{
-				"maintain_stock": 1,
-				"valuation_rate": 100,
-				"item_defaults": [{"default_warehouse": "_Test Warehouse - _TC", "company": "_Test Company"}],
-			},
-		)
-		make_item(
-			"_Test Item B",
-			{
-				"maintain_stock": 1,
-				"valuation_rate": 200,
-				"item_defaults": [{"default_warehouse": "_Test Warehouse - _TC", "company": "_Test Company"}],
-			},
-		)
-		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
-
-		make_bom(item=item.item_code, rate=1000, raw_materials=["_Test Item A", "_Test Item B"])
-
-		so = make_sales_order(
-			**{
-				"item_list": [
-					{
-						"item_code": item.item_code,
-						"ensure_delivery_based_on_produced_serial_no": 1,
-						"qty": 1,
-						"rate": 1000,
-					}
-				]
-			}
-		)
-		so.submit()
-		from erpnext.manufacturing.doctype.work_order.test_work_order import make_wo_order_test_record
-
-		work_order = make_wo_order_test_record(item=item.item_code, qty=1, do_not_save=True)
-		work_order.fg_warehouse = "_Test Warehouse - _TC"
-		work_order.sales_order = so.name
-		work_order.submit()
-		make_stock_entry(item_code=item.item_code, target="_Test Warehouse - _TC", qty=1)
-		item_serial_no = frappe.get_doc("Serial No", {"item_code": item.item_code})
-		from erpnext.manufacturing.doctype.work_order.work_order import (
-			make_stock_entry as make_production_stock_entry,
-		)
-
-		se = frappe.get_doc(make_production_stock_entry(work_order.name, "Manufacture", 1))
-		se.submit()
-		reserved_serial_no = se.get("items")[2].serial_no
-		serial_no_so = frappe.get_value("Serial No", reserved_serial_no, "sales_order")
-		self.assertEqual(serial_no_so, so.name)
-		dn = make_delivery_note(so.name)
-		dn.save()
-		self.assertEqual(reserved_serial_no, dn.get("items")[0].serial_no)
-		item_line = dn.get("items")[0]
-		item_line.serial_no = item_serial_no.name
-		item_line = dn.get("items")[0]
-		item_line.serial_no = reserved_serial_no
-		dn.submit()
-		dn.load_from_db()
-		dn.cancel()
-		si = make_sales_invoice(so.name)
-		si.update_stock = 1
-		si.save()
-		self.assertEqual(si.get("items")[0].serial_no, reserved_serial_no)
-		item_line = si.get("items")[0]
-		item_line.serial_no = item_serial_no.name
-		self.assertRaises(frappe.ValidationError, dn.submit)
-		item_line = si.get("items")[0]
-		item_line.serial_no = reserved_serial_no
-		self.assertTrue(si.submit)
-		si.submit()
-		si.load_from_db()
-		si.cancel()
-		si = make_sales_invoice(so.name)
-		si.update_stock = 0
-		si.submit()
-		from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
-			make_delivery_note as make_delivery_note_from_invoice,
-		)
-
-		dn = make_delivery_note_from_invoice(si.name)
-		dn.save()
-		dn.submit()
-		self.assertEqual(dn.get("items")[0].serial_no, reserved_serial_no)
-		dn.load_from_db()
-		dn.cancel()
-		si.load_from_db()
-		si.cancel()
-		se.load_from_db()
-		se.cancel()
-		self.assertFalse(frappe.db.exists("Serial No", {"sales_order": so.name}))
-
 	def test_advance_payment_entry_unlink_against_sales_order(self):
 		from erpnext.accounts.doctype.payment_entry.test_payment_entry import get_payment_entry
 
-		frappe.db.set_value(
-			"Accounts Settings", "Accounts Settings", "unlink_advance_payment_on_cancelation_of_order", 0
-		)
+		frappe.db.set_single_value("Accounts Settings", "unlink_advance_payment_on_cancelation_of_order", 0)
 
 		so = make_sales_order()
 
@@ -1382,7 +1316,9 @@ class TestSalesOrder(FrappeTestCase):
 
 		self.assertRaises(frappe.LinkExistsError, so_doc.cancel)
 
-	@change_settings("Accounts Settings", {"unlink_advance_payment_on_cancelation_of_order": 1})
+	@IntegrationTestCase.change_settings(
+		"Accounts Settings", {"unlink_advance_payment_on_cancelation_of_order": 1}
+	)
 	def test_advance_paid_upon_payment_cancellation(self):
 		from erpnext.accounts.doctype.payment_entry.test_payment_entry import get_payment_entry
 
@@ -1416,9 +1352,7 @@ class TestSalesOrder(FrappeTestCase):
 		so = make_sales_order()
 
 		# disable unlinking of payment entry
-		frappe.db.set_value(
-			"Accounts Settings", "Accounts Settings", "unlink_advance_payment_on_cancelation_of_order", 0
-		)
+		frappe.db.set_single_value("Accounts Settings", "unlink_advance_payment_on_cancelation_of_order", 0)
 
 		# create a payment entry against sales order
 		pe = get_payment_entry("Sales Order", so.name, bank_account="_Test Bank - _TC")
@@ -1448,6 +1382,7 @@ class TestSalesOrder(FrappeTestCase):
 
 		from erpnext.controllers.item_variant import create_variant
 		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
 
 		make_item(  # template item
 			"Test-WO-Tshirt",
@@ -1487,7 +1422,7 @@ class TestSalesOrder(FrappeTestCase):
 				]
 			}
 		)
-		wo_items = so.get_work_order_items()
+		wo_items = get_work_order_items(so.name)
 
 		self.assertEqual(wo_items[0].get("item_code"), "Test-WO-Tshirt-R")
 		self.assertEqual(wo_items[0].get("bom"), red_var_bom.name)
@@ -1497,6 +1432,8 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertEqual(wo_items[1].get("bom"), template_bom.name)
 
 	def test_request_for_raw_materials(self):
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
+
 		item = make_item(
 			"_Test Finished Item",
 			{
@@ -1529,7 +1466,7 @@ class TestSalesOrder(FrappeTestCase):
 		so = make_sales_order(**{"item_list": [{"item_code": item.item_code, "qty": 1, "rate": 1000}]})
 		so.submit()
 		mr_dict = frappe._dict()
-		items = so.get_work_order_items(1)
+		items = get_work_order_items(so.name, 1)
 		mr_dict["items"] = items
 		mr_dict["include_exploded_items"] = 0
 		mr_dict["ignore_existing_ordered_qty"] = 1
@@ -1546,7 +1483,7 @@ class TestSalesOrder(FrappeTestCase):
 		Second Sales Order should not add on to Blanket Orders Ordered Quantity.
 		"""
 
-		bo = make_blanket_order(blanket_order_type="Selling", quantity=10, rate=10)
+		make_blanket_order(blanket_order_type="Selling", quantity=10, rate=10)
 
 		so = make_sales_order(item_code="_Test Item", qty=5, against_blanket_order=1)
 		so_doc = frappe.get_doc("Sales Order", so.get("name"))
@@ -1767,7 +1704,10 @@ class TestSalesOrder(FrappeTestCase):
 
 		wo.submit()
 		make_stock_entry(
-			item_code="_Test Item", target="Work In Progress - _TC", qty=4, basic_rate=100  # Stock RM
+			item_code="_Test Item",
+			target="Work In Progress - _TC",
+			qty=4,
+			basic_rate=100,  # Stock RM
 		)
 		make_stock_entry(
 			item_code="_Test Item Home Desktop 100",  # Stock RM
@@ -1868,10 +1808,466 @@ class TestSalesOrder(FrappeTestCase):
 		si.submit()
 		pe.load_from_db()
 
-		self.assertEqual(pe.references[0].reference_name, si.name)
-		self.assertEqual(pe.references[0].allocated_amount, 200)
-		self.assertEqual(pe.references[1].reference_name, so.name)
-		self.assertEqual(pe.references[1].allocated_amount, 300)
+		self.assertEqual(pe.references[0].reference_name, so.name)
+		self.assertEqual(pe.references[0].allocated_amount, 300)
+		self.assertEqual(pe.references[1].reference_name, si.name)
+		self.assertEqual(pe.references[1].allocated_amount, 200)
+
+	def test_delivered_item_material_request(self):
+		"SO -> MR (Manufacture) -> WO. Test if WO Qty is updated in SO."
+
+		so = make_sales_order(
+			item_list=[
+				{"item_code": "_Test FG Item", "qty": 10, "rate": 100, "warehouse": "Work In Progress - _TC"}
+			]
+		)
+
+		make_stock_entry(item_code="_Test FG Item", target="Work In Progress - _TC", qty=4, basic_rate=100)
+
+		dn = make_delivery_note(so.name)
+		dn.items[0].qty = 4
+		dn.submit()
+
+		so.load_from_db()
+		self.assertEqual(so.items[0].delivered_qty, 4)
+
+		mr = make_material_request(so.name)
+		mr.material_request_type = "Purchase"
+		mr.schedule_date = today()
+		mr.save()
+
+		self.assertEqual(mr.items[0].qty, 6)
+
+	def test_packed_items_for_partial_sales_order(self):
+		# test Update Items with product bundle
+		for product_bundle in [
+			"_Test Product Bundle Item Partial 1",
+			"_Test Product Bundle Item Partial 2",
+		]:
+			if not frappe.db.exists("Item", product_bundle):
+				bundle_item = make_item(product_bundle, {"is_stock_item": 0})
+				bundle_item.append(
+					"item_defaults",
+					{"company": "_Test Company", "default_warehouse": "_Test Warehouse - _TC"},
+				)
+				bundle_item.save(ignore_permissions=True)
+
+		for product_bundle in ["_Packed Item Partial 1", "_Packed Item Partial 2"]:
+			if not frappe.db.exists("Item", product_bundle):
+				make_item(product_bundle, {"is_stock_item": 1, "stock_uom": "Nos"})
+
+			make_stock_entry(item=product_bundle, target="_Test Warehouse - _TC", qty=2, rate=10)
+
+		make_product_bundle("_Test Product Bundle Item Partial 1", ["_Packed Item Partial 1"], 1)
+
+		make_product_bundle("_Test Product Bundle Item Partial 2", ["_Packed Item Partial 2"], 1)
+
+		so = make_sales_order(
+			item_code="_Test Product Bundle Item Partial 1",
+			warehouse="_Test Warehouse - _TC",
+			qty=1,
+			uom="Nos",
+			stock_uom="Nos",
+			conversion_factor=1,
+			transaction_date=nowdate(),
+			delivery_note=nowdate(),
+			do_not_submit=1,
+		)
+
+		so.append(
+			"items",
+			{
+				"item_code": "_Test Product Bundle Item Partial 2",
+				"warehouse": "_Test Warehouse - _TC",
+				"qty": 1,
+				"uom": "Nos",
+				"stock_uom": "Nos",
+				"conversion_factor": 1,
+				"delivery_note": nowdate(),
+			},
+		)
+
+		so.save()
+		so.submit()
+
+		dn = make_delivery_note(so.name)
+		dn.remove(dn.items[1])
+		dn.save()
+		dn.submit()
+
+		self.assertEqual(len(dn.items), 1)
+		self.assertEqual(len(dn.packed_items), 1)
+		self.assertEqual(dn.items[0].item_code, "_Test Product Bundle Item Partial 1")
+
+		so.load_from_db()
+
+		dn = make_delivery_note(so.name)
+		dn.save()
+
+		self.assertEqual(len(dn.items), 1)
+		self.assertEqual(len(dn.packed_items), 1)
+		self.assertEqual(dn.items[0].item_code, "_Test Product Bundle Item Partial 2")
+
+	@IntegrationTestCase.change_settings("Selling Settings", {"editable_bundle_item_rates": 1})
+	def test_expired_rate_for_packed_item(self):
+		bundle = "_Test Product Bundle 1"
+		packed_item = "_Packed Item 1"
+
+		# test Update Items with product bundle
+		for product_bundle in [bundle]:
+			if not frappe.db.exists("Item", product_bundle):
+				bundle_item = make_item(product_bundle, {"is_stock_item": 0})
+				bundle_item.append(
+					"item_defaults",
+					{"company": "_Test Company", "default_warehouse": "_Test Warehouse - _TC"},
+				)
+				bundle_item.save(ignore_permissions=True)
+
+		for product_bundle in [packed_item]:
+			if not frappe.db.exists("Item", product_bundle):
+				make_item(product_bundle, {"is_stock_item": 0, "stock_uom": "Nos"})
+
+		make_product_bundle(bundle, [packed_item], 1)
+
+		for scenario in [
+			{"valid_upto": add_days(nowdate(), -1), "expected_rate": 0.0},
+			{"valid_upto": add_days(nowdate(), 1), "expected_rate": 111.0},
+		]:
+			with self.subTest(scenario=scenario):
+				frappe.get_doc(
+					{
+						"doctype": "Item Price",
+						"item_code": packed_item,
+						"selling": 1,
+						"price_list": "_Test Price List",
+						"valid_from": add_days(nowdate(), -1),
+						"valid_upto": scenario.get("valid_upto"),
+						"price_list_rate": 111,
+					}
+				).save()
+
+				so = frappe.new_doc("Sales Order")
+				so.transaction_date = nowdate()
+				so.delivery_date = nowdate()
+				so.set_warehouse = ""
+				so.company = "_Test Company"
+				so.customer = "_Test Customer"
+				so.currency = "INR"
+				so.selling_price_list = "_Test Price List"
+				so.append("items", {"item_code": bundle, "qty": 1})
+				so.save()
+
+				self.assertEqual(len(so.items), 1)
+				self.assertEqual(len(so.packed_items), 1)
+				self.assertEqual(so.items[0].item_code, bundle)
+				self.assertEqual(so.packed_items[0].item_code, packed_item)
+				self.assertEqual(so.items[0].rate, scenario.get("expected_rate"))
+				self.assertEqual(so.packed_items[0].rate, scenario.get("expected_rate"))
+
+	@patch(
+		# this also shadows one (1) call to _get_payment_gateway_controller
+		"erpnext.accounts.doctype.payment_request.payment_request.PaymentRequest.get_payment_url",
+		return_value=None,
+	)
+	def test_sales_order_advance_payment_status(self, mocked_get_payment_url):
+		from erpnext.accounts.doctype.payment_entry.test_payment_entry import get_payment_entry
+		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+
+		# Flow progressing to SI with payment entries "moved" from SO to SI
+		so = make_sales_order(qty=1, rate=100, do_not_submit=True)
+		# no-op; for optical consistency with how a webshop SO would look like
+		so.order_type = "Shopping Cart"
+		so.submit()
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Not Requested")
+
+		pr = make_payment_request(
+			dt=so.doctype, dn=so.name, order_type="Shopping Cart", submit_doc=True, return_doc=True
+		)
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Requested")
+
+		pe = pr.set_as_paid()
+		pr.reload()  # status updated
+		pe.reload()  # references moved to Sales Invoice
+		self.assertEqual(pr.status, "Paid")
+		self.assertEqual(pe.references[0].reference_doctype, "Sales Invoice")
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Fully Paid")
+
+		pe.cancel()
+		pr.reload()
+		self.assertEqual(pr.status, "Paid")  # TODO: this might be a bug
+		so.reload()  # reload
+		# regardless, since the references have already "handed-over" to SI,
+		# the SO keeps its historical state at the time of hand over
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Fully Paid")
+
+		pr.cancel()
+		self.assertEqual(
+			frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Not Requested"
+		)  # TODO: this might be a bug; handover has happened
+
+		# Flow NOT progressing to SI with payment entries NOT "moved"
+		so = make_sales_order(qty=1, rate=100)
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Not Requested")
+
+		pr = make_payment_request(dt=so.doctype, dn=so.name, submit_doc=True, return_doc=True)
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Requested")
+
+		pe = get_payment_entry(so.doctype, so.name).save().submit()
+		self.assertEqual(frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Fully Paid")
+
+		pe.reload()
+		pe.cancel()
+		self.assertEqual(
+			frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Requested"
+		)  # here: reset
+
+		pr.reload()
+		pr.cancel()
+		self.assertEqual(
+			frappe.db.get_value(so.doctype, so.name, "advance_payment_status"), "Not Requested"
+		)  # here: reset
+
+	def test_pick_list_without_rejected_materials(self):
+		serial_and_batch_item = make_item(
+			"_Test Serial and Batch Item for Rejected Materials",
+			properties={
+				"has_serial_no": 1,
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "BAT-TSBIFRM-.#####",
+				"serial_no_series": "SN-TSBIFRM-.#####",
+			},
+		).name
+
+		serial_item = make_item(
+			"_Test Serial Item for Rejected Materials",
+			properties={
+				"has_serial_no": 1,
+				"serial_no_series": "SN-TSIFRM-.#####",
+			},
+		).name
+
+		batch_item = make_item(
+			"_Test Batch Item for Rejected Materials",
+			properties={
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "BAT-TBIFRM-.#####",
+			},
+		).name
+
+		normal_item = make_item("_Test Normal Item for Rejected Materials").name
+
+		warehouse = "_Test Warehouse - _TC"
+		rejected_warehouse = "_Test Dummy Rejected Warehouse - _TC"
+
+		if not frappe.db.exists("Warehouse", rejected_warehouse):
+			frappe.get_doc(
+				{
+					"doctype": "Warehouse",
+					"warehouse_name": rejected_warehouse,
+					"company": "_Test Company",
+					"warehouse_group": "_Test Warehouse Group",
+					"is_rejected_warehouse": 1,
+				}
+			).insert()
+
+		se = make_stock_entry(item_code=normal_item, qty=1, to_warehouse=warehouse, do_not_submit=True)
+		for item in [serial_and_batch_item, serial_item, batch_item]:
+			se.append("items", {"item_code": item, "qty": 1, "t_warehouse": warehouse})
+
+		se.save()
+		se.submit()
+
+		se = make_stock_entry(
+			item_code=normal_item, qty=1, to_warehouse=rejected_warehouse, do_not_submit=True
+		)
+		for item in [serial_and_batch_item, serial_item, batch_item]:
+			se.append("items", {"item_code": item, "qty": 1, "t_warehouse": rejected_warehouse})
+
+		se.save()
+		se.submit()
+
+		so = make_sales_order(item_code=normal_item, qty=2, do_not_submit=True)
+
+		for item in [serial_and_batch_item, serial_item, batch_item]:
+			so.append("items", {"item_code": item, "qty": 2, "warehouse": warehouse})
+
+		so.save()
+		so.submit()
+
+		pick_list = create_pick_list(so.name)
+
+		pick_list.save()
+		for row in pick_list.locations:
+			self.assertEqual(row.qty, 1.0)
+			self.assertFalse(row.warehouse == rejected_warehouse)
+			self.assertTrue(row.warehouse == warehouse)
+
+	def test_pick_list_for_batch(self):
+		from erpnext.stock.doctype.pick_list.pick_list import create_delivery_note
+
+		batch_item = make_item(
+			"_Test Batch Item for Pick LIST",
+			properties={
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "BATCH-SDDTBIFRM-.#####",
+			},
+		).name
+
+		warehouse = "_Test Warehouse - _TC"
+		se = make_stock_entry(item_code=batch_item, qty=10, target=warehouse, use_serial_batch_fields=1)
+		so = make_sales_order(item_code=batch_item, qty=10, warehouse=warehouse)
+		pick_list = create_pick_list(so.name)
+
+		pick_list.save()
+		batch_no = frappe.get_all(
+			"Serial and Batch Entry",
+			filters={"parent": se.items[0].serial_and_batch_bundle},
+			fields=["batch_no"],
+		)[0].batch_no
+
+		for row in pick_list.locations:
+			self.assertEqual(row.qty, 10.0)
+			self.assertTrue(row.warehouse == warehouse)
+			self.assertTrue(row.batch_no == batch_no)
+
+		pick_list.submit()
+
+		dn = create_delivery_note(pick_list.name)
+		for row in dn.items:
+			self.assertEqual(row.qty, 10.0)
+			self.assertTrue(row.warehouse == warehouse)
+			self.assertTrue(row.batch_no == batch_no)
+
+		dn.submit()
+		dn.reload()
+
+	def test_auto_update_price_list(self):
+		item = make_item(
+			"_Test Auto Update Price List Item",
+		)
+
+		frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 1)
+		so = make_sales_order(
+			item_code=item.name, currency="USD", qty=1, rate=100, price_list_rate=100, do_not_submit=True
+		)
+		so.save()
+
+		item_price = frappe.db.get_value("Item Price", {"item_code": item.name}, "price_list_rate")
+		self.assertEqual(item_price, 100)
+
+		so = make_sales_order(
+			item_code=item.name, currency="USD", qty=1, rate=200, price_list_rate=100, do_not_submit=True
+		)
+		so.save()
+
+		item_price = frappe.db.get_value("Item Price", {"item_code": item.name}, "price_list_rate")
+		self.assertEqual(item_price, 100)
+
+		frappe.db.set_single_value("Stock Settings", "update_existing_price_list_rate", 1)
+		so = make_sales_order(
+			item_code=item.name, currency="USD", qty=1, rate=200, price_list_rate=200, do_not_submit=True
+		)
+		so.save()
+
+		item_price = frappe.db.get_value("Item Price", {"item_code": item.name}, "price_list_rate")
+		self.assertEqual(item_price, 200)
+
+		frappe.db.set_single_value("Stock Settings", "update_existing_price_list_rate", 0)
+		frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 0)
+
+	def test_credit_limit_on_so_reopning(self):
+		# set credit limit
+		company = "_Test Company"
+		customer = frappe.get_doc("Customer", self.customer)
+		customer.credit_limits = []
+		customer.append(
+			"credit_limits", {"company": company, "credit_limit": 1000, "bypass_credit_limit_check": False}
+		)
+		customer.save()
+
+		so1 = make_sales_order(qty=9, rate=100, do_not_submit=True)
+		so1.customer = self.customer
+		so1.save().submit()
+
+		so1.update_status("Closed")
+
+		so2 = make_sales_order(qty=9, rate=100, do_not_submit=True)
+		so2.customer = self.customer
+		so2.save().submit()
+
+		self.assertRaises(frappe.ValidationError, so1.update_status, "Draft")
+
+	@IntegrationTestCase.change_settings("Stock Settings", {"enable_stock_reservation": True})
+	def test_warehouse_mapping_based_on_stock_reservation(self):
+		self.create_company(company_name="Glass Ceiling", abbr="GC")
+		self.create_item("Lamy Safari 2", True, self.warehouse_stores, self.company, 2000)
+		self.create_customer()
+		self.clear_old_entries()
+
+		so = frappe.new_doc("Sales Order")
+		so.company = self.company
+		so.customer = self.customer
+		so.transaction_date = today()
+		so.append(
+			"items",
+			{
+				"item_code": self.item,
+				"qty": 10,
+				"rate": 2000,
+				"warehouse": self.warehouse_stores,
+				"delivery_date": today(),
+			},
+		)
+		so.submit()
+
+		# Create stock
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"company": self.company,
+				"stock_entry_type": "Material Receipt",
+				"posting_date": today(),
+				"items": [
+					{"item_code": self.item, "t_warehouse": self.warehouse_stores, "qty": 5},
+					{"item_code": self.item, "t_warehouse": self.warehouse_finished_goods, "qty": 5},
+				],
+			}
+		)
+		se.submit()
+
+		# Reserve stock on 2 different warehouses
+		itm = so.items[0]
+		so.create_stock_reservation_entries(
+			[
+				{
+					"sales_order_item": itm.name,
+					"item_code": itm.item_code,
+					"warehouse": self.warehouse_stores,
+					"qty_to_reserve": 2,
+				}
+			]
+		)
+		so.create_stock_reservation_entries(
+			[
+				{
+					"sales_order_item": itm.name,
+					"item_code": itm.item_code,
+					"warehouse": self.warehouse_finished_goods,
+					"qty_to_reserve": 3,
+				}
+			]
+		)
+
+		# Delivery note should auto-select warehouse based on reservation
+		dn = make_delivery_note(so.name, kwargs={"for_reserved_stock": True})
+		self.assertEqual(2, len(dn.items))
+		self.assertEqual(dn.items[0].qty, 2)
+		self.assertEqual(dn.items[0].warehouse, self.warehouse_stores)
+		self.assertEqual(dn.items[1].qty, 3)
+		self.assertEqual(dn.items[1].warehouse, self.warehouse_finished_goods)
 
 
 def automatically_fetch_payment_terms(enable=1):
@@ -1898,7 +2294,7 @@ def make_sales_order(**args):
 	so.company = args.company or "_Test Company"
 	so.customer = args.customer or "_Test Customer"
 	so.currency = args.currency or "INR"
-	so.po_no = args.po_no or "12345"
+	so.po_no = args.po_no or ""
 	if args.selling_price_list:
 		so.selling_price_list = args.selling_price_list
 
@@ -1915,7 +2311,7 @@ def make_sales_order(**args):
 			{
 				"item_code": args.item or args.item_code or "_Test Item",
 				"warehouse": args.warehouse,
-				"qty": args.qty or 10,
+				"qty": args.qty if args.qty is not None else 10,
 				"uom": args.uom or None,
 				"price_list_rate": args.price_list_rate or None,
 				"discount_percentage": args.discount_percentage or None,
@@ -1938,20 +2334,19 @@ def make_sales_order(**args):
 	return so
 
 
-def create_dn_against_so(so, delivered_qty=0):
-	frappe.db.set_value("Stock Settings", None, "allow_negative_stock", 1)
+def create_dn_against_so(so, delivered_qty=0, do_not_submit=False):
+	frappe.db.set_single_value("Stock Settings", "allow_negative_stock", 1)
 
 	dn = make_delivery_note(so)
 	dn.get("items")[0].qty = delivered_qty or 5
 	dn.insert()
-	dn.submit()
+	if not do_not_submit:
+		dn.submit()
 	return dn
 
 
 def get_reserved_qty(item_code="_Test Item", warehouse="_Test Warehouse - _TC"):
-	return flt(
-		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "reserved_qty")
-	)
+	return flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "reserved_qty"))
 
 
 test_dependencies = ["Currency Exchange"]
@@ -1964,9 +2359,7 @@ def make_sales_order_workflow():
 		doc.save()
 		return doc
 
-	frappe.get_doc(dict(doctype="Role", role_name="Test Junior Approver")).insert(
-		ignore_if_duplicate=True
-	)
+	frappe.get_doc(dict(doctype="Role", role_name="Test Junior Approver")).insert(ignore_if_duplicate=True)
 	frappe.get_doc(dict(doctype="Role", role_name="Test Approver")).insert(ignore_if_duplicate=True)
 	frappe.cache().hdel("roles", frappe.session.user)
 

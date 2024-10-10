@@ -5,6 +5,7 @@
  "creation": "2013-05-21 16:16:39",
  "doctype": "DocType",
  "document_type": "Document",
+ "email_append_to": 1,
  "engine": "InnoDB",
  "field_order": [
   "title",
@@ -22,6 +23,9 @@
   "is_paid",
   "is_return",
   "return_against",
+  "update_outstanding_for_self",
+  "update_billed_amount_in_purchase_order",
+  "update_billed_amount_in_purchase_receipt",
   "apply_tds",
   "tax_withholding_category",
   "amended_from",
@@ -36,6 +40,7 @@
   "currency_and_price_list",
   "currency",
   "conversion_rate",
+  "use_transaction_date_exchange_rate",
   "column_break2",
   "buying_price_list",
   "price_list_currency",
@@ -89,6 +94,7 @@
   "column_break8",
   "grand_total",
   "rounding_adjustment",
+  "use_company_roundoff_cost_center",
   "rounded_total",
   "in_words",
   "total_advance",
@@ -118,6 +124,7 @@
   "paid_amount",
   "advances_section",
   "allocate_advances_automatically",
+  "only_include_allocated_payments",
   "get_advances",
   "advances",
   "advance_tax",
@@ -165,6 +172,7 @@
   "column_break_63",
   "unrealized_profit_loss_account",
   "subscription_section",
+  "subscription",
   "auto_repeat",
   "update_auto_repeat_reference",
   "column_break_114",
@@ -184,12 +192,13 @@
   "additional_info_section",
   "is_internal_supplier",
   "represents_company",
+  "supplier_group",
+  "sender",
   "column_break_147",
   "inter_company_invoice_reference",
   "is_old_subcontracting_flow",
   "remarks",
-  "connections_tab",
-  "column_break_38"
+  "connections_tab"
  ],
  "fields": [
   {
@@ -291,6 +300,7 @@
    "remember_last_selected_value": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "cost_center",
    "fieldtype": "Link",
    "label": "Cost Center",
@@ -355,7 +365,8 @@
    "description": "Once set, this invoice will be on hold till the set date",
    "fieldname": "release_date",
    "fieldtype": "Date",
-   "label": "Release Date"
+   "label": "Release Date",
+   "search_index": 1
   },
   {
    "fieldname": "cb_17",
@@ -380,7 +391,8 @@
    "label": "Supplier Invoice No",
    "oldfieldname": "bill_no",
    "oldfieldtype": "Data",
-   "print_hide": 1
+   "print_hide": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_15",
@@ -403,7 +415,22 @@
    "no_copy": 1,
    "options": "Purchase Invoice",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval: doc.is_return",
+   "fieldname": "update_billed_amount_in_purchase_order",
+   "fieldtype": "Check",
+   "label": "Update Billed Amount in Purchase Order"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval: doc.is_return",
+   "fieldname": "update_billed_amount_in_purchase_receipt",
+   "fieldtype": "Check",
+   "label": "Update Billed Amount in Purchase Receipt"
   },
   {
    "fieldname": "section_addresses",
@@ -419,7 +446,7 @@
   },
   {
    "fieldname": "address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Address",
    "read_only": 1
   },
@@ -441,12 +468,14 @@
    "fieldname": "contact_mobile",
    "fieldtype": "Small Text",
    "label": "Mobile No",
+   "options": "Phone",
    "read_only": 1
   },
   {
    "fieldname": "contact_email",
    "fieldtype": "Small Text",
    "label": "Contact Email",
+   "options": "Email",
    "print_hide": 1,
    "read_only": 1
   },
@@ -463,7 +492,7 @@
   },
   {
    "fieldname": "shipping_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Shipping Address",
    "print_hide": 1,
    "read_only": 1
@@ -545,6 +574,7 @@
    "depends_on": "update_stock",
    "fieldname": "rejected_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Rejected Warehouse",
    "no_copy": 1,
    "options": "Warehouse",
@@ -733,7 +763,7 @@
   },
   {
    "fieldname": "other_charges_calculation",
-   "fieldtype": "Long Text",
+   "fieldtype": "Text Editor",
    "label": "Taxes and Charges Calculation",
    "no_copy": 1,
    "oldfieldtype": "HTML",
@@ -984,6 +1014,7 @@
    "print_hide": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "cash_bank_account",
    "fieldtype": "Link",
    "label": "Cash/Bank Account",
@@ -1047,6 +1078,7 @@
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "depends_on": "eval:flt(doc.write_off_amount)!=0",
    "fieldname": "write_off_account",
    "fieldtype": "Link",
@@ -1084,6 +1116,7 @@
    "fieldtype": "Button",
    "label": "Get Advances Paid",
    "oldfieldtype": "Button",
+   "options": "set_advances",
    "print_hide": 1
   },
   {
@@ -1210,6 +1243,7 @@
    "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "default": "No",
    "fieldname": "is_opening",
    "fieldtype": "Select",
@@ -1239,6 +1273,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Status",
+   "no_copy": 1,
    "options": "\nDraft\nReturn\nDebit Note Issued\nSubmitted\nPaid\nPartly Paid\nUnpaid\nOverdue\nCancelled\nInternal Transfer",
    "print_hide": 1
   },
@@ -1331,17 +1366,19 @@
   },
   {
    "fieldname": "billing_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Billing Address",
    "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "project",
    "fieldtype": "Link",
    "label": "Project",
    "options": "Project"
   },
   {
+   "allow_on_submit": 1,
    "depends_on": "eval:doc.is_internal_supplier",
    "description": "Unrealized Profit/Loss account for intra-company transfers",
    "fieldname": "unrealized_profit_loss_account",
@@ -1362,6 +1399,7 @@
    "depends_on": "eval:doc.update_stock && doc.is_internal_supplier",
    "fieldname": "set_from_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Set From Warehouse",
    "no_copy": 1,
    "options": "Warehouse",
@@ -1373,6 +1411,7 @@
    "depends_on": "eval:doc.is_subcontracted",
    "fieldname": "supplier_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Supplier Warehouse",
    "no_copy": 1,
    "options": "Warehouse",
@@ -1417,6 +1456,12 @@
    "read_only": 1
   },
   {
+   "fieldname": "subscription",
+   "fieldtype": "Link",
+   "label": "Subscription",
+   "options": "Subscription"
+  },
+  {
    "default": "0",
    "fieldname": "is_old_subcontracting_flow",
    "fieldtype": "Check",
@@ -1426,6 +1471,7 @@
   },
   {
    "default": "0",
+   "depends_on": "apply_tds",
    "fieldname": "tax_withholding_net_total",
    "fieldtype": "Currency",
    "hidden": 1,
@@ -1435,12 +1481,13 @@
    "read_only": 1
   },
   {
+   "depends_on": "apply_tds",
    "fieldname": "base_tax_withholding_net_total",
    "fieldtype": "Currency",
    "hidden": 1,
    "label": "Base Tax Withholding Net Total",
    "no_copy": 1,
-   "options": "currency",
+   "options": "Company:company:default_currency",
    "print_hide": 1,
    "read_only": 1
   },
@@ -1486,10 +1533,6 @@
   },
   {
    "fieldname": "column_break_6",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "column_break_38",
    "fieldtype": "Column Break"
   },
   {
@@ -1548,17 +1591,58 @@
    "fieldname": "named_place",
    "fieldtype": "Data",
    "label": "Named Place"
+  },
+  {
+   "default": "0",
+   "depends_on": "allocate_advances_automatically",
+   "description": "Advance payments allocated against orders will only be fetched",
+   "fieldname": "only_include_allocated_payments",
+   "fieldtype": "Check",
+   "label": "Only Include Allocated Payments"
+  },
+  {
+   "default": "0",
+   "fieldname": "use_company_roundoff_cost_center",
+   "fieldtype": "Check",
+   "label": "Use Company Default Round Off Cost Center"
+  },
+  {
+   "default": "0",
+   "fieldname": "use_transaction_date_exchange_rate",
+   "fieldtype": "Check",
+   "label": "Use Transaction Date Exchange Rate",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "supplier.supplier_group",
+   "fieldname": "supplier_group",
+   "fieldtype": "Link",
+   "label": "Supplier Group",
+   "options": "Supplier Group"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval: doc.is_return && doc.return_against",
+   "description": "Debit Note will update it's own outstanding amount, even if \"Return Against\" is specified.",
+   "fieldname": "update_outstanding_for_self",
+   "fieldtype": "Check",
+   "label": "Update Outstanding for Self"
+  },
+  {
+   "fieldname": "sender",
+   "fieldtype": "Data",
+   "label": "Sender",
+   "options": "Email"
   }
  ],
  "icon": "fa fa-file-text",
  "idx": 204,
  "is_submittable": 1,
  "links": [],
- "modified": "2022-12-12 18:37:38.142688",
+ "modified": "2024-09-18 12:24:44.826539",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Purchase Invoice",
- "name_case": "Title Case",
  "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
@@ -1611,8 +1695,9 @@
   }
  ],
  "search_fields": "posting_date, supplier, bill_no, base_grand_total, outstanding_amount",
+ "sender_field": "sender",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "supplier",

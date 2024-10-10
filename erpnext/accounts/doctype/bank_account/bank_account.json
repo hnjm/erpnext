@@ -13,6 +13,7 @@
   "account_type",
   "account_subtype",
   "column_break_7",
+  "disabled",
   "is_default",
   "is_company_account",
   "company",
@@ -199,10 +200,62 @@
    "fieldtype": "Data",
    "in_global_search": 1,
    "label": "Branch Code"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
   }
  ],
- "links": [],
- "modified": "2022-05-04 15:49:42.620630",
+ "links": [
+  {
+   "group": "Transactions",
+   "link_doctype": "Payment Request",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Transactions",
+   "link_doctype": "Payment Order",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Transactions",
+   "link_doctype": "Bank Guarantee",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Transactions",
+   "link_doctype": "Payroll Entry",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Transactions",
+   "link_doctype": "Bank Transaction",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Accounting",
+   "link_doctype": "Payment Entry",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Accounting",
+   "link_doctype": "Journal Entry",
+   "link_fieldname": "bank_account"
+  },
+  {
+   "group": "Party",
+   "link_doctype": "Customer",
+   "link_fieldname": "default_bank_account"
+  },
+  {
+   "group": "Party",
+   "link_doctype": "Supplier",
+   "link_fieldname": "default_bank_account"
+  }
+ ],
+ "modified": "2024-09-24 06:57:41.292970",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Bank Account",
@@ -235,7 +288,7 @@
   }
  ],
  "search_fields": "bank,account",
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

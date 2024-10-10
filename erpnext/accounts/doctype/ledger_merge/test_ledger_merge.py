@@ -1,14 +1,14 @@
 # Copyright (c) 2021, Wahni Green Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 from erpnext.accounts.doctype.ledger_merge.ledger_merge import start_merge
 
 
-class TestLedgerMerge(unittest.TestCase):
+class TestLedgerMerge(IntegrationTestCase):
 	def test_merge_success(self):
 		if not frappe.db.exists("Account", "Indirect Expenses - _TC"):
 			acc = frappe.new_doc("Account")
@@ -83,7 +83,10 @@ class TestLedgerMerge(unittest.TestCase):
 				"account": "Indirect Income - _TC",
 				"merge_accounts": [
 					{"account": "Indirect Test Income - _TC", "account_name": "Indirect Test Income"},
-					{"account": "Administrative Test Income - _TC", "account_name": "Administrative Test Income"},
+					{
+						"account": "Administrative Test Income - _TC",
+						"account_name": "Administrative Test Income",
+					},
 				],
 			}
 		).insert(ignore_permissions=True)

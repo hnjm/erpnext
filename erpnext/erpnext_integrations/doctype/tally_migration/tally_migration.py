@@ -40,6 +40,39 @@ def new_doc(document):
 
 
 class TallyMigration(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		addresses: DF.Attach | None
+		chart_of_accounts: DF.Attach | None
+		day_book_data: DF.Attach | None
+		default_cost_center: DF.Link | None
+		default_round_off_account: DF.Link | None
+		default_uom: DF.Link | None
+		default_warehouse: DF.Link | None
+		erpnext_company: DF.Data | None
+		failed_import_log: DF.Code | None
+		fixed_errors_log: DF.Code | None
+		is_day_book_data_imported: DF.Check
+		is_day_book_data_processed: DF.Check
+		is_master_data_imported: DF.Check
+		is_master_data_processed: DF.Check
+		items: DF.Attach | None
+		master_data: DF.Attach | None
+		parties: DF.Attach | None
+		status: DF.Data | None
+		tally_company: DF.Data | None
+		tally_creditors_account: DF.Data
+		tally_debtors_account: DF.Data
+		uoms: DF.Attach | None
+		vouchers: DF.Attach | None
+	# end: auto-generated types
+
 	def validate(self):
 		failed_import_log = json.loads(self.failed_import_log)
 		sorted_failed_import_log = sorted(failed_import_log, key=lambda row: row["doc"]["creation"])
@@ -96,9 +129,7 @@ class TallyMigration(Document):
 		self.default_cost_center, self.default_round_off_account = frappe.db.get_value(
 			"Company", self.erpnext_company, ["cost_center", "round_off_account"]
 		)
-		self.default_warehouse = frappe.db.get_value(
-			"Stock Settings", "Stock Settings", "default_warehouse"
-		)
+		self.default_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
 
 	def _process_master_data(self):
 		def get_company_name(collection):
@@ -124,7 +155,7 @@ class TallyMigration(Document):
 			except RecursionError:
 				self.log(
 					_(
-						"Error occured while parsing Chart of Accounts: Please make sure that no two accounts have the same name"
+						"Error occurred while parsing Chart of Accounts: Please make sure that no two accounts have the same name"
 					)
 				)
 
@@ -159,7 +190,7 @@ class TallyMigration(Document):
 
 		def get_children_and_parent_dict(accounts):
 			children, parents = {}, {}
-			for parent, account, is_group in accounts:
+			for parent, account, _is_group in accounts:
 				children.setdefault(parent, set()).add(account)
 				parents.setdefault(account, set()).add(parent)
 				parents[account].update(parents.get(parent, []))
@@ -204,7 +235,9 @@ class TallyMigration(Document):
 						{
 							"doctype": party_type,
 							"customer_name": account.NAME.string.strip(),
-							"tax_id": account.INCOMETAXNUMBER.string.strip() if account.INCOMETAXNUMBER else None,
+							"tax_id": account.INCOMETAXNUMBER.string.strip()
+							if account.INCOMETAXNUMBER
+							else None,
 							"customer_group": "All Customer Groups",
 							"territory": "All Territories",
 							"customer_type": "Individual",
@@ -218,7 +251,9 @@ class TallyMigration(Document):
 						{
 							"doctype": party_type,
 							"supplier_name": account.NAME.string.strip(),
-							"pan": account.INCOMETAXNUMBER.string.strip() if account.INCOMETAXNUMBER else None,
+							"pan": account.INCOMETAXNUMBER.string.strip()
+							if account.INCOMETAXNUMBER
+							else None,
 							"supplier_group": "All Supplier Groups",
 							"supplier_type": "Individual",
 						}
@@ -234,7 +269,9 @@ class TallyMigration(Document):
 							"address_line2": address[140:].strip(),
 							"country": account.COUNTRYNAME.string.strip() if account.COUNTRYNAME else None,
 							"state": account.LEDSTATENAME.string.strip() if account.LEDSTATENAME else None,
-							"gst_state": account.LEDSTATENAME.string.strip() if account.LEDSTATENAME else None,
+							"gst_state": account.LEDSTATENAME.string.strip()
+							if account.LEDSTATENAME
+							else None,
 							"pin_code": account.PINCODE.string.strip() if account.PINCODE else None,
 							"mobile": account.LEDGERPHONE.string.strip() if account.LEDGERPHONE else None,
 							"phone": account.LEDGERPHONE.string.strip() if account.LEDGERPHONE else None,
@@ -576,7 +613,7 @@ class TallyMigration(Document):
 				if new_year.year_start_date.year == new_year.year_end_date.year:
 					new_year.year = new_year.year_start_date.year
 				else:
-					new_year.year = "{}-{}".format(new_year.year_start_date.year, new_year.year_end_date.year)
+					new_year.year = f"{new_year.year_start_date.year}-{new_year.year_end_date.year}"
 				new_year.save()
 				oldest_year = new_year
 

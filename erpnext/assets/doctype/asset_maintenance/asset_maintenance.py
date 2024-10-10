@@ -10,6 +10,27 @@ from frappe.utils import add_days, add_months, add_years, getdate, nowdate
 
 
 class AssetMaintenance(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.assets.doctype.asset_maintenance_task.asset_maintenance_task import AssetMaintenanceTask
+
+		asset_category: DF.ReadOnly | None
+		asset_maintenance_tasks: DF.Table[AssetMaintenanceTask]
+		asset_name: DF.Link
+		company: DF.Link
+		item_code: DF.ReadOnly | None
+		item_name: DF.ReadOnly | None
+		maintenance_manager: DF.Data | None
+		maintenance_manager_name: DF.ReadOnly | None
+		maintenance_team: DF.Link
+	# end: auto-generated types
+
 	def validate(self):
 		for task in self.get("asset_maintenance_tasks"):
 			if task.end_date and (getdate(task.start_date) >= getdate(task.end_date)):
@@ -17,12 +38,17 @@ class AssetMaintenance(Document):
 			if getdate(task.next_due_date) < getdate(nowdate()):
 				task.maintenance_status = "Overdue"
 			if not task.assign_to and self.docstatus == 0:
-				throw(_("Row #{}: Please asign task to a member.").format(task.idx))
+				throw(_("Row #{}: Please assign task to a member.").format(task.idx))
 
 	def on_update(self):
 		for task in self.get("asset_maintenance_tasks"):
 			assign_tasks(self.name, task.assign_to, task.maintenance_task, task.next_due_date)
 		self.sync_maintenance_tasks()
+
+	def after_delete(self):
+		asset = frappe.get_doc("Asset", self.asset_name)
+		if asset.status == "In Maintenance":
+			asset.set_status()
 
 	def sync_maintenance_tasks(self):
 		tasks_names = []
@@ -42,7 +68,6 @@ class AssetMaintenance(Document):
 				maintenance_log.db_set("maintenance_status", "Cancelled")
 
 
-@frappe.whitelist()
 def assign_tasks(asset_maintenance_name, assign_to_member, maintenance_task, next_due_date):
 	team_member = frappe.db.get_value("User", assign_to_member, "email")
 	args = {
@@ -70,9 +95,7 @@ def calculate_next_due_date(
 	if not start_date and not last_completion_date:
 		start_date = frappe.utils.now()
 
-	if last_completion_date and (
-		(start_date and last_completion_date > start_date) or not start_date
-	):
+	if last_completion_date and ((start_date and last_completion_date > start_date) or not start_date):
 		start_date = last_completion_date
 	if periodicity == "Daily":
 		next_due_date = add_days(start_date, 1)
@@ -80,12 +103,16 @@ def calculate_next_due_date(
 		next_due_date = add_days(start_date, 7)
 	if periodicity == "Monthly":
 		next_due_date = add_months(start_date, 1)
+	if periodicity == "Quarterly":
+		next_due_date = add_months(start_date, 3)
+	if periodicity == "Half-yearly":
+		next_due_date = add_months(start_date, 6)
 	if periodicity == "Yearly":
 		next_due_date = add_years(start_date, 1)
 	if periodicity == "2 Yearly":
 		next_due_date = add_years(start_date, 2)
-	if periodicity == "Quarterly":
-		next_due_date = add_months(start_date, 3)
+	if periodicity == "3 Yearly":
+		next_due_date = add_years(start_date, 3)
 	if end_date and (
 		(start_date and start_date >= end_date)
 		or (last_completion_date and last_completion_date >= end_date)

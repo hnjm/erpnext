@@ -47,6 +47,8 @@ class TestAccountingDimensionFilter(unittest.TestCase):
 	def tearDown(self):
 		disable_dimension_filter()
 		disable_dimension()
+		frappe.flags.accounting_dimensions_details = None
+		frappe.flags.dimension_filter_map = None
 
 		for si in self.invoice_list:
 			si.load_from_db()
@@ -55,15 +57,14 @@ class TestAccountingDimensionFilter(unittest.TestCase):
 
 
 def create_accounting_dimension_filter():
-	if not frappe.db.get_value(
-		"Accounting Dimension Filter", {"accounting_dimension": "Cost Center"}
-	):
+	if not frappe.db.get_value("Accounting Dimension Filter", {"accounting_dimension": "Cost Center"}):
 		frappe.get_doc(
 			{
 				"doctype": "Accounting Dimension Filter",
 				"accounting_dimension": "Cost Center",
 				"allow_or_restrict": "Allow",
 				"company": "_Test Company",
+				"apply_restriction_on_values": 1,
 				"accounts": [
 					{
 						"applicable_on_account": "Sales - _TC",
@@ -85,6 +86,7 @@ def create_accounting_dimension_filter():
 				"doctype": "Accounting Dimension Filter",
 				"accounting_dimension": "Department",
 				"allow_or_restrict": "Allow",
+				"apply_restriction_on_values": 1,
 				"company": "_Test Company",
 				"accounts": [{"applicable_on_account": "Sales - _TC", "is_mandatory": 1}],
 				"dimensions": [{"accounting_dimension": "Department", "dimension_value": "Accounts - _TC"}],

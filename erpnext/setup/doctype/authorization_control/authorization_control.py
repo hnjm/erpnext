@@ -10,9 +10,19 @@ from erpnext.utilities.transaction_base import TransactionBase
 
 
 class AuthorizationControl(TransactionBase):
-	def get_appr_user_role(self, det, doctype_name, total, based_on, condition, item, company):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+	# end: auto-generated types
+
+	def get_appr_user_role(self, det, doctype_name, total, based_on, condition, master_name, company):
 		amt_list, appr_users, appr_roles = [], [], []
-		users, roles = "", ""
+		_users, _roles = "", ""
 		if det:
 			for x in det:
 				amt_list.append(flt(x[0]))
@@ -20,18 +30,20 @@ class AuthorizationControl(TransactionBase):
 
 			app_dtl = frappe.db.sql(
 				"""select approving_user, approving_role from `tabAuthorization Rule`
-				where transaction = %s and (value = %s or value > %s)
-				and docstatus != 2 and based_on = %s and company = %s %s"""
-				% ("%s", "%s", "%s", "%s", "%s", condition),
+				where transaction = {} and (value = {} or value > {})
+				and docstatus != 2 and based_on = {} and company = {} {}""".format(
+					"%s", "%s", "%s", "%s", "%s", condition
+				),
 				(doctype_name, flt(max_amount), total, based_on, company),
 			)
 
 			if not app_dtl:
 				app_dtl = frappe.db.sql(
 					"""select approving_user, approving_role from `tabAuthorization Rule`
-					where transaction = %s and (value = %s or value > %s) and docstatus != 2
-					and based_on = %s and ifnull(company,'') = '' %s"""
-					% ("%s", "%s", "%s", "%s", condition),
+					where transaction = {} and (value = {} or value > {}) and docstatus != 2
+					and based_on = {} and ifnull(company,'') = '' {}""".format(
+						"%s", "%s", "%s", "%s", condition
+					),
 					(doctype_name, flt(max_amount), total, based_on),
 				)
 
@@ -44,58 +56,62 @@ class AuthorizationControl(TransactionBase):
 			if not has_common(appr_roles, frappe.get_roles()) and not has_common(
 				appr_users, [session["user"]]
 			):
-				frappe.msgprint(_("Not authroized since {0} exceeds limits").format(_(based_on)))
+				frappe.msgprint(_("Not authorized since {0} exceeds limits").format(_(based_on)))
 				frappe.throw(_("Can be approved by {0}").format(comma_or(appr_roles + appr_users)))
 
-	def validate_auth_rule(self, doctype_name, total, based_on, cond, company, item=""):
+	def validate_auth_rule(self, doctype_name, total, based_on, cond, company, master_name=""):
 		chk = 1
 		add_cond1, add_cond2 = "", ""
-		if based_on == "Itemwise Discount":
-			add_cond1 += " and master_name = " + frappe.db.escape(cstr(item))
+		if based_on in ["Itemwise Discount", "Item Group wise Discount"]:
+			add_cond1 += " and master_name = " + frappe.db.escape(cstr(master_name))
 			itemwise_exists = frappe.db.sql(
 				"""select value from `tabAuthorization Rule`
-				where transaction = %s and value <= %s
-				and based_on = %s and company = %s and docstatus != 2 %s %s"""
-				% ("%s", "%s", "%s", "%s", cond, add_cond1),
+				where transaction = {} and value <= {}
+				and based_on = {} and company = {} and docstatus != 2 {} {}""".format(
+					"%s", "%s", "%s", "%s", cond, add_cond1
+				),
 				(doctype_name, total, based_on, company),
 			)
 
 			if not itemwise_exists:
 				itemwise_exists = frappe.db.sql(
 					"""select value from `tabAuthorization Rule`
-					where transaction = %s and value <= %s and based_on = %s
-					and ifnull(company,'') = ''	and docstatus != 2 %s %s"""
-					% ("%s", "%s", "%s", cond, add_cond1),
+					where transaction = {} and value <= {} and based_on = {}
+					and ifnull(company,'') = ''	and docstatus != 2 {} {}""".format(
+						"%s", "%s", "%s", cond, add_cond1
+					),
 					(doctype_name, total, based_on),
 				)
 
 			if itemwise_exists:
 				self.get_appr_user_role(
-					itemwise_exists, doctype_name, total, based_on, cond + add_cond1, item, company
+					itemwise_exists, doctype_name, total, based_on, cond + add_cond1, master_name, company
 				)
 				chk = 0
 		if chk == 1:
-			if based_on == "Itemwise Discount":
+			if based_on in ["Itemwise Discount", "Item Group wise Discount"]:
 				add_cond2 += " and ifnull(master_name,'') = ''"
 
 			appr = frappe.db.sql(
 				"""select value from `tabAuthorization Rule`
-				where transaction = %s and value <= %s and based_on = %s
-				and company = %s and docstatus != 2 %s %s"""
-				% ("%s", "%s", "%s", "%s", cond, add_cond2),
+				where transaction = {} and value <= {} and based_on = {}
+				and company = {} and docstatus != 2 {} {}""".format("%s", "%s", "%s", "%s", cond, add_cond2),
 				(doctype_name, total, based_on, company),
 			)
 
 			if not appr:
 				appr = frappe.db.sql(
 					"""select value from `tabAuthorization Rule`
-					where transaction = %s and value <= %s and based_on = %s
-					and ifnull(company,'') = '' and docstatus != 2 %s %s"""
-					% ("%s", "%s", "%s", cond, add_cond2),
+					where transaction = {} and value <= {} and based_on = {}
+					and ifnull(company,'') = '' and docstatus != 2 {} {}""".format(
+						"%s", "%s", "%s", cond, add_cond2
+					),
 					(doctype_name, total, based_on),
 				)
 
-			self.get_appr_user_role(appr, doctype_name, total, based_on, cond + add_cond2, item, company)
+			self.get_appr_user_role(
+				appr, doctype_name, total, based_on, cond + add_cond2, master_name, company
+			)
 
 	def bifurcate_based_on_type(self, doctype_name, total, av_dis, based_on, doc_obj, val, company):
 		add_cond = ""
@@ -116,12 +132,18 @@ class AuthorizationControl(TransactionBase):
 					customer = doc_obj.customer
 				else:
 					customer = doc_obj.customer_name
-				add_cond = " and master_name = {}".format(frappe.db.escape(customer))
+				add_cond = f" and master_name = {frappe.db.escape(customer)}"
 		if based_on == "Itemwise Discount":
 			if doc_obj:
 				for t in doc_obj.get("items"):
 					self.validate_auth_rule(
 						doctype_name, t.discount_percentage, based_on, add_cond, company, t.item_code
+					)
+		elif based_on == "Item Group wise Discount":
+			if doc_obj:
+				for t in doc_obj.get("items"):
+					self.validate_auth_rule(
+						doctype_name, t.discount_percentage, based_on, add_cond, company, t.item_group
 					)
 		else:
 			self.validate_auth_rule(doctype_name, auth_value, based_on, add_cond, company)
@@ -148,6 +170,7 @@ class AuthorizationControl(TransactionBase):
 			"Average Discount",
 			"Customerwise Discount",
 			"Itemwise Discount",
+			"Item Group wise Discount",
 		]
 
 		# Check for authorization set for individual user
@@ -166,7 +189,10 @@ class AuthorizationControl(TransactionBase):
 
 		# Remove user specific rules from global authorization rules
 		for r in based_on:
-			if r in final_based_on and r != "Itemwise Discount":
+			if r in final_based_on and r not in [
+				"Itemwise Discount",
+				"Item Group wise Discount",
+			]:
 				final_based_on.remove(r)
 
 		# Check for authorization set on particular roles
@@ -175,11 +201,10 @@ class AuthorizationControl(TransactionBase):
 			for x in frappe.db.sql(
 				"""select based_on
 			from `tabAuthorization Rule`
-			where transaction = %s and system_role IN (%s) and based_on IN (%s)
-			and (company = %s or ifnull(company,'')='')
+			where transaction = {} and system_role IN ({}) and based_on IN ({})
+			and (company = {} or ifnull(company,'')='')
 			and docstatus != 2
-		"""
-				% (
+		""".format(
 					"%s",
 					"'" + "','".join(frappe.get_roles()) + "'",
 					"'" + "','".join(final_based_on) + "'",
@@ -194,7 +219,10 @@ class AuthorizationControl(TransactionBase):
 
 		# Remove role specific rules from global authorization rules
 		for r in based_on:
-			if r in final_based_on and r != "Itemwise Discount":
+			if r in final_based_on and r not in [
+				"Itemwise Discount",
+				"Item Group wise Discount",
+			]:
 				final_based_on.remove(r)
 
 		# Check for global authorization

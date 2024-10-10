@@ -11,6 +11,18 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 		}
 	}
 
+	barcode(doc, cdt, cdn)  {
+		let row = locals[cdt][cdn];
+		if (row.barcode) {
+			erpnext.stock.utils.set_item_details_using_barcode(this.frm, row, (r) => {
+				frappe.model.set_value(cdt, cdn, {
+					"item_code": r.message.item_code,
+					"qty": 1,
+				});
+			});
+		}
+	}
+
 	setup_warehouse_query() {
 		var me = this;
 		erpnext.queries.setup_queries(this.frm, "Warehouse", function() {
@@ -57,7 +69,8 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 					from_date: me.frm.doc.posting_date,
 					to_date: moment(me.frm.doc.modified).format('YYYY-MM-DD'),
 					company: me.frm.doc.company,
-					show_cancelled_entries: me.frm.doc.docstatus === 2
+					show_cancelled_entries: me.frm.doc.docstatus === 2,
+					ignore_prepared_report: true
 				};
 				frappe.set_route("query-report", "Stock Ledger");
 			}, __("View"));
@@ -66,7 +79,7 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 	}
 
 	show_general_ledger() {
-		var me = this;
+		let me = this;
 		if(this.frm.doc.docstatus > 0) {
 			cur_frm.add_custom_button(__('Accounting Ledger'), function() {
 				frappe.route_options = {
@@ -75,7 +88,8 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 					to_date: moment(me.frm.doc.modified).format('YYYY-MM-DD'),
 					company: me.frm.doc.company,
 					group_by: "Group by Voucher (Consolidated)",
-					show_cancelled_entries: me.frm.doc.docstatus === 2
+					show_cancelled_entries: me.frm.doc.docstatus === 2,
+					ignore_prepared_report: true
 				};
 				frappe.set_route("query-report", "General Ledger");
 			}, __("View"));

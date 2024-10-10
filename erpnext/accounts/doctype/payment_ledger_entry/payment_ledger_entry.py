@@ -21,6 +21,35 @@ from erpnext.exceptions import InvalidAccountDimensionError, MandatoryAccountDim
 
 
 class PaymentLedgerEntry(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		account: DF.Link | None
+		account_currency: DF.Link | None
+		account_type: DF.Literal["Receivable", "Payable"]
+		against_voucher_no: DF.DynamicLink | None
+		against_voucher_type: DF.Link | None
+		amount: DF.Currency
+		amount_in_account_currency: DF.Currency
+		company: DF.Link | None
+		cost_center: DF.Link | None
+		delinked: DF.Check
+		due_date: DF.Date | None
+		finance_book: DF.Link | None
+		party: DF.DynamicLink | None
+		party_type: DF.Link | None
+		posting_date: DF.Date | None
+		remarks: DF.Text | None
+		voucher_detail_no: DF.Data | None
+		voucher_no: DF.DynamicLink | None
+		voucher_type: DF.Link | None
+	# end: auto-generated types
+
 	def validate_account(self):
 		valid_account = frappe.db.get_list(
 			"Account",
@@ -108,9 +137,9 @@ class PaymentLedgerEntry(Document):
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
-						_("Accounting Dimension <b>{0}</b> is required for 'Profit and Loss' account {1}.").format(
-							dimension.label, self.account
-						)
+						_(
+							"Accounting Dimension <b>{0}</b> is required for 'Profit and Loss' account {1}."
+						).format(dimension.label, self.account)
 					)
 
 			if (
@@ -121,9 +150,9 @@ class PaymentLedgerEntry(Document):
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
-						_("Accounting Dimension <b>{0}</b> is required for 'Balance Sheet' account {1}.").format(
-							dimension.label, self.account
-						)
+						_(
+							"Accounting Dimension <b>{0}</b> is required for 'Balance Sheet' account {1}."
+						).format(dimension.label, self.account)
 					)
 
 	def validate(self):
@@ -132,11 +161,12 @@ class PaymentLedgerEntry(Document):
 	def on_update(self):
 		adv_adj = self.flags.adv_adj
 		if not self.flags.from_repost:
-			self.validate_account_details()
-			self.validate_dimensions_for_pl_and_bs()
-			self.validate_allowed_dimensions()
-			validate_balance_type(self.account, adv_adj)
 			validate_frozen_account(self.account, adv_adj)
+			if not self.delinked:
+				self.validate_account_details()
+				self.validate_dimensions_for_pl_and_bs()
+				self.validate_allowed_dimensions()
+				validate_balance_type(self.account, adv_adj)
 
 		# update outstanding amount
 		if (

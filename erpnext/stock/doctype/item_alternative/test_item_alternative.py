@@ -2,7 +2,7 @@
 # See license.txt
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import flt
 
 from erpnext.controllers.subcontracting_controller import make_rm_stock_entry
@@ -26,7 +26,16 @@ from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order im
 )
 
 
-class TestItemAlternative(FrappeTestCase):
+class UnitTestItemAlternative(UnitTestCase):
+	"""
+	Unit tests for ItemAlternative.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestItemAlternative(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		make_items()
@@ -54,9 +63,7 @@ class TestItemAlternative(FrappeTestCase):
 				"fg_item_qty": 5,
 			},
 		]
-		sco = get_subcontracting_order(
-			service_items=service_items, supplier_warehouse=supplier_warehouse
-		)
+		sco = get_subcontracting_order(service_items=service_items, supplier_warehouse=supplier_warehouse)
 		rm_items = [
 			{
 				"item_code": "Test Finished Goods - A",
@@ -106,9 +113,7 @@ class TestItemAlternative(FrappeTestCase):
 			"reserved_qty_for_sub_contract",
 		)
 
-		self.assertEqual(
-			after_transfer_reserved_qty_for_sub_contract, flt(reserved_qty_for_sub_contract - 5)
-		)
+		self.assertEqual(after_transfer_reserved_qty_for_sub_contract, flt(reserved_qty_for_sub_contract - 5))
 
 		scr = make_subcontracting_receipt(sco.name)
 		scr.save()
@@ -159,9 +164,7 @@ class TestItemAlternative(FrappeTestCase):
 			"reserved_qty_for_production",
 		)
 
-		self.assertEqual(
-			reserved_qty_for_production_after_transfer, flt(reserved_qty_for_production - 5)
-		)
+		self.assertEqual(reserved_qty_for_production_after_transfer, flt(reserved_qty_for_production - 5))
 		ste1 = frappe.get_doc(make_stock_entry(pro_order.name, "Manufacture", 5))
 
 		status = False

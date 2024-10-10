@@ -14,6 +14,32 @@ from erpnext.buying.doctype.supplier_scorecard_criteria.supplier_scorecard_crite
 
 
 class SupplierScorecardPeriod(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.buying.doctype.supplier_scorecard_scoring_criteria.supplier_scorecard_scoring_criteria import (
+			SupplierScorecardScoringCriteria,
+		)
+		from erpnext.buying.doctype.supplier_scorecard_scoring_variable.supplier_scorecard_scoring_variable import (
+			SupplierScorecardScoringVariable,
+		)
+
+		amended_from: DF.Link | None
+		criteria: DF.Table[SupplierScorecardScoringCriteria]
+		end_date: DF.Date
+		naming_series: DF.Literal["PU-SSP-.YYYY.-"]
+		scorecard: DF.Link
+		start_date: DF.Date
+		supplier: DF.Link
+		total_score: DF.Percent
+		variables: DF.Table[SupplierScorecardScoringVariable]
+	# end: auto-generated types
+
 	def validate(self):
 		self.validate_criteria_weights()
 		self.calculate_variables()
@@ -21,7 +47,6 @@ class SupplierScorecardPeriod(Document):
 		self.calculate_score()
 
 	def validate_criteria_weights(self):
-
 		weight = 0
 		for c in self.criteria:
 			weight += c.weight
@@ -44,14 +69,17 @@ class SupplierScorecardPeriod(Document):
 				crit.score = min(
 					crit.max_score,
 					max(
-						0, frappe.safe_eval(self.get_eval_statement(crit.formula), None, {"max": max, "min": min})
+						0,
+						frappe.safe_eval(
+							self.get_eval_statement(crit.formula), None, {"max": max, "min": min}
+						),
 					),
 				)
 			except Exception:
 				frappe.throw(
-					_("Could not solve criteria score function for {0}. Make sure the formula is valid.").format(
-						crit.criteria_name
-					),
+					_(
+						"Could not solve criteria score function for {0}. Make sure the formula is valid."
+					).format(crit.criteria_name),
 					frappe.ValidationError,
 				)
 				crit.score = 0
@@ -82,7 +110,7 @@ class SupplierScorecardPeriod(Document):
 			if var.value:
 				if var.param_name in my_eval_statement:
 					my_eval_statement = my_eval_statement.replace(
-						"{" + var.param_name + "}", "{:.2f}".format(var.value)
+						"{" + var.param_name + "}", f"{var.value:.2f}"
 					)
 			else:
 				if var.param_name in my_eval_statement:
@@ -99,7 +127,6 @@ def import_string_path(path):
 	return mod
 
 
-@frappe.whitelist()
 def make_supplier_scorecard(source_name, target_doc=None):
 	def update_criteria_fields(obj, target, source_parent):
 		target.max_score, target.formula = frappe.db.get_value(

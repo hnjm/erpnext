@@ -6,11 +6,11 @@ from collections import deque
 from functools import partial
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.utils import timeout
 from frappe.utils import cstr, flt
 
 from erpnext.controllers.tests.test_subcontracting_controller import (
-	make_stock_in_entry,
 	set_backflush_based_on,
 )
 from erpnext.manufacturing.doctype.bom.bom import BOMRecursionError, item_query, make_variant_bom
@@ -26,7 +26,17 @@ test_records = frappe.get_test_records("BOM")
 test_dependencies = ["Item", "Quality Inspection Template"]
 
 
-class TestBOM(FrappeTestCase):
+class UnitTestBom(UnitTestCase):
+	"""
+	Unit tests for Bom.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestBOM(IntegrationTestCase):
+	@timeout
 	def test_get_items(self):
 		from erpnext.manufacturing.doctype.bom.bom import get_bom_items_as_dict
 
@@ -37,6 +47,7 @@ class TestBOM(FrappeTestCase):
 		self.assertTrue(test_records[2]["items"][1]["item_code"] in items_dict)
 		self.assertEqual(len(items_dict.values()), 2)
 
+	@timeout
 	def test_get_items_exploded(self):
 		from erpnext.manufacturing.doctype.bom.bom import get_bom_items_as_dict
 
@@ -49,11 +60,13 @@ class TestBOM(FrappeTestCase):
 		self.assertTrue(test_records[0]["items"][1]["item_code"] in items_dict)
 		self.assertEqual(len(items_dict.values()), 3)
 
+	@timeout
 	def test_get_items_list(self):
 		from erpnext.manufacturing.doctype.bom.bom import get_bom_items
 
 		self.assertEqual(len(get_bom_items(bom=get_default_bom(), company="_Test Company")), 3)
 
+	@timeout
 	def test_default_bom(self):
 		def _get_default_bom_in_item():
 			return cstr(frappe.db.get_value("Item", "_Test FG Item 2", "default_bom"))
@@ -71,6 +84,7 @@ class TestBOM(FrappeTestCase):
 
 		self.assertTrue(_get_default_bom_in_item(), bom.name)
 
+	@timeout
 	def test_update_bom_cost_in_all_boms(self):
 		# get current rate for '_Test Item 2'
 		bom_rates = frappe.db.get_values(
@@ -99,6 +113,7 @@ class TestBOM(FrappeTestCase):
 		):
 			self.assertEqual(d.base_rate, rm_base_rate + 10)
 
+	@timeout
 	def test_bom_cost(self):
 		bom = frappe.copy_doc(test_records[2])
 		bom.insert()
@@ -127,6 +142,7 @@ class TestBOM(FrappeTestCase):
 		self.assertAlmostEqual(bom.base_raw_material_cost, base_raw_material_cost)
 		self.assertAlmostEqual(bom.base_total_cost, base_raw_material_cost + base_op_cost)
 
+	@timeout
 	def test_bom_cost_with_batch_size(self):
 		bom = frappe.copy_doc(test_records[2])
 		bom.docstatus = 0
@@ -145,6 +161,7 @@ class TestBOM(FrappeTestCase):
 		self.assertAlmostEqual(bom.operating_cost, op_cost / 2)
 		bom.delete()
 
+	@timeout
 	def test_bom_cost_multi_uom_multi_currency_based_on_price_list(self):
 		frappe.db.set_value("Price List", "_Test Price List", "price_not_uom_dependent", 1)
 		for item_code, rate in (("_Test Item", 3600), ("_Test Item Home Desktop Manufactured", 3000)):
@@ -181,6 +198,7 @@ class TestBOM(FrappeTestCase):
 		self.assertEqual(bom.base_raw_material_cost, 27000)
 		self.assertEqual(bom.base_total_cost, 33000)
 
+	@timeout
 	def test_bom_cost_multi_uom_based_on_valuation_rate(self):
 		bom = frappe.copy_doc(test_records[2])
 		bom.set_rate_of_sub_assembly_item_based_on_bom = 0
@@ -191,9 +209,7 @@ class TestBOM(FrappeTestCase):
 
 		reset_item_valuation_rate(
 			item_code="_Test Item",
-			warehouse_list=frappe.get_all(
-				"Warehouse", {"is_group": 0, "company": bom.company}, pluck="name"
-			),
+			warehouse_list=frappe.get_all("Warehouse", {"is_group": 0, "company": bom.company}, pluck="name"),
 			qty=200,
 			rate=200,
 		)
@@ -202,6 +218,7 @@ class TestBOM(FrappeTestCase):
 
 		self.assertEqual(bom.items[0].rate, 20)
 
+	@timeout
 	def test_bom_cost_with_fg_based_operating_cost(self):
 		bom = frappe.copy_doc(test_records[4])
 		bom.insert()
@@ -229,6 +246,7 @@ class TestBOM(FrappeTestCase):
 		self.assertAlmostEqual(bom.base_raw_material_cost, base_raw_material_cost)
 		self.assertAlmostEqual(bom.base_total_cost, base_raw_material_cost + base_op_cost)
 
+	@timeout
 	def test_subcontractor_sourced_item(self):
 		item_code = "_Test Subcontracted FG Item 1"
 		set_backflush_based_on("Material Transferred for Subcontract")
@@ -310,6 +328,7 @@ class TestBOM(FrappeTestCase):
 		supplied_items = sorted([d.rm_item_code for d in sco.supplied_items])
 		self.assertEqual(bom_items, supplied_items)
 
+	@timeout
 	def test_bom_tree_representation(self):
 		bom_tree = {
 			"Assembly": {
@@ -332,9 +351,10 @@ class TestBOM(FrappeTestCase):
 
 		self.assertEqual(len(reqd_order), len(created_order))
 
-		for reqd_item, created_item in zip(reqd_order, created_order):
+		for reqd_item, created_item in zip(reqd_order, created_order, strict=False):
 			self.assertEqual(reqd_item, created_item.item_code)
 
+	@timeout
 	def test_generated_variant_bom(self):
 		from erpnext.controllers.item_variant import create_variant
 
@@ -370,11 +390,12 @@ class TestBOM(FrappeTestCase):
 
 		self.assertEqual(len(reqd_order), len(created_order))
 
-		for reqd_item, created_item in zip(reqd_order, created_order):
+		for reqd_item, created_item in zip(reqd_order, created_order, strict=False):
 			self.assertEqual(reqd_item.item_code, created_item.item_code)
 			self.assertEqual(reqd_item.qty, created_item.qty)
 			self.assertEqual(reqd_item.exploded_qty, created_item.exploded_qty)
 
+	@timeout
 	def test_bom_recursion_1st_level(self):
 		"""BOM should not allow BOM item again in child"""
 		item_code = make_item(properties={"is_stock_item": 1}).name
@@ -387,6 +408,7 @@ class TestBOM(FrappeTestCase):
 			bom.items[0].bom_no = bom.name
 			bom.save()
 
+	@timeout
 	def test_bom_recursion_transitive(self):
 		item1 = make_item(properties={"is_stock_item": 1}).name
 		item2 = make_item(properties={"is_stock_item": 1}).name
@@ -408,6 +430,7 @@ class TestBOM(FrappeTestCase):
 			bom1.save()
 			bom2.save()
 
+	@timeout
 	def test_bom_with_process_loss_item(self):
 		fg_item_non_whole, fg_item_whole, bom_item = create_process_loss_bom_items()
 
@@ -421,6 +444,7 @@ class TestBOM(FrappeTestCase):
 		#  Items with whole UOMs can't be PL Items
 		self.assertRaises(frappe.ValidationError, bom_doc.submit)
 
+	@timeout
 	def test_bom_item_query(self):
 		query = partial(
 			item_query,
@@ -435,11 +459,10 @@ class TestBOM(FrappeTestCase):
 		test_items = query(txt="_Test")
 		filtered = query(txt="_Test Item 2")
 
-		self.assertNotEqual(
-			len(test_items), len(filtered), msg="Item filtering showing excessive results"
-		)
+		self.assertNotEqual(len(test_items), len(filtered), msg="Item filtering showing excessive results")
 		self.assertTrue(0 < len(filtered) <= 3, msg="Item filtering showing excessive results")
 
+	@timeout
 	def test_exclude_exploded_items_from_bom(self):
 		bom_no = get_default_bom()
 		new_bom = frappe.copy_doc(frappe.get_doc("BOM", bom_no))
@@ -458,6 +481,7 @@ class TestBOM(FrappeTestCase):
 
 		new_bom.delete()
 
+	@timeout
 	def test_valid_transfer_defaults(self):
 		bom_with_op = frappe.db.get_value(
 			"BOM", {"item": "_Test FG Item 2", "with_operations": 1, "is_active": 1}
@@ -489,13 +513,14 @@ class TestBOM(FrappeTestCase):
 		self.assertEqual(bom.transfer_material_against, "Work Order")
 		bom.delete()
 
+	@timeout
 	def test_bom_name_length(self):
 		"""test >140 char names"""
 		bom_tree = {"x" * 140: {" ".join(["abc"] * 35): {}}}
 		create_nested_bom(bom_tree, prefix="")
 
+	@timeout
 	def test_version_index(self):
-
 		bom = frappe.new_doc("BOM")
 
 		version_index_test_cases = [
@@ -515,6 +540,7 @@ class TestBOM(FrappeTestCase):
 					msg=f"Incorrect index for {existing_boms}",
 				)
 
+	@timeout
 	def test_bom_versioning(self):
 		bom_tree = {frappe.generate_hash(length=10): {frappe.generate_hash(length=10): {}}}
 		bom = create_nested_bom(bom_tree, prefix="")
@@ -547,8 +573,8 @@ class TestBOM(FrappeTestCase):
 		self.assertNotEqual(amendment.name, version.name)
 		self.assertEqual(int(version.name.split("-")[-1]), 2)
 
+	@timeout
 	def test_clear_inpection_quality(self):
-
 		bom = frappe.copy_doc(test_records[2], ignore_no_copy=True)
 		bom.docstatus = 0
 		bom.is_default = 0
@@ -565,6 +591,7 @@ class TestBOM(FrappeTestCase):
 
 		self.assertEqual(bom.quality_inspection_template, None)
 
+	@timeout
 	def test_bom_pricing_based_on_lpp(self):
 		from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
 
@@ -585,6 +612,7 @@ class TestBOM(FrappeTestCase):
 		bom.submit()
 		self.assertEqual(bom.items[0].rate, 42)
 
+	@timeout
 	def test_set_default_bom_for_item_having_single_bom(self):
 		from erpnext.stock.doctype.item.test_item import make_item
 
@@ -621,6 +649,7 @@ class TestBOM(FrappeTestCase):
 		bom.reload()
 		self.assertEqual(frappe.get_value("Item", fg_item.item_code, "default_bom"), bom.name)
 
+	@timeout
 	def test_exploded_items_rate(self):
 		rm_item = make_item(
 			properties={"is_stock_item": 1, "valuation_rate": 99, "last_purchase_rate": 89}
@@ -649,6 +678,7 @@ class TestBOM(FrappeTestCase):
 		bom.submit()
 		self.assertEqual(bom.exploded_items[0].rate, bom.items[0].base_rate)
 
+	@timeout
 	def test_bom_cost_update_flag(self):
 		rm_item = make_item(
 			properties={"is_stock_item": 1, "valuation_rate": 99, "last_purchase_rate": 89}
@@ -659,9 +689,7 @@ class TestBOM(FrappeTestCase):
 
 		bom = make_bom(item=fg_item, raw_materials=[rm_item])
 
-		create_stock_reconciliation(
-			item_code=rm_item, warehouse="_Test Warehouse - _TC", qty=100, rate=600
-		)
+		create_stock_reconciliation(item_code=rm_item, warehouse="_Test Warehouse - _TC", qty=100, rate=600)
 
 		bom.load_from_db()
 		bom.update_cost()
@@ -670,6 +698,72 @@ class TestBOM(FrappeTestCase):
 		bom.load_from_db()
 		bom.update_cost()
 		self.assertFalse(bom.flags.cost_updated)
+
+	def test_bom_with_service_item_cost(self):
+		rm_item = make_item(properties={"is_stock_item": 1, "valuation_rate": 1000.0}).name
+
+		service_item = make_item(properties={"is_stock_item": 0}).name
+
+		fg_item = make_item(properties={"is_stock_item": 1}).name
+
+		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
+
+		bom = make_bom(item=fg_item, raw_materials=[rm_item, service_item], do_not_save=True)
+		bom.rm_cost_as_per = "Valuation Rate"
+
+		for row in bom.items:
+			if row.item_code == service_item:
+				row.rate = 566.00
+			else:
+				row.rate = 800.00
+
+		bom.save()
+
+		for row in bom.items:
+			if row.item_code == service_item:
+				self.assertEqual(row.is_stock_item, 0)
+				self.assertEqual(row.rate, 566.00)
+			else:
+				self.assertEqual(row.is_stock_item, 1)
+
+	def test_do_not_include_manufacturing_and_fixed_items(self):
+		from erpnext.manufacturing.doctype.bom.bom import item_query
+
+		if not frappe.db.exists("Asset Category", "Computers-Test"):
+			doc = frappe.get_doc({"doctype": "Asset Category", "asset_category_name": "Computers-Test"})
+			doc.flags.ignore_mandatory = True
+			doc.insert()
+
+		for item_code, properties in {
+			"_Test RM Item 1 Do Not Include In Manufacture": {
+				"is_stock_item": 1,
+				"include_item_in_manufacturing": 0,
+			},
+			"_Test RM Item 2 Fixed Asset Item": {
+				"is_fixed_asset": 1,
+				"is_stock_item": 0,
+				"asset_category": "Computers-Test",
+			},
+			"_Test RM Item 3 Manufacture Item": {"is_stock_item": 1, "include_item_in_manufacturing": 1},
+		}.items():
+			make_item(item_code, properties)
+
+		data = item_query(
+			"Item",
+			txt="_Test RM Item",
+			searchfield="name",
+			start=0,
+			page_len=20000,
+			filters={"include_item_in_manufacturing": 1, "is_fixed_asset": 0},
+		)
+
+		items = []
+		for row in data:
+			items.append(row[0])
+
+		self.assertTrue("_Test RM Item 1 Do Not Include In Manufacture" not in items)
+		self.assertTrue("_Test RM Item 2 Fixed Asset Item" not in items)
+		self.assertTrue("_Test RM Item 3 Manufacture Item" in items)
 
 
 def get_default_bom(item_code="_Test FG Item 2"):
@@ -691,14 +785,16 @@ def level_order_traversal(node):
 	return traversal
 
 
-def create_nested_bom(tree, prefix="_Test bom "):
+def create_nested_bom(tree, prefix="_Test bom ", submit=True):
 	"""Helper function to create a simple nested bom from tree describing item names. (along with required items)"""
 
 	def create_items(bom_tree):
 		for item_code, subtree in bom_tree.items():
 			bom_item_code = prefix + item_code
 			if not frappe.db.exists("Item", bom_item_code):
-				frappe.get_doc(doctype="Item", item_code=bom_item_code, item_group="_Test Item Group").insert()
+				frappe.get_doc(
+					doctype="Item", item_code=bom_item_code, item_group="_Test Item Group"
+				).insert()
 			create_items(subtree)
 
 	create_items(tree)
@@ -725,7 +821,8 @@ def create_nested_bom(tree, prefix="_Test bom "):
 			bom.company = "_Test Company"
 			bom.currency = "INR"
 			bom.insert()
-			bom.submit()
+			if submit:
+				bom.submit()
 
 	return bom  # parent bom is last bom
 

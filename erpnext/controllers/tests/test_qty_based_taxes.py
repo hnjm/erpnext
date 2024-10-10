@@ -2,13 +2,14 @@ import unittest
 from uuid import uuid4 as _uuid4
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 
 def uuid4():
 	return str(_uuid4())
 
 
-class TestTaxes(unittest.TestCase):
+class TestTaxes(IntegrationTestCase):
 	def setUp(self):
 		self.company = frappe.get_doc(
 			{
@@ -25,7 +26,7 @@ class TestTaxes(unittest.TestCase):
 				"account_name": uuid4(),
 				"account_type": "Tax",
 				"company": self.company.name,
-				"parent_account": "Duties and Taxes - {self.company.abbr}".format(self=self),
+				"parent_account": f"Duties and Taxes - {self.company.abbr}",
 			}
 		).insert()
 		self.item_group = frappe.get_doc(

@@ -1,12 +1,12 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 
-class TestAssetCategory(unittest.TestCase):
+class TestAssetCategory(IntegrationTestCase):
 	def test_mandatory_fields(self):
 		asset_category = frappe.new_doc("Asset Category")
 		asset_category.asset_category_name = "Computers"
@@ -31,9 +31,7 @@ class TestAssetCategory(unittest.TestCase):
 			pass
 
 	def test_cwip_accounting(self):
-		company_cwip_acc = frappe.db.get_value(
-			"Company", "_Test Company", "capital_work_in_progress_account"
-		)
+		frappe.db.get_value("Company", "_Test Company", "capital_work_in_progress_account")
 		frappe.db.set_value("Company", "_Test Company", "capital_work_in_progress_account", "")
 
 		asset_category = frappe.new_doc("Asset Category")

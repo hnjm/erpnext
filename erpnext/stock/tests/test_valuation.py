@@ -2,7 +2,7 @@ import json
 import unittest
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -15,7 +15,7 @@ value_gen = st.floats(min_value=1, max_value=1e6)
 stock_queue_generator = st.lists(st.tuples(qty_gen, value_gen), min_size=10)
 
 
-class TestFIFOValuation(unittest.TestCase):
+class TestFIFOValuation(IntegrationTestCase):
 	def setUp(self):
 		self.queue = FIFOValuation([])
 
@@ -28,9 +28,7 @@ class TestFIFOValuation(unittest.TestCase):
 		self.assertAlmostEqual(sum(q for q, _ in self.queue), qty, msg=f"queue: {self.queue}", places=4)
 
 	def assertTotalValue(self, value):
-		self.assertAlmostEqual(
-			sum(q * r for q, r in self.queue), value, msg=f"queue: {self.queue}", places=2
-		)
+		self.assertAlmostEqual(sum(q * r for q, r in self.queue), value, msg=f"queue: {self.queue}", places=2)
 
 	def test_simple_addition(self):
 		self.queue.add_stock(1, 10)
@@ -132,7 +130,7 @@ class TestFIFOValuation(unittest.TestCase):
 		total_qty = 0
 
 		for qty, rate in stock_queue:
-			if qty == 0:
+			if round_off_if_near_zero(qty) == 0:
 				continue
 			if qty > 0:
 				self.queue.add_stock(qty, rate)
@@ -154,7 +152,7 @@ class TestFIFOValuation(unittest.TestCase):
 
 		for qty, rate in stock_queue:
 			# don't allow negative stock
-			if qty == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
+			if round_off_if_near_zero(qty) == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
 				continue
 			if qty > 0:
 				self.queue.add_stock(qty, rate)
@@ -179,7 +177,7 @@ class TestFIFOValuation(unittest.TestCase):
 
 		for qty, rate in stock_queue:
 			# don't allow negative stock
-			if qty == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
+			if round_off_if_near_zero(qty) == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
 				continue
 			if qty > 0:
 				self.queue.add_stock(qty, rate)
@@ -195,10 +193,9 @@ class TestFIFOValuation(unittest.TestCase):
 				total_value -= sum(q * r for q, r in consumed)
 			self.assertTotalQty(total_qty)
 			self.assertTotalValue(total_value)
-			self.assertGreaterEqual(total_value, 0)
 
 
-class TestLIFOValuation(unittest.TestCase):
+class TestLIFOValuation(IntegrationTestCase):
 	def setUp(self):
 		self.stack = LIFOValuation([])
 
@@ -211,9 +208,7 @@ class TestLIFOValuation(unittest.TestCase):
 		self.assertAlmostEqual(sum(q for q, _ in self.stack), qty, msg=f"stack: {self.stack}", places=4)
 
 	def assertTotalValue(self, value):
-		self.assertAlmostEqual(
-			sum(q * r for q, r in self.stack), value, msg=f"stack: {self.stack}", places=2
-		)
+		self.assertAlmostEqual(sum(q * r for q, r in self.stack), value, msg=f"stack: {self.stack}", places=2)
 
 	def test_simple_addition(self):
 		self.stack.add_stock(1, 10)
@@ -282,7 +277,7 @@ class TestLIFOValuation(unittest.TestCase):
 		total_qty = 0
 
 		for qty, rate in stock_stack:
-			if qty == 0:
+			if round_off_if_near_zero(qty) == 0:
 				continue
 			if qty > 0:
 				self.stack.add_stock(qty, rate)
@@ -304,7 +299,7 @@ class TestLIFOValuation(unittest.TestCase):
 
 		for qty, rate in stock_stack:
 			# don't allow negative stock
-			if qty == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
+			if round_off_if_near_zero(qty) == 0 or total_qty + qty < 0 or abs(qty) < 0.1:
 				continue
 			if qty > 0:
 				self.stack.add_stock(qty, rate)
@@ -322,7 +317,7 @@ class TestLIFOValuation(unittest.TestCase):
 			self.assertTotalValue(total_value)
 
 
-class TestLIFOValuationSLE(FrappeTestCase):
+class TestLIFOValuationSLE(IntegrationTestCase):
 	ITEM_CODE = "_Test LIFO item"
 	WAREHOUSE = "_Test Warehouse - _TC"
 
@@ -356,7 +351,6 @@ class TestLIFOValuationSLE(FrappeTestCase):
 			self.assertEqual(stock_queue, expected_queue)
 
 	def test_lifo_values(self):
-
 		in1 = self._make_stock_entry(1, 1)
 		self.assertStockQueue(in1, [[1, 1]])
 

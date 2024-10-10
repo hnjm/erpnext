@@ -9,6 +9,21 @@ from frappe.utils import cint, flt
 
 
 class Routing(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.manufacturing.doctype.bom_operation.bom_operation import BOMOperation
+
+		disabled: DF.Check
+		operations: DF.Table[BOMOperation]
+		routing_name: DF.Data | None
+	# end: auto-generated types
+
 	def validate(self):
 		self.calculate_operating_cost()
 		self.set_routing_id()
@@ -32,9 +47,9 @@ class Routing(Document):
 				row.sequence_id = sequence_id + 1
 			elif sequence_id and row.sequence_id and cint(sequence_id) > cint(row.sequence_id):
 				frappe.throw(
-					_("At row #{0}: the sequence id {1} cannot be less than previous row sequence id {2}").format(
-						row.idx, row.sequence_id, sequence_id
-					)
+					_(
+						"At row #{0}: the sequence id {1} cannot be less than previous row sequence id {2}"
+					).format(row.idx, row.sequence_id, sequence_id)
 				)
 
 			sequence_id = row.sequence_id

@@ -111,9 +111,7 @@ def get_price_list():
 	).run(as_dict=True)
 
 	for d in price_list:
-		d.update(
-			{"price": "{0} {1} - {2}".format(d.currency, round(d.price_list_rate, 2), d.price_list)}
-		)
+		d.update({"price": f"{d.currency} {round(d.price_list_rate, 2)} - {d.price_list}"})
 		d.pop("currency")
 		d.pop("price_list_rate")
 		d.pop("price_list")
@@ -202,7 +200,7 @@ def get_valuation_rate():
 	bin_data = (
 		frappe.qb.from_(bin)
 		.select(
-			bin.item_code, Sum(bin.actual_qty * bin.valuation_rate) / Sum(bin.actual_qty).as_("val_rate")
+			bin.item_code, (Sum(bin.actual_qty * bin.valuation_rate) / Sum(bin.actual_qty)).as_("val_rate")
 		)
 		.where(bin.actual_qty > 0)
 		.groupby(bin.item_code)

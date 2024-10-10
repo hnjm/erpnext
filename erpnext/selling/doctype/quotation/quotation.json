@@ -124,8 +124,10 @@
   "customer_group",
   "territory",
   "column_break_108",
-  "campaign",
-  "source",
+  "utm_source",
+  "utm_campaign",
+  "utm_medium",
+  "utm_content",
   "column_break4",
   "opportunity",
   "supplier_quotation",
@@ -265,7 +267,7 @@
   },
   {
    "fieldname": "address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Address",
    "oldfieldname": "customer_address",
    "oldfieldtype": "Small Text",
@@ -291,6 +293,7 @@
    "fieldname": "contact_mobile",
    "fieldtype": "Small Text",
    "label": "Mobile No",
+   "options": "Phone",
    "read_only": 1
   },
   {
@@ -317,7 +320,7 @@
   },
   {
    "fieldname": "shipping_address",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Shipping Address",
    "print_hide": 1,
    "read_only": 1
@@ -416,7 +419,6 @@
    "fieldname": "items_section",
    "fieldtype": "Section Break",
    "hide_border": 1,
-   "label": "Items",
    "oldfieldtype": "Section Break",
    "options": "fa fa-shopping-cart"
   },
@@ -424,6 +426,7 @@
    "allow_bulk_edit": 1,
    "fieldname": "items",
    "fieldtype": "Table",
+   "label": "Items",
    "oldfieldname": "quotation_details",
    "oldfieldtype": "Table",
    "options": "Quotation Item",
@@ -556,7 +559,7 @@
   },
   {
    "fieldname": "other_charges_calculation",
-   "fieldtype": "Long Text",
+   "fieldtype": "Text Editor",
    "label": "Taxes and Charges Calculation",
    "no_copy": 1,
    "oldfieldtype": "HTML",
@@ -825,8 +828,9 @@
   },
   {
    "fieldname": "language",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Print Language",
+   "options": "Language",
    "print_hide": 1,
    "read_only": 1
   },
@@ -850,24 +854,6 @@
    "fieldname": "update_auto_repeat_reference",
    "fieldtype": "Button",
    "label": "Update Auto Repeat Reference"
-  },
-  {
-   "fieldname": "campaign",
-   "fieldtype": "Link",
-   "label": "Campaign",
-   "oldfieldname": "campaign",
-   "oldfieldtype": "Link",
-   "options": "Campaign",
-   "print_hide": 1
-  },
-  {
-   "fieldname": "source",
-   "fieldtype": "Link",
-   "label": "Source",
-   "oldfieldname": "source",
-   "oldfieldtype": "Select",
-   "options": "Lead Source",
-   "print_hide": 1
   },
   {
    "allow_on_submit": 1,
@@ -964,7 +950,7 @@
   },
   {
    "fieldname": "company_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Company Address",
    "read_only": 1
   },
@@ -1066,13 +1052,44 @@
    "fieldname": "named_place",
    "fieldtype": "Data",
    "label": "Named Place"
+  },
+  {
+   "fieldname": "utm_campaign",
+   "fieldtype": "Link",
+   "label": "Campaign",
+   "oldfieldname": "campaign",
+   "oldfieldtype": "Link",
+   "options": "UTM Campaign",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_source",
+   "fieldtype": "Link",
+   "label": "Source",
+   "oldfieldname": "source",
+   "oldfieldtype": "Select",
+   "options": "UTM Source",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_medium",
+   "print_hide": 1,
+   "fieldtype": "Link",
+   "label": "Medium",
+   "options": "UTM Medium"
+  },
+  {
+   "fieldname": "utm_content",
+   "print_hide": 1,
+   "fieldtype": "Data",
+   "label": "Content"
   }
  ],
  "icon": "fa fa-shopping-cart",
  "idx": 82,
  "is_submittable": 1,
  "links": [],
- "modified": "2022-12-12 18:32:28.671332",
+ "modified": "2024-06-28 10:32:47.638342",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Quotation",
@@ -1165,7 +1182,7 @@
  ],
  "search_fields": "status,transaction_date,party_name,order_type",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "party_name",

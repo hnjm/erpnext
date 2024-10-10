@@ -1,12 +1,12 @@
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
-from typing import Any, Dict, NewType, Optional
+from typing import Any, NewType
 
 import frappe
 from frappe.core.doctype.report.report import get_report_module_dotted_path
 
-ReportFilters = Dict[str, Any]
+ReportFilters = dict[str, Any]
 ReportName = NewType("ReportName", str)
 
 
@@ -57,8 +57,8 @@ def execute_script_report(
 	report_name: ReportName,
 	module: str,
 	filters: ReportFilters,
-	default_filters: Optional[ReportFilters] = None,
-	optional_filters: Optional[ReportFilters] = None,
+	default_filters: ReportFilters | None = None,
+	optional_filters: ReportFilters | None = None,
 ):
 	"""Util for testing execution of a report with specified filters.
 
@@ -77,9 +77,7 @@ def execute_script_report(
 		default_filters = {}
 
 	test_filters = []
-	report_execute_fn = frappe.get_attr(
-		get_report_module_dotted_path(module, report_name) + ".execute"
-	)
+	report_execute_fn = frappe.get_attr(get_report_module_dotted_path(module, report_name) + ".execute")
 	report_filters = frappe._dict(default_filters).copy().update(filters)
 
 	test_filters.append(report_filters)
@@ -94,3 +92,25 @@ def execute_script_report(
 		except Exception:
 			print(f"Report failed to execute with filters: {test_filter}")
 			raise
+
+
+def if_lending_app_installed(function):
+	"""Decorator to check if lending app is installed"""
+
+	def wrapper(*args, **kwargs):
+		if "lending" in frappe.get_installed_apps():
+			return function(*args, **kwargs)
+		return
+
+	return wrapper
+
+
+def if_lending_app_not_installed(function):
+	"""Decorator to check if lending app is not installed"""
+
+	def wrapper(*args, **kwargs):
+		if "lending" not in frappe.get_installed_apps():
+			return function(*args, **kwargs)
+		return
+
+	return wrapper

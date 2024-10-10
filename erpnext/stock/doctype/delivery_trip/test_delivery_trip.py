@@ -1,10 +1,9 @@
 # Copyright (c) 2017, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 
-import unittest
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import add_days, flt, now_datetime, nowdate
 
 import erpnext
@@ -15,7 +14,16 @@ from erpnext.stock.doctype.delivery_trip.delivery_trip import (
 from erpnext.tests.utils import create_test_contact_and_address
 
 
-class TestDeliveryTrip(FrappeTestCase):
+class UnitTestDeliveryTrip(UnitTestCase):
+	"""
+	Unit tests for DeliveryTrip.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestDeliveryTrip(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		driver = create_driver()
@@ -46,7 +54,7 @@ class TestDeliveryTrip(FrappeTestCase):
 		self.assertEqual(len(route_list[0]), 4)
 
 	def test_unoptimized_route_list_with_locks(self):
-		self.delivery_trip.delivery_stops[0].lock = 1
+		self.delivery_trip.delivery_stops[0].locked = 1
 		self.delivery_trip.save()
 		route_list = self.delivery_trip.form_route_list(optimize=False)
 
@@ -65,7 +73,7 @@ class TestDeliveryTrip(FrappeTestCase):
 		self.assertEqual(len(route_list[0]), 4)
 
 	def test_optimized_route_list_with_locks(self):
-		self.delivery_trip.delivery_stops[0].lock = 1
+		self.delivery_trip.delivery_stops[0].locked = 1
 		self.delivery_trip.save()
 		route_list = self.delivery_trip.form_route_list(optimize=True)
 

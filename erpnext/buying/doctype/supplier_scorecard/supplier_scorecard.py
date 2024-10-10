@@ -16,6 +16,38 @@ from erpnext.buying.doctype.supplier_scorecard_period.supplier_scorecard_period 
 
 
 class SupplierScorecard(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.buying.doctype.supplier_scorecard_scoring_criteria.supplier_scorecard_scoring_criteria import (
+			SupplierScorecardScoringCriteria,
+		)
+		from erpnext.buying.doctype.supplier_scorecard_scoring_standing.supplier_scorecard_scoring_standing import (
+			SupplierScorecardScoringStanding,
+		)
+
+		criteria: DF.Table[SupplierScorecardScoringCriteria]
+		employee: DF.Link | None
+		indicator_color: DF.Data | None
+		notify_employee: DF.Check
+		notify_supplier: DF.Check
+		period: DF.Literal["Per Week", "Per Month", "Per Year"]
+		prevent_pos: DF.Check
+		prevent_rfqs: DF.Check
+		standings: DF.Table[SupplierScorecardScoringStanding]
+		status: DF.Data | None
+		supplier: DF.Link | None
+		supplier_score: DF.Data | None
+		warn_pos: DF.Check
+		warn_rfqs: DF.Check
+		weighting_function: DF.SmallText
+	# end: auto-generated types
+
 	def validate(self):
 		self.validate_standings()
 		self.validate_criteria_weights()
@@ -34,7 +66,11 @@ class SupplierScorecard(Document):
 			for c2 in self.standings:
 				if c1 != c2:
 					if c1.max_grade > c2.min_grade and c1.min_grade < c2.max_grade:
-						throw(_("Overlap in scoring between {0} and {1}").format(c1.standing_name, c2.standing_name))
+						throw(
+							_("Overlap in scoring between {0} and {1}").format(
+								c1.standing_name, c2.standing_name
+							)
+						)
 				if c2.min_grade == score:
 					score = c2.max_grade
 		if score < 100:
@@ -45,7 +81,6 @@ class SupplierScorecard(Document):
 			)
 
 	def validate_criteria_weights(self):
-
 		weight = 0
 		for c in self.criteria:
 			weight += c.weight
@@ -164,7 +199,6 @@ def refresh_scorecards():
 
 @frappe.whitelist()
 def make_all_scorecards(docname):
-
 	sc = frappe.get_doc("Supplier Scorecard", docname)
 	supplier = frappe.get_doc("Supplier", sc.supplier)
 
@@ -329,34 +363,50 @@ def make_default_records():
 			"variable_label": "Total Shipments",
 			"path": "get_total_shipments",
 		},
+		{
+			"param_name": "total_ordered",
+			"variable_label": "Total Ordered",
+			"path": "get_ordered_qty",
+		},
+		{
+			"param_name": "total_invoiced",
+			"variable_label": "Total Invoiced",
+			"path": "get_invoiced_qty",
+		},
 	]
 	install_standing_docs = [
 		{
 			"min_grade": 0.0,
 			"prevent_rfqs": 1,
+			"warn_rfqs": 0,
 			"notify_supplier": 0,
 			"max_grade": 30.0,
 			"prevent_pos": 1,
+			"warn_pos": 0,
 			"standing_color": "Red",
 			"notify_employee": 0,
 			"standing_name": "Very Poor",
 		},
 		{
 			"min_grade": 30.0,
-			"prevent_rfqs": 1,
+			"prevent_rfqs": 0,
+			"warn_rfqs": 1,
 			"notify_supplier": 0,
 			"max_grade": 50.0,
 			"prevent_pos": 0,
-			"standing_color": "Red",
+			"warn_pos": 1,
+			"standing_color": "Yellow",
 			"notify_employee": 0,
 			"standing_name": "Poor",
 		},
 		{
 			"min_grade": 50.0,
 			"prevent_rfqs": 0,
+			"warn_rfqs": 0,
 			"notify_supplier": 0,
 			"max_grade": 80.0,
 			"prevent_pos": 0,
+			"warn_pos": 0,
 			"standing_color": "Green",
 			"notify_employee": 0,
 			"standing_name": "Average",
@@ -364,9 +414,11 @@ def make_default_records():
 		{
 			"min_grade": 80.0,
 			"prevent_rfqs": 0,
+			"warn_rfqs": 0,
 			"notify_supplier": 0,
 			"max_grade": 100.0,
 			"prevent_pos": 0,
+			"warn_pos": 0,
 			"standing_color": "Blue",
 			"notify_employee": 0,
 			"standing_name": "Excellent",

@@ -2,15 +2,20 @@
 # License: GNU General Public License v3. See license.txt
 
 
+import json
+
 import frappe
-from frappe.custom.doctype.property_setter.property_setter import make_property_setter
-from frappe.test_runner import make_test_records
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.utils import make_test_records
 from frappe.utils import flt
 
 from erpnext.accounts.party import get_due_date
 from erpnext.exceptions import PartyDisabled, PartyFrozen
-from erpnext.selling.doctype.customer.customer import get_credit_limit, get_customer_outstanding
+from erpnext.selling.doctype.customer.customer import (
+	get_credit_limit,
+	get_customer_outstanding,
+	parse_full_name,
+)
 from erpnext.tests.utils import create_test_contact_and_address
 
 test_ignore = ["Price List"]
@@ -18,7 +23,16 @@ test_dependencies = ["Payment Term", "Payment Terms Template"]
 test_records = frappe.get_test_records("Customer")
 
 
-class TestCustomer(FrappeTestCase):
+class UnitTestCustomer(UnitTestCase):
+	"""
+	Unit tests for Customer.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestCustomer(IntegrationTestCase):
 	def setUp(self):
 		if not frappe.get_value("Item", "_Test Item"):
 			make_test_records("Item")
@@ -264,7 +278,6 @@ class TestCustomer(FrappeTestCase):
 
 	def test_customer_credit_limit(self):
 		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
-		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
 		from erpnext.stock.doctype.delivery_note.test_delivery_note import create_delivery_note
 
@@ -293,11 +306,35 @@ class TestCustomer(FrappeTestCase):
 		if credit_limit > outstanding_amt:
 			set_credit_limit("_Test Customer", "_Test Company", credit_limit)
 
-		# Makes Sales invoice from Sales Order
-		so.save(ignore_permissions=True)
-		si = make_sales_invoice(so.name)
-		si.save(ignore_permissions=True)
-		self.assertRaises(frappe.ValidationError, make_sales_order)
+	def test_customer_credit_limit_after_submit(self):
+		from erpnext.controllers.accounts_controller import update_child_qty_rate
+		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
+
+		outstanding_amt = self.get_customer_outstanding_amount()
+		credit_limit = get_credit_limit("_Test Customer", "_Test Company")
+
+		if outstanding_amt <= 0.0:
+			item_qty = int((abs(outstanding_amt) + 200) / 100)
+			make_sales_order(qty=item_qty)
+
+		if credit_limit <= 0.0:
+			set_credit_limit("_Test Customer", "_Test Company", outstanding_amt + 100)
+
+		so = make_sales_order(rate=100, qty=1)
+		# Update qty in submitted Sales Order to trigger Credit Limit validation
+		fields = ["name", "item_code", "delivery_date", "conversion_factor", "qty", "rate", "uom", "idx"]
+		modified_item = frappe._dict()
+		for x in fields:
+			modified_item[x] = so.items[0].get(x)
+		modified_item["docname"] = so.items[0].name
+		modified_item["qty"] = 2
+		self.assertRaises(
+			frappe.ValidationError,
+			update_child_qty_rate,
+			so.doctype,
+			json.dumps([modified_item]),
+			so.name,
+		)
 
 	def test_customer_credit_limit_on_change(self):
 		outstanding_amt = self.get_customer_outstanding_amount()
@@ -342,36 +379,21 @@ class TestCustomer(FrappeTestCase):
 		due_date = get_due_date("2017-01-22", "Customer", "_Test Customer")
 		self.assertEqual(due_date, "2017-01-22")
 
-	def test_serach_fields_for_customer(self):
-		from erpnext.controllers.queries import customer_query
+	def test_parse_full_name(self):
+		first, middle, last = parse_full_name("John")
+		self.assertEqual(first, "John")
+		self.assertEqual(middle, None)
+		self.assertEqual(last, None)
 
-		frappe.db.set_value("Selling Settings", None, "cust_master_name", "Naming Series")
+		first, middle, last = parse_full_name("John Doe")
+		self.assertEqual(first, "John")
+		self.assertEqual(middle, None)
+		self.assertEqual(last, "Doe")
 
-		make_property_setter(
-			"Customer", None, "search_fields", "customer_group", "Data", for_doctype="Doctype"
-		)
-
-		data = customer_query(
-			"Customer", "_Test Customer", "", 0, 20, filters={"name": "_Test Customer"}, as_dict=True
-		)
-
-		self.assertEqual(data[0].name, "_Test Customer")
-		self.assertEqual(data[0].customer_group, "_Test Customer Group")
-		self.assertTrue("territory" not in data[0])
-
-		make_property_setter(
-			"Customer", None, "search_fields", "customer_group, territory", "Data", for_doctype="Doctype"
-		)
-		data = customer_query(
-			"Customer", "_Test Customer", "", 0, 20, filters={"name": "_Test Customer"}, as_dict=True
-		)
-
-		self.assertEqual(data[0].name, "_Test Customer")
-		self.assertEqual(data[0].customer_group, "_Test Customer Group")
-		self.assertEqual(data[0].territory, "_Test Territory")
-		self.assertTrue("territory" in data[0])
-
-		frappe.db.set_value("Selling Settings", None, "cust_master_name", "Customer Name")
+		first, middle, last = parse_full_name("John Michael Doe")
+		self.assertEqual(first, "John")
+		self.assertEqual(middle, "Michael")
+		self.assertEqual(last, "Doe")
 
 
 def get_customer_dict(customer_name):
@@ -399,19 +421,15 @@ def set_credit_limit(customer, company, credit_limit):
 		customer.credit_limits[-1].db_insert()
 
 
-def create_internal_customer(
-	customer_name=None, represents_company=None, allowed_to_interact_with=None
-):
+def create_internal_customer(customer_name=None, represents_company=None, allowed_to_interact_with=None):
 	if not customer_name:
 		customer_name = represents_company
 	if not allowed_to_interact_with:
 		allowed_to_interact_with = represents_company
 
-	exisiting_representative = frappe.db.get_value(
-		"Customer", {"represents_company": represents_company}
-	)
-	if exisiting_representative:
-		return exisiting_representative
+	existing_representative = frappe.db.get_value("Customer", {"represents_company": represents_company})
+	if existing_representative:
+		return existing_representative
 
 	if not frappe.db.exists("Customer", customer_name):
 		customer = frappe.get_doc(

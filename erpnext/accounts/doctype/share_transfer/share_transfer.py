@@ -15,6 +15,33 @@ class ShareDontExists(ValidationError):
 
 
 class ShareTransfer(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		amended_from: DF.Link | None
+		amount: DF.Currency
+		asset_account: DF.Link | None
+		company: DF.Link
+		date: DF.Date
+		equity_or_liability_account: DF.Link
+		from_folio_no: DF.Data | None
+		from_no: DF.Int
+		from_shareholder: DF.Link | None
+		no_of_shares: DF.Int
+		rate: DF.Currency
+		remarks: DF.LongText | None
+		share_type: DF.Link
+		to_folio_no: DF.Data | None
+		to_no: DF.Int
+		to_shareholder: DF.Link | None
+		transfer_type: DF.Literal["", "Issue", "Purchase", "Transfer"]
+	# end: auto-generated types
+
 	def on_submit(self):
 		if self.transfer_type == "Issue":
 			shareholder = self.get_company_shareholder()
@@ -178,7 +205,9 @@ class ShareTransfer(Document):
 		doc = self.get_shareholder_doc(shareholder)
 		for entry in doc.share_balance:
 			if (
-				entry.share_type != self.share_type or entry.from_no > self.to_no or entry.to_no < self.from_no
+				entry.share_type != self.share_type
+				or entry.from_no > self.to_no
+				or entry.to_no < self.from_no
 			):
 				continue  # since query lies outside bounds
 			elif entry.from_no <= self.from_no and entry.to_no >= self.to_no:  # both inside
@@ -230,7 +259,9 @@ class ShareTransfer(Document):
 		for entry in current_entries:
 			# use spaceage logic here
 			if (
-				entry.share_type != self.share_type or entry.from_no > self.to_no or entry.to_no < self.from_no
+				entry.share_type != self.share_type
+				or entry.from_no > self.to_no
+				or entry.to_no < self.from_no
 			):
 				new_entries.append(entry)
 				continue  # since query lies outside bounds
@@ -240,7 +271,9 @@ class ShareTransfer(Document):
 					if entry.to_no == self.to_no:
 						pass  # nothing to append
 					else:
-						new_entries.append(self.return_share_balance_entry(self.to_no + 1, entry.to_no, entry.rate))
+						new_entries.append(
+							self.return_share_balance_entry(self.to_no + 1, entry.to_no, entry.rate)
+						)
 				else:
 					if entry.to_no == self.to_no:
 						new_entries.append(
@@ -250,7 +283,9 @@ class ShareTransfer(Document):
 						new_entries.append(
 							self.return_share_balance_entry(entry.from_no, self.from_no - 1, entry.rate)
 						)
-						new_entries.append(self.return_share_balance_entry(self.to_no + 1, entry.to_no, entry.rate))
+						new_entries.append(
+							self.return_share_balance_entry(self.to_no + 1, entry.to_no, entry.rate)
+						)
 			elif entry.from_no >= self.from_no and entry.to_no <= self.to_no:
 				# split and check
 				pass  # nothing to append
@@ -282,7 +317,7 @@ class ShareTransfer(Document):
 	def get_shareholder_doc(self, shareholder):
 		# Get Shareholder doc based on the Shareholder name
 		if shareholder:
-			query_filters = {"name": shareholder}
+			pass
 
 		name = frappe.db.get_value("Shareholder", {"name": shareholder}, "name")
 

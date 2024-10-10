@@ -10,6 +10,8 @@
   "item_code",
   "customer_item_code",
   "ensure_delivery_based_on_produced_serial_no",
+  "is_stock_item",
+  "reserve_stock",
   "col_break1",
   "delivery_date",
   "item_name",
@@ -27,6 +29,7 @@
   "uom",
   "conversion_factor",
   "stock_qty",
+  "stock_reserved_qty",
   "section_break_16",
   "price_list_rate",
   "base_price_list_rate",
@@ -37,6 +40,7 @@
   "column_break_19",
   "discount_percentage",
   "discount_amount",
+  "distributed_discount_amount",
   "base_rate_with_margin",
   "section_break_simple1",
   "rate",
@@ -82,6 +86,7 @@
   "actual_qty",
   "ordered_qty",
   "planned_qty",
+  "production_plan_qty",
   "column_break_69",
   "work_order_qty",
   "delivered_qty",
@@ -114,6 +119,7 @@
    "oldfieldtype": "Link",
    "options": "Item",
    "print_width": "150px",
+   "reqd": 1,
    "width": "150px"
   },
   {
@@ -159,7 +165,6 @@
    "oldfieldname": "description",
    "oldfieldtype": "Small Text",
    "print_width": "300px",
-   "reqd": 1,
    "width": "300px"
   },
   {
@@ -174,6 +179,7 @@
    "print_hide": 1
   },
   {
+   "fetch_from": "item_code.image",
    "fieldname": "image",
    "fieldtype": "Attach",
    "hidden": 1,
@@ -197,6 +203,7 @@
    "fieldtype": "Float",
    "in_list_view": 1,
    "label": "Quantity",
+   "non_negative": 1,
    "oldfieldname": "qty",
    "oldfieldtype": "Currency",
    "print_width": "100px",
@@ -274,7 +281,7 @@
   },
   {
    "collapsible": 1,
-   "collapsible_depends_on": "eval: doc.margin_type || doc.discount_amount",
+   "collapsible_depends_on": "eval: doc.margin_type || doc.discount_amount || doc.distributed_discount_amount",
    "fieldname": "discount_and_margin",
    "fieldtype": "Section Break",
    "label": "Discount and Margin"
@@ -828,7 +835,8 @@
    "label": "Purchase Order",
    "options": "Purchase Order",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_89",
@@ -859,19 +867,64 @@
    "fieldname": "material_request_item",
    "fieldtype": "Data",
    "label": "Material Request Item"
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "1",
+   "depends_on": "eval:doc.is_stock_item",
+   "fieldname": "reserve_stock",
+   "fieldtype": "Check",
+   "label": "Reserve Stock",
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval: doc.stock_reserved_qty",
+   "fieldname": "stock_reserved_qty",
+   "fieldtype": "Float",
+   "label": "Stock Reserved Qty (in Stock UOM)",
+   "no_copy": 1,
+   "non_negative": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "production_plan_qty",
+   "fieldtype": "Float",
+   "label": "Production Plan Qty",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fetch_from": "item_code.is_stock_item",
+   "fieldname": "is_stock_item",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Is Stock Item",
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "distributed_discount_amount",
+   "fieldtype": "Currency",
+   "label": "Distributed Discount Amount",
+   "options": "currency"
   }
  ],
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2022-12-25 02:51:10.247569",
+ "modified": "2024-06-02 06:13:40.597947",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Sales Order Item",
  "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

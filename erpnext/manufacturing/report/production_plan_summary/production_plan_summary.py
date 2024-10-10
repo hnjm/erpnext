@@ -44,6 +44,7 @@ def get_production_plan_item_details(filters, data, order_details):
 			{
 				"indent": 0,
 				"item_code": row.item_code,
+				"sales_order": row.get("sales_order"),
 				"item_name": frappe.get_cached_value("Item", row.item_code, "item_name"),
 				"qty": row.planned_qty,
 				"document_type": "Work Order",
@@ -55,14 +56,10 @@ def get_production_plan_item_details(filters, data, order_details):
 			}
 		)
 
-		get_production_plan_sub_assembly_item_details(
-			filters, row, production_plan_doc, data, order_details
-		)
+		get_production_plan_sub_assembly_item_details(filters, row, production_plan_doc, data, order_details)
 
 
-def get_production_plan_sub_assembly_item_details(
-	filters, row, production_plan_doc, data, order_details
-):
+def get_production_plan_sub_assembly_item_details(filters, row, production_plan_doc, data, order_details):
 	for item in production_plan_doc.sub_assembly_items:
 		if row.name == item.production_plan_item:
 			subcontracted_item = item.type_of_manufacturing == "Subcontract"
@@ -75,19 +72,23 @@ def get_production_plan_sub_assembly_item_details(
 				)
 			else:
 				docname = frappe.get_value(
-					"Work Order", {"production_plan_sub_assembly_item": item.name, "docstatus": ("<", 2)}, "name"
+					"Work Order",
+					{"production_plan_sub_assembly_item": item.name, "docstatus": ("<", 2)},
+					"name",
 				)
 
 			data.append(
 				{
-					"indent": 1,
+					"indent": 1 + item.indent,
 					"item_code": item.production_item,
 					"item_name": item.item_name,
 					"qty": item.qty,
 					"document_type": "Work Order" if not subcontracted_item else "Purchase Order",
 					"document_name": docname or "",
 					"bom_level": item.bom_level,
-					"produced_qty": order_details.get((docname, item.production_item), {}).get("produced_qty", 0),
+					"produced_qty": order_details.get((docname, item.production_item), {}).get(
+						"produced_qty", 0
+					),
 					"pending_qty": flt(item.qty)
 					- flt(order_details.get((docname, item.production_item), {}).get("produced_qty", 0)),
 				}
@@ -98,7 +99,7 @@ def get_work_order_details(filters, order_details):
 	for row in frappe.get_all(
 		"Work Order",
 		filters={"production_plan": filters.get("production_plan")},
-		fields=["name", "produced_qty", "production_plan", "production_item"],
+		fields=["name", "produced_qty", "production_plan", "production_item", "sales_order"],
 	):
 		order_details.setdefault((row.name, row.production_item), row)
 
@@ -118,10 +119,17 @@ def get_column(filters):
 			"label": _("Finished Good"),
 			"fieldtype": "Link",
 			"fieldname": "item_code",
-			"width": 300,
+			"width": 240,
 			"options": "Item",
 		},
-		{"label": _("Item Name"), "fieldtype": "data", "fieldname": "item_name", "width": 100},
+		{"label": _("Item Name"), "fieldtype": "data", "fieldname": "item_name", "width": 150},
+		{
+			"label": _("Sales Order"),
+			"options": "Sales Order",
+			"fieldtype": "Link",
+			"fieldname": "sales_order",
+			"width": 100,
+		},
 		{
 			"label": _("Document Type"),
 			"fieldtype": "Link",
@@ -133,10 +141,16 @@ def get_column(filters):
 			"label": _("Document Name"),
 			"fieldtype": "Dynamic Link",
 			"fieldname": "document_name",
-			"width": 150,
+			"options": "document_type",
+			"width": 180,
 		},
 		{"label": _("BOM Level"), "fieldtype": "Int", "fieldname": "bom_level", "width": 100},
 		{"label": _("Order Qty"), "fieldtype": "Float", "fieldname": "qty", "width": 120},
-		{"label": _("Received Qty"), "fieldtype": "Float", "fieldname": "produced_qty", "width": 160},
+		{
+			"label": _("Produced / Received Qty"),
+			"fieldtype": "Float",
+			"fieldname": "produced_qty",
+			"width": 200,
+		},
 		{"label": _("Pending Qty"), "fieldtype": "Float", "fieldname": "pending_qty", "width": 110},
 	]

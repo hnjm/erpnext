@@ -20,6 +20,30 @@ class CanNotBeDefaultDimension(frappe.ValidationError):
 
 
 class InventoryDimension(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		apply_to_all_doctypes: DF.Check
+		condition: DF.Code | None
+		dimension_name: DF.Data
+		disabled: DF.Check
+		document_type: DF.Link | None
+		fetch_from_parent: DF.Literal[None]
+		istable: DF.Check
+		mandatory_depends_on: DF.SmallText | None
+		reference_document: DF.Link
+		reqd: DF.Check
+		source_fieldname: DF.Data | None
+		target_fieldname: DF.Data | None
+		type_of_transaction: DF.Literal["", "Inward", "Outward", "Both"]
+		validate_negative_stock: DF.Check
+	# end: auto-generated types
+
 	def onload(self):
 		if not self.is_new() and frappe.db.has_column("Stock Ledger Entry", self.target_fieldname):
 			self.set_onload("has_stock_ledger", self.has_stock_ledger())
@@ -60,6 +84,7 @@ class InventoryDimension(Document):
 			"fetch_from_parent",
 			"type_of_transaction",
 			"condition",
+			"validate_negative_stock",
 		]
 
 		for field in frappe.get_meta("Inventory Dimension").fields:
@@ -75,7 +100,16 @@ class InventoryDimension(Document):
 		self.delete_custom_fields()
 
 	def delete_custom_fields(self):
-		filters = {"fieldname": self.source_fieldname}
+		filters = {
+			"fieldname": (
+				"in",
+				[
+					self.source_fieldname,
+					f"to_{self.source_fieldname}",
+					f"from_{self.source_fieldname}",
+				],
+			)
+		}
 
 		if self.document_type:
 			filters["dt"] = self.document_type
@@ -88,6 +122,8 @@ class InventoryDimension(Document):
 
 	def reset_value(self):
 		if self.apply_to_all_doctypes:
+			self.type_of_transaction = ""
+
 			self.istable = 0
 			for field in ["document_type", "condition"]:
 				self.set(field, None)
@@ -111,12 +147,35 @@ class InventoryDimension(Document):
 	def on_update(self):
 		self.add_custom_fields()
 
-	def add_custom_fields(self):
-		dimension_fields = [
+	@staticmethod
+	def get_insert_after_fieldname(doctype):
+		return frappe.get_all(
+			"DocField",
+			fields=["fieldname"],
+			filters={"parent": doctype},
+			order_by="idx desc",
+			limit=1,
+		)[0].fieldname
+
+	def get_dimension_fields(self, doctype=None):
+		if not doctype:
+			doctype = self.document_type
+
+		label_start_with = ""
+		if doctype in ["Purchase Invoice Item", "Purchase Receipt Item"]:
+			label_start_with = "Target"
+		elif doctype in ["Sales Invoice Item", "Delivery Note Item", "Stock Entry Detail"]:
+			label_start_with = "Source"
+
+		label = self.dimension_name
+		if label_start_with:
+			label = f"{label_start_with} {self.dimension_name}"
+
+		return [
 			dict(
 				fieldname="inventory_dimension",
 				fieldtype="Section Break",
-				insert_after="warehouse",
+				insert_after=self.get_insert_after_fieldname(doctype),
 				label="Inventory Dimension",
 				collapsible=1,
 			),
@@ -125,28 +184,93 @@ class InventoryDimension(Document):
 				fieldtype="Link",
 				insert_after="inventory_dimension",
 				options=self.reference_document,
-				label=self.dimension_name,
+				label=label,
+				search_index=1,
+				reqd=self.reqd,
+				mandatory_depends_on=self.mandatory_depends_on,
 			),
 		]
 
+	def add_custom_fields(self):
 		custom_fields = {}
 
+		dimension_fields = []
 		if self.apply_to_all_doctypes:
 			for doctype in get_inventory_documents():
-				if not field_exists(doctype[0], self.source_fieldname):
-					custom_fields.setdefault(doctype[0], dimension_fields)
+				if field_exists(doctype[0], self.source_fieldname):
+					continue
+
+				dimension_fields = self.get_dimension_fields(doctype[0])
+				self.add_transfer_field(doctype[0], dimension_fields)
+				custom_fields.setdefault(doctype[0], dimension_fields)
 		elif not field_exists(self.document_type, self.source_fieldname):
+			dimension_fields = self.get_dimension_fields()
+
+			self.add_transfer_field(self.document_type, dimension_fields)
 			custom_fields.setdefault(self.document_type, dimension_fields)
 
-		if not frappe.db.get_value(
-			"Custom Field", {"dt": "Stock Ledger Entry", "fieldname": self.target_fieldname}
-		) and not field_exists("Stock Ledger Entry", self.target_fieldname):
+		if (
+			dimension_fields
+			and not frappe.db.get_value(
+				"Custom Field", {"dt": "Stock Ledger Entry", "fieldname": self.target_fieldname}
+			)
+			and not field_exists("Stock Ledger Entry", self.target_fieldname)
+		):
 			dimension_field = dimension_fields[1]
+			dimension_field["mandatory_depends_on"] = ""
+			dimension_field["reqd"] = 0
 			dimension_field["fieldname"] = self.target_fieldname
 			custom_fields["Stock Ledger Entry"] = dimension_field
 
 		if custom_fields:
 			create_custom_fields(custom_fields)
+
+	def add_transfer_field(self, doctype, dimension_fields):
+		if doctype not in [
+			"Stock Entry Detail",
+			"Sales Invoice Item",
+			"Delivery Note Item",
+			"Purchase Invoice Item",
+			"Purchase Receipt Item",
+		]:
+			return
+
+		fieldname_start_with = "to"
+		label_start_with = "Target"
+		display_depends_on = ""
+
+		if doctype in ["Purchase Invoice Item", "Purchase Receipt Item"]:
+			fieldname_start_with = "from"
+			label_start_with = "Source"
+			display_depends_on = "eval:parent.is_internal_supplier == 1"
+		elif doctype != "Stock Entry Detail":
+			display_depends_on = "eval:parent.is_internal_customer == 1"
+		elif doctype == "Stock Entry Detail":
+			display_depends_on = "eval:parent.purpose != 'Material Issue'"
+
+		fieldname = f"{fieldname_start_with}_{self.source_fieldname}"
+		label = f"{label_start_with} {self.dimension_name}"
+
+		if field_exists(doctype, fieldname):
+			return
+
+		dimension_fields.extend(
+			[
+				dict(
+					fieldname="inventory_dimension_col_break",
+					fieldtype="Column Break",
+					insert_after=self.source_fieldname,
+				),
+				dict(
+					fieldname=fieldname,
+					fieldtype="Link",
+					insert_after="inventory_dimension_col_break",
+					options=self.reference_document,
+					label=label,
+					depends_on=display_depends_on,
+				),
+			]
+		)
 
 
 def field_exists(doctype, fieldname) -> str or None:
@@ -157,7 +281,7 @@ def field_exists(doctype, fieldname) -> str or None:
 def get_inventory_documents(
 	doctype=None, txt=None, searchfield=None, start=None, page_len=None, filters=None
 ):
-	and_filters = [["DocField", "parent", "not in", ["Batch", "Serial No"]]]
+	and_filters = [["DocField", "parent", "not in", ["Batch", "Serial No", "Item Price"]]]
 	or_filters = [
 		["DocField", "options", "in", ["Batch", "Serial No"]],
 		["DocField", "parent", "in", ["Putaway Rule"]],
@@ -181,18 +305,19 @@ def get_evaluated_inventory_dimension(doc, sl_dict, parent_doc=None):
 	dimensions = get_document_wise_inventory_dimensions(doc.doctype)
 	filter_dimensions = []
 	for row in dimensions:
-		if (
-			row.type_of_transaction == "Inward"
-			if doc.docstatus == 1
-			else row.type_of_transaction != "Inward"
-		) and sl_dict.actual_qty < 0:
-			continue
-		elif (
-			row.type_of_transaction == "Outward"
-			if doc.docstatus == 1
-			else row.type_of_transaction != "Outward"
-		) and sl_dict.actual_qty > 0:
-			continue
+		if row.type_of_transaction and row.type_of_transaction != "Both":
+			if (
+				row.type_of_transaction == "Inward"
+				if doc.docstatus == 1
+				else row.type_of_transaction != "Inward"
+			) and sl_dict.actual_qty < 0:
+				continue
+			elif (
+				row.type_of_transaction == "Outward"
+				if doc.docstatus == 1
+				else row.type_of_transaction != "Outward"
+			) and sl_dict.actual_qty > 0:
+				continue
 
 		evals = {"doc": doc}
 		if parent_doc:
@@ -241,6 +366,7 @@ def get_inventory_dimensions():
 			fields=[
 				"distinct target_fieldname as fieldname",
 				"reference_document as doctype",
+				"validate_negative_stock",
 			],
 			filters={"disabled": 0},
 		)
@@ -258,9 +384,7 @@ def delete_dimension(dimension):
 
 @frappe.whitelist()
 def get_parent_fields(child_doctype, dimension_name):
-	parent_doctypes = frappe.get_all(
-		"DocField", fields=["parent"], filters={"options": child_doctype}
-	)
+	parent_doctypes = frappe.get_all("DocField", fields=["parent"], filters={"options": child_doctype})
 
 	fields = []
 

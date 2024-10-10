@@ -1,19 +1,19 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
 
 
-class TestFinanceBook(unittest.TestCase):
+class TestFinanceBook(IntegrationTestCase):
 	def test_finance_book(self):
 		finance_book = create_finance_book()
 
 		# create jv entry
-		jv = make_journal_entry("_Test Bank - _TC", "_Test Receivable - _TC", 100, save=False)
+		jv = make_journal_entry("_Test Bank - _TC", "Debtors - _TC", 100, save=False)
 
 		jv.accounts[1].update({"party_type": "Customer", "party": "_Test Customer"})
 

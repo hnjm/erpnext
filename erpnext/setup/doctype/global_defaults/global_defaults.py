@@ -10,7 +10,6 @@ from frappe.utils import cint
 
 keydict = {
 	# "key in defaults": "key in Global Defaults"
-	"fiscal_year": "current_fiscal_year",
 	"company": "default_company",
 	"currency": "default_currency",
 	"country": "country",
@@ -24,26 +23,28 @@ from frappe.model.document import Document
 
 
 class GlobalDefaults(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		country: DF.Link | None
+		default_company: DF.Link | None
+		default_currency: DF.Link
+		default_distance_unit: DF.Link | None
+		demo_company: DF.Link | None
+		disable_in_words: DF.Check
+		disable_rounded_total: DF.Check
+		hide_currency_symbol: DF.Literal["", "No", "Yes"]
+	# end: auto-generated types
+
 	def on_update(self):
 		"""update defaults"""
 		for key in keydict:
 			frappe.db.set_default(key, self.get(keydict[key], ""))
-
-		# update year start date and year end date from fiscal_year
-		if self.current_fiscal_year:
-			if fiscal_year := frappe.get_all(
-				"Fiscal Year",
-				filters={"name": self.current_fiscal_year},
-				fields=["year_start_date", "year_end_date"],
-				limit=1,
-				order_by=None,
-			):
-				ysd = fiscal_year[0].year_start_date or ""
-				yed = fiscal_year[0].year_end_date or ""
-
-				if ysd and yed:
-					frappe.db.set_default("year_start_date", ysd.strftime("%Y-%m-%d"))
-					frappe.db.set_default("year_end_date", yed.strftime("%Y-%m-%d"))
 
 		# enable default currency
 		if self.default_currency:

@@ -1,10 +1,9 @@
 # Copyright (c) 2020, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import json
-import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.tests.utils import change_settings
 
 from erpnext.accounts.doctype.pos_closing_entry.test_pos_closing_entry import init_user_and_profile
@@ -13,10 +12,22 @@ from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import create_pos_inv
 from erpnext.accounts.doctype.pos_invoice_merge_log.pos_invoice_merge_log import (
 	consolidate_pos_invoices,
 )
+from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle import (
+	get_serial_nos_from_bundle,
+)
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 
 
-class TestPOSInvoiceMergeLog(unittest.TestCase):
+class UnitTestPosInvoiceMergeLog(UnitTestCase):
+	"""
+	Unit tests for PosInvoiceMergeLog.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestPOSInvoiceMergeLog(IntegrationTestCase):
 	def test_consolidated_invoice_creation(self):
 		frappe.db.sql("delete from `tabPOS Invoice`")
 
@@ -28,15 +39,11 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 			pos_inv.submit()
 
 			pos_inv2 = create_pos_invoice(rate=3200, do_not_submit=1)
-			pos_inv2.append(
-				"payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200}
-			)
+			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200})
 			pos_inv2.submit()
 
 			pos_inv3 = create_pos_invoice(customer="_Test Customer 2", rate=2300, do_not_submit=1)
-			pos_inv3.append(
-				"payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300}
-			)
+			pos_inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300})
 			pos_inv3.submit()
 
 			consolidate_pos_invoices()
@@ -65,15 +72,11 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 			pos_inv.submit()
 
 			pos_inv2 = create_pos_invoice(rate=3200, do_not_submit=1)
-			pos_inv2.append(
-				"payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200}
-			)
+			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200})
 			pos_inv2.submit()
 
 			pos_inv3 = create_pos_invoice(customer="_Test Customer 2", rate=2300, do_not_submit=1)
-			pos_inv3.append(
-				"payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300}
-			)
+			pos_inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300})
 			pos_inv3.submit()
 
 			pos_inv_cn = make_sales_return(pos_inv.name)
@@ -293,7 +296,7 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 			frappe.db.sql("delete from `tabPOS Profile`")
 			frappe.db.sql("delete from `tabPOS Invoice`")
 
-	@change_settings(
+	@IntegrationTestCase.change_settings(
 		"System Settings", {"number_format": "#,###.###", "currency_precision": 3, "float_precision": 3}
 	)
 	def test_consolidation_round_off_error_3(self):
@@ -309,7 +312,7 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 			init_user_and_profile()
 
 			item_rates = [69, 59, 29]
-			for i in [1, 2]:
+			for _i in [1, 2]:
 				inv = create_pos_invoice(is_return=1, do_not_save=1)
 				inv.items = []
 				for rate in item_rates:
@@ -348,7 +351,7 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 			inv.load_from_db()
 			consolidated_invoice = frappe.get_doc("Sales Invoice", inv.consolidated_invoice)
 			self.assertEqual(consolidated_invoice.status, "Return")
-			self.assertEqual(consolidated_invoice.rounding_adjustment, -0.001)
+			self.assertEqual(consolidated_invoice.rounding_adjustment, -0.002)
 
 		finally:
 			frappe.set_user("Administrator")
@@ -403,20 +406,19 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 		The second and third POS Invoice should be consolidated with a single Merge Log
 		"""
 
-		from erpnext.stock.doctype.serial_no.test_serial_no import get_serial_nos
 		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_serialized_item
 
 		frappe.db.sql("delete from `tabPOS Invoice`")
 
 		try:
 			se = make_serialized_item()
-			serial_no = get_serial_nos(se.get("items")[0].serial_no)[0]
+			serial_no = get_serial_nos_from_bundle(se.get("items")[0].serial_and_batch_bundle)[0]
 
 			init_user_and_profile()
 
 			pos_inv = create_pos_invoice(
 				item_code="_Test Serialized Item With Series",
-				serial_no=serial_no,
+				serial_no=[serial_no],
 				qty=1,
 				rate=100,
 				do_not_submit=1,
@@ -430,7 +432,7 @@ class TestPOSInvoiceMergeLog(unittest.TestCase):
 
 			pos_inv2 = create_pos_invoice(
 				item_code="_Test Serialized Item With Series",
-				serial_no=serial_no,
+				serial_no=[serial_no],
 				qty=1,
 				rate=100,
 				do_not_submit=1,

@@ -1,15 +1,24 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 import frappe
-from frappe.test_runner import make_test_records
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.utils import make_test_records
 
 from erpnext.manufacturing.doctype.job_card.job_card import OperationSequenceError
 from erpnext.manufacturing.doctype.work_order.test_work_order import make_wo_order_test_record
 from erpnext.stock.doctype.item.test_item import make_item
 
 
-class TestRouting(FrappeTestCase):
+class UnitTestRouting(UnitTestCase):
+	"""
+	Unit tests for Routing.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestRouting(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		cls.item_code = "Test Routing Item - A"
@@ -38,6 +47,16 @@ class TestRouting(FrappeTestCase):
 			"Job Card", filters={"work_order": wo_doc.name}, order_by="sequence_id desc"
 		):
 			job_card_doc = frappe.get_doc("Job Card", data.name)
+			for row in job_card_doc.scheduled_time_logs:
+				job_card_doc.append(
+					"time_logs",
+					{
+						"from_time": row.from_time,
+						"to_time": row.to_time,
+						"time_in_mins": row.time_in_mins,
+					},
+				)
+
 			job_card_doc.time_logs[0].completed_qty = 10
 			if job_card_doc.sequence_id != 1:
 				self.assertRaises(OperationSequenceError, job_card_doc.save)
@@ -141,6 +160,7 @@ def setup_bom(**args):
 			routing=args.routing,
 			with_operations=1,
 			currency=args.currency,
+			source_warehouse=args.source_warehouse,
 		)
 	else:
 		bom_doc = frappe.get_doc("BOM", name)

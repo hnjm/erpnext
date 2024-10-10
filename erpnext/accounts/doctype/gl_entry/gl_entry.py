@@ -13,21 +13,56 @@ import erpnext
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_checks_for_pl_and_bs_accounts,
 )
-from erpnext.accounts.doctype.accounting_dimension_filter.accounting_dimension_filter import (
-	get_dimension_filter_map,
-)
 from erpnext.accounts.party import validate_party_frozen_disabled, validate_party_gle_currency
 from erpnext.accounts.utils import get_account_currency, get_fiscal_year
-from erpnext.exceptions import (
-	InvalidAccountCurrency,
-	InvalidAccountDimensionError,
-	MandatoryAccountDimensionError,
-)
+from erpnext.exceptions import InvalidAccountCurrency
 
 exclude_from_linked_with = True
 
 
 class GLEntry(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		account: DF.Link | None
+		account_currency: DF.Link | None
+		against: DF.Text | None
+		against_voucher: DF.DynamicLink | None
+		against_voucher_type: DF.Link | None
+		company: DF.Link | None
+		cost_center: DF.Link | None
+		credit: DF.Currency
+		credit_in_account_currency: DF.Currency
+		credit_in_transaction_currency: DF.Currency
+		debit: DF.Currency
+		debit_in_account_currency: DF.Currency
+		debit_in_transaction_currency: DF.Currency
+		due_date: DF.Date | None
+		finance_book: DF.Link | None
+		fiscal_year: DF.Link | None
+		is_advance: DF.Literal["No", "Yes"]
+		is_cancelled: DF.Check
+		is_opening: DF.Literal["No", "Yes"]
+		party: DF.DynamicLink | None
+		party_type: DF.Link | None
+		posting_date: DF.Date | None
+		project: DF.Link | None
+		remarks: DF.Text | None
+		to_rename: DF.Check
+		transaction_currency: DF.Link | None
+		transaction_date: DF.Date | None
+		transaction_exchange_rate: DF.Float
+		voucher_detail_no: DF.Data | None
+		voucher_no: DF.DynamicLink | None
+		voucher_subtype: DF.SmallText | None
+		voucher_type: DF.Link | None
+	# end: auto-generated types
+
 	def autoname(self):
 		"""
 		Temporarily name doc for fast insertion
@@ -54,9 +89,15 @@ class GLEntry(Document):
 		if not self.flags.from_repost and self.voucher_type != "Period Closing Voucher":
 			self.validate_account_details(adv_adj)
 			self.validate_dimensions_for_pl_and_bs()
-			self.validate_allowed_dimensions()
 			validate_balance_type(self.account, adv_adj)
 			validate_frozen_account(self.account, adv_adj)
+
+			if (
+				self.voucher_type == "Journal Entry"
+				and frappe.get_cached_value("Journal Entry", self.voucher_no, "voucher_type")
+				== "Exchange Gain Or Loss"
+			):
+				return
 
 			if frappe.get_cached_value("Account", self.account, "account_type") not in [
 				"Receivable",
@@ -64,13 +105,18 @@ class GLEntry(Document):
 			]:
 				# Update outstanding amt on against voucher
 				if (
-					self.against_voucher_type in ["Journal Entry", "Sales Invoice", "Purchase Invoice", "Fees"]
+					self.against_voucher_type
+					in ["Journal Entry", "Sales Invoice", "Purchase Invoice", "Fees"]
 					and self.against_voucher
 					and self.flags.update_outstanding == "Yes"
 					and not frappe.flags.is_reverse_depr_entry
 				):
 					update_outstanding_amt(
-						self.account, self.party_type, self.party, self.against_voucher_type, self.against_voucher
+						self.account,
+						self.party_type,
+						self.party,
+						self.against_voucher_type,
+						self.against_voucher,
 					)
 
 	def check_mandatory(self):
@@ -136,12 +182,13 @@ class GLEntry(Document):
 				and self.company == dimension.company
 				and dimension.mandatory_for_pl
 				and not dimension.disabled
+				and not self.is_cancelled
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
-						_("Accounting Dimension <b>{0}</b> is required for 'Profit and Loss' account {1}.").format(
-							dimension.label, self.account
-						)
+						_(
+							"Accounting Dimension <b>{0}</b> is required for 'Profit and Loss' account {1}."
+						).format(dimension.label, self.account)
 					)
 
 			if (
@@ -149,49 +196,14 @@ class GLEntry(Document):
 				and self.company == dimension.company
 				and dimension.mandatory_for_bs
 				and not dimension.disabled
+				and not self.is_cancelled
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
-						_("Accounting Dimension <b>{0}</b> is required for 'Balance Sheet' account {1}.").format(
-							dimension.label, self.account
-						)
+						_(
+							"Accounting Dimension <b>{0}</b> is required for 'Balance Sheet' account {1}."
+						).format(dimension.label, self.account)
 					)
-
-	def validate_allowed_dimensions(self):
-		dimension_filter_map = get_dimension_filter_map()
-		for key, value in dimension_filter_map.items():
-			dimension = key[0]
-			account = key[1]
-
-			if self.account == account:
-				if value["is_mandatory"] and not self.get(dimension):
-					frappe.throw(
-						_("{0} is mandatory for account {1}").format(
-							frappe.bold(frappe.unscrub(dimension)), frappe.bold(self.account)
-						),
-						MandatoryAccountDimensionError,
-					)
-
-				if value["allow_or_restrict"] == "Allow":
-					if self.get(dimension) and self.get(dimension) not in value["allowed_dimensions"]:
-						frappe.throw(
-							_("Invalid value {0} for {1} against account {2}").format(
-								frappe.bold(self.get(dimension)),
-								frappe.bold(frappe.unscrub(dimension)),
-								frappe.bold(self.account),
-							),
-							InvalidAccountDimensionError,
-						)
-				else:
-					if self.get(dimension) and self.get(dimension) in value["allowed_dimensions"]:
-						frappe.throw(
-							_("Invalid value {0} for {1} against account {2}").format(
-								frappe.bold(self.get(dimension)),
-								frappe.bold(frappe.unscrub(dimension)),
-								frappe.bold(self.account),
-							),
-							InvalidAccountDimensionError,
-						)
 
 	def check_pl_account(self):
 		if (
@@ -238,9 +250,7 @@ class GLEntry(Document):
 		if not self.cost_center:
 			return
 
-		is_group, company = frappe.get_cached_value(
-			"Cost Center", self.cost_center, ["is_group", "company"]
-		)
+		is_group, company = frappe.get_cached_value("Cost Center", self.cost_center, ["is_group", "company"])
 
 		if company != self.company:
 			frappe.throw(
@@ -309,31 +319,27 @@ def update_outstanding_amt(
 	account, party_type, party, against_voucher_type, against_voucher, on_cancel=False
 ):
 	if party_type and party:
-		party_condition = " and party_type={0} and party={1}".format(
+		party_condition = " and party_type={} and party={}".format(
 			frappe.db.escape(party_type), frappe.db.escape(party)
 		)
 	else:
 		party_condition = ""
 
 	if against_voucher_type == "Sales Invoice":
-		party_account = frappe.db.get_value(against_voucher_type, against_voucher, "debit_to")
-		account_condition = "and account in ({0}, {1})".format(
-			frappe.db.escape(account), frappe.db.escape(party_account)
-		)
+		party_account = frappe.get_cached_value(against_voucher_type, against_voucher, "debit_to")
+		account_condition = f"and account in ({frappe.db.escape(account)}, {frappe.db.escape(party_account)})"
 	else:
-		account_condition = " and account = {0}".format(frappe.db.escape(account))
+		account_condition = f" and account = {frappe.db.escape(account)}"
 
 	# get final outstanding amt
 	bal = flt(
 		frappe.db.sql(
-			"""
+			f"""
 		select sum(debit_in_account_currency) - sum(credit_in_account_currency)
 		from `tabGL Entry`
 		where against_voucher_type=%s and against_voucher=%s
 		and voucher_type != 'Invoice Discounting'
-		{0} {1}""".format(
-				party_condition, account_condition
-			),
+		{party_condition} {account_condition}""",
 			(against_voucher_type, against_voucher),
 		)[0][0]
 		or 0.0
@@ -344,12 +350,10 @@ def update_outstanding_amt(
 	elif against_voucher_type == "Journal Entry":
 		against_voucher_amount = flt(
 			frappe.db.sql(
-				"""
+				f"""
 			select sum(debit_in_account_currency) - sum(credit_in_account_currency)
 			from `tabGL Entry` where voucher_type = 'Journal Entry' and voucher_no = %s
-			and account = %s and (against_voucher is null or against_voucher='') {0}""".format(
-					party_condition
-				),
+			and account = %s and (against_voucher is null or against_voucher='') {party_condition}""",
 				(against_voucher, account),
 			)[0][0]
 		)
@@ -368,7 +372,9 @@ def update_outstanding_amt(
 		# Validation : Outstanding can not be negative for JV
 		if bal < 0 and not on_cancel:
 			frappe.throw(
-				_("Outstanding for {0} cannot be less than zero ({1})").format(against_voucher, fmt_money(bal))
+				_("Outstanding for {0} cannot be less than zero ({1})").format(
+					against_voucher, fmt_money(bal)
+				)
 			)
 
 	if against_voucher_type in ["Sales Invoice", "Purchase Invoice", "Fees"]:
@@ -384,7 +390,7 @@ def update_outstanding_amt(
 def validate_frozen_account(account, adv_adj=None):
 	frozen_account = frappe.get_cached_value("Account", account, "freeze_account")
 	if frozen_account == "Yes" and not adv_adj:
-		frozen_accounts_modifier = frappe.db.get_value(
+		frozen_accounts_modifier = frappe.get_cached_value(
 			"Accounts Settings", None, "frozen_accounts_modifier"
 		)
 
@@ -441,7 +447,7 @@ def rename_temporarily_named_docs(doctype):
 		set_name_from_naming_options(frappe.get_meta(doctype).autoname, doc)
 		newname = doc.name
 		frappe.db.sql(
-			"UPDATE `tab{}` SET name = %s, to_rename = 0 where name = %s".format(doctype),
+			f"UPDATE `tab{doctype}` SET name = %s, to_rename = 0 where name = %s",
 			(newname, oldname),
 			auto_commit=True,
 		)

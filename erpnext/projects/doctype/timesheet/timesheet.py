@@ -36,6 +36,7 @@ class Timesheet(Document):
 		for row in self.time_logs:
 			if row.to_time and row.from_time:
 				row.hours = time_diff_in_hours(row.to_time, row.from_time)
+				self.update_billing_hours(row)
 
 	def calculate_total_amounts(self):
 		self.total_hours = 0.0
@@ -64,18 +65,26 @@ class Timesheet(Document):
 		self.per_billed = 0
 		if self.total_billed_amount > 0 and self.total_billable_amount > 0:
 			self.per_billed = (self.total_billed_amount * 100) / self.total_billable_amount
+		elif self.total_billed_hours > 0 and self.total_billable_hours > 0:
+			self.per_billed = (self.total_billed_hours * 100) / self.total_billable_hours
 
 	def update_billing_hours(self, args):
 		if args.is_billable:
 			if flt(args.billing_hours) == 0.0:
 				args.billing_hours = args.hours
+			elif flt(args.billing_hours) > flt(args.hours):
+				frappe.msgprint(
+					_("Warning - Row {0}: Billing Hours are more than Actual Hours").format(args.idx),
+					indicator="orange",
+					alert=True,
+				)
 		else:
 			args.billing_hours = 0
 
 	def set_status(self):
 		self.status = {"0": "Draft", "1": "Submitted", "2": "Cancelled"}[str(self.docstatus or 0)]
 
-		if self.per_billed == 100:
+		if flt(self.per_billed, self.precision("per_billed")) >= 100.0:
 			self.status = "Billed"
 
 		if self.sales_invoice:
@@ -118,6 +127,12 @@ class Timesheet(Document):
 			if data.task and data.task not in tasks:
 				task = frappe.get_doc("Task", data.task)
 				task.update_time_and_costing()
+				time_logs_completed = all(tl.completed for tl in self.time_logs if tl.task == task.name)
+
+				if time_logs_completed:
+					task.status = "Completed"
+				else:
+					task.status = "Working"
 				task.save()
 				tasks.append(data.task)
 
@@ -248,6 +263,16 @@ class Timesheet(Document):
 		if not ts_detail.is_billable:
 			ts_detail.billing_rate = 0.0
 
+	def unlink_sales_invoice(self, sales_invoice: str):
+		"""Remove link to Sales Invoice from all time logs."""
+		for time_log in self.time_logs:
+			if time_log.sales_invoice == sales_invoice:
+				time_log.sales_invoice = None
+
+		self.calculate_total_amounts()
+		self.calculate_percentage_billed()
+		self.set_status()
+
 
 @frappe.whitelist()
 def get_projectwise_timesheet_data(project=None, parent=None, from_time=None, to_time=None):
@@ -291,12 +316,10 @@ def get_projectwise_timesheet_data(project=None, parent=None, from_time=None, to
 @frappe.whitelist()
 def get_timesheet_detail_rate(timelog, currency):
 	timelog_detail = frappe.db.sql(
-		"""SELECT tsd.billing_amount as billing_amount,
+		f"""SELECT tsd.billing_amount as billing_amount,
 		ts.currency as currency FROM `tabTimesheet Detail` tsd
 		INNER JOIN `tabTimesheet` ts ON ts.name=tsd.parent
-		WHERE tsd.name = '{0}'""".format(
-			timelog
-		),
+		WHERE tsd.name = '{timelog}'""",
 		as_dict=1,
 	)[0]
 
@@ -318,14 +341,12 @@ def get_timesheet(doctype, txt, searchfield, start, page_len, filters):
 		condition = "and tsd.project = %(project)s"
 
 	return frappe.db.sql(
-		"""select distinct tsd.parent from `tabTimesheet Detail` tsd,
+		f"""select distinct tsd.parent from `tabTimesheet Detail` tsd,
 			`tabTimesheet` ts where
 			ts.status in ('Submitted', 'Payslip') and tsd.parent = ts.name and
 			tsd.docstatus = 1 and ts.total_billable_amount > 0
 			and tsd.parent LIKE %(txt)s {condition}
-			order by tsd.parent limit %(page_len)s offset %(start)s""".format(
-			condition=condition
-		),
+			order by tsd.parent limit %(page_len)s offset %(start)s""",
 		{
 			"txt": "%" + txt + "%",
 			"start": start,
@@ -372,8 +393,12 @@ def make_sales_invoice(source_name, item_code=None, customer=None, currency=None
 	billing_rate = billing_amount / hours
 
 	target.company = timesheet.company
+	target.project = timesheet.parent_project
 	if customer:
 		target.customer = customer
+		default_price_list = frappe.get_value("Customer", customer, "default_price_list")
+		if default_price_list:
+			target.selling_price_list = default_price_list
 
 	if currency:
 		target.currency = currency
@@ -450,18 +475,14 @@ def get_events(start, end, filters=None):
 		where `tabTimesheet Detail`.parent = `tabTimesheet`.name
 			and `tabTimesheet`.docstatus < 2
 			and (from_time <= %(end)s and to_time >= %(start)s) {conditions} {match_cond}
-		""".format(
-			conditions=conditions, match_cond=get_match_cond("Timesheet")
-		),
+		""".format(conditions=conditions, match_cond=get_match_cond("Timesheet")),
 		{"start": start, "end": end},
 		as_dict=True,
 		update={"allDay": 0},
 	)
 
 
-def get_timesheets_list(
-	doctype, txt, filters, limit_start, limit_page_length=20, order_by="modified"
-):
+def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20, order_by="creation"):
 	user = frappe.session.user
 	# find customer name from contact.
 	customer = ""
@@ -480,7 +501,7 @@ def get_timesheets_list(
 		projects = [d.name for d in frappe.get_all("Project", filters={"customer": customer})]
 		# Return timesheet related data to web portal.
 		timesheets = frappe.db.sql(
-			"""
+			f"""
 			SELECT
 				ts.name, tsd.activity_type, ts.status, ts.total_billable_hours,
 				COALESCE(ts.sales_invoice, tsd.sales_invoice) AS sales_invoice, tsd.project
@@ -492,10 +513,8 @@ def get_timesheets_list(
 					tsd.project IN %(projects)s
 				)
 			ORDER BY `end_date` ASC
-			LIMIT {1} offset {0}
-		""".format(
-				limit_start, limit_page_length
-			),
+			LIMIT {limit_page_length} offset {limit_start}
+		""",
 			dict(sales_invoices=sales_invoices, projects=projects),
 			as_dict=True,
 		)  # nosec

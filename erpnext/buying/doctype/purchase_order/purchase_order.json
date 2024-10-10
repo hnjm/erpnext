@@ -134,6 +134,7 @@
   "more_info_tab",
   "tracking_section",
   "status",
+  "advance_payment_status",
   "column_break_75",
   "per_billed",
   "per_received",
@@ -157,7 +158,7 @@
   "party_account_currency",
   "inter_company_order_reference",
   "is_old_subcontracting_flow",
-  "dashboard"
+  "connections_tab"
  ],
  "fields": [
   {
@@ -322,6 +323,7 @@
    "fieldtype": "Small Text",
    "hidden": 1,
    "label": "Customer Mobile No",
+   "options": "Phone",
    "print_hide": 1
   },
   {
@@ -353,7 +355,7 @@
   },
   {
    "fieldname": "address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Supplier Address Details",
    "read_only": 1
   },
@@ -368,6 +370,7 @@
    "fieldname": "contact_mobile",
    "fieldtype": "Small Text",
    "label": "Contact Mobile No",
+   "options": "Phone",
    "read_only": 1
   },
   {
@@ -391,7 +394,7 @@
   },
   {
    "fieldname": "shipping_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Shipping Address Details",
    "print_hide": 1,
    "read_only": 1
@@ -475,6 +478,7 @@
    "depends_on": "eval:doc.is_subcontracted",
    "fieldname": "supplier_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Supplier Warehouse",
    "options": "Warehouse"
   },
@@ -495,6 +499,7 @@
    "allow_bulk_edit": 1,
    "fieldname": "items",
    "fieldtype": "Table",
+   "label": "Items",
    "oldfieldname": "po_details",
    "oldfieldtype": "Table",
    "options": "Purchase Order Item",
@@ -637,7 +642,7 @@
   },
   {
    "fieldname": "other_charges_calculation",
-   "fieldtype": "Long Text",
+   "fieldtype": "Text Editor",
    "label": "Taxes and Charges Calculation",
    "no_copy": 1,
    "oldfieldtype": "HTML",
@@ -1093,15 +1098,14 @@
   },
   {
    "fieldname": "billing_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Billing Address Details",
    "read_only": 1
   },
   {
    "fieldname": "before_items_section",
    "fieldtype": "Section Break",
-   "hide_border": 1,
-   "label": "Items"
+   "hide_border": 1
   },
   {
    "fieldname": "items_col_break",
@@ -1171,6 +1175,7 @@
    "depends_on": "is_internal_supplier",
    "fieldname": "set_from_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Set From Warehouse",
    "options": "Warehouse"
   },
@@ -1183,12 +1188,6 @@
    "fieldname": "more_info_tab",
    "fieldtype": "Tab Break",
    "label": "More Info"
-  },
-  {
-   "fieldname": "dashboard",
-   "fieldtype": "Tab Break",
-   "label": "Dashboard",
-   "show_dashboard": 1
   },
   {
    "fieldname": "column_break_7",
@@ -1221,6 +1220,7 @@
   },
   {
    "default": "0",
+   "depends_on": "apply_tds",
    "fieldname": "tax_withholding_net_total",
    "fieldtype": "Currency",
    "hidden": 1,
@@ -1230,12 +1230,13 @@
    "read_only": 1
   },
   {
+   "depends_on": "apply_tds",
    "fieldname": "base_tax_withholding_net_total",
    "fieldtype": "Currency",
    "hidden": 1,
    "label": "Base Tax Withholding Net Total",
    "no_copy": 1,
-   "options": "currency",
+   "options": "Company:company:default_currency",
    "print_hide": 1,
    "read_only": 1
   },
@@ -1263,13 +1264,31 @@
    "fieldname": "shipping_address_section",
    "fieldtype": "Section Break",
    "label": "Shipping Address"
+  },
+  {
+   "fieldname": "connections_tab",
+   "fieldtype": "Tab Break",
+   "label": "Connections",
+   "show_dashboard": 1
+  },
+  {
+   "fieldname": "advance_payment_status",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "in_standard_filter": 1,
+   "label": "Advance Payment Status",
+   "no_copy": 1,
+   "oldfieldname": "status",
+   "oldfieldtype": "Select",
+   "options": "Not Initiated\nInitiated\nPartially Paid\nFully Paid",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
  "idx": 105,
  "is_submittable": 1,
  "links": [],
- "modified": "2022-12-25 18:08:59.074182",
+ "modified": "2024-03-27 13:10:24.518785",
  "modified_by": "Administrator",
  "module": "Buying",
  "name": "Purchase Order",
@@ -1318,7 +1337,7 @@
  ],
  "search_fields": "status, transaction_date, supplier, grand_total",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "supplier",

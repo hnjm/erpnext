@@ -4,7 +4,7 @@
 # Decompiled by https://python-decompiler.com
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 from erpnext.buying.report.subcontracted_raw_materials_to_be_transferred.subcontracted_raw_materials_to_be_transferred import (
 	execute,
@@ -17,7 +17,7 @@ from erpnext.controllers.tests.test_subcontracting_controller import (
 from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
 
 
-class TestSubcontractedItemToBeTransferred(FrappeTestCase):
+class TestSubcontractedItemToBeTransferred(IntegrationTestCase):
 	def test_pending_and_transferred_qty(self):
 		make_service_item("Subcontracted Service Item 1")
 		service_items = [
@@ -48,7 +48,9 @@ class TestSubcontractedItemToBeTransferred(FrappeTestCase):
 					"from_date": frappe.utils.get_datetime(
 						frappe.utils.add_to_date(sco.transaction_date, days=-10)
 					),
-					"to_date": frappe.utils.get_datetime(frappe.utils.add_to_date(sco.transaction_date, days=10)),
+					"to_date": frappe.utils.get_datetime(
+						frappe.utils.add_to_date(sco.transaction_date, days=10)
+					),
 				}
 			)
 		)

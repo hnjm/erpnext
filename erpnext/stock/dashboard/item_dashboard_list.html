@@ -12,7 +12,10 @@
 					</a>
 				{% endif %}
 			</div>
-			<div class="col-sm-4">
+			<div class="col-sm-1" style="margin-top: 8px;" title="{{ __("Reserved Stock") }}">
+				<a data-name="{{ d.reserved_stock }}">{{ d.reserved_stock }}</a>
+			</div>
+			<div class="col-sm-3">
 				<span class="inline-graph">
 					<span class="inline-graph-half" title="{{ __("Reserved Qty") }}">
 						<span class="inline-graph-count">{{ d.total_reserved }}</span>
@@ -46,12 +49,14 @@
 					data-disable_quick_entry="{{ d.disable_quick_entry }}"
 					data-warehouse="{{ d.warehouse }}"
 					data-actual_qty="{{ d.actual_qty }}"
+					data-stock-uom="{{ d.stock_uom }}"
 					data-item="{{ escape(d.item_code) }}">{{ __("Move") }}</a>
 				{% endif %}
 				<button style="margin-left: 7px;" class="btn btn-default btn-xs btn-add"
 					data-disable_quick_entry="{{ d.disable_quick_entry }}"
 					data-warehouse="{{ d.warehouse }}"
 					data-actual_qty="{{ d.actual_qty }}"
+					data-stock-uom="{{ d.stock_uom }}"
 					data-item="{{ escape(d.item_code) }}"
 					data-rate="{{ d.valuation_rate }}">{{ __("Add") }}</a>
 			</div>

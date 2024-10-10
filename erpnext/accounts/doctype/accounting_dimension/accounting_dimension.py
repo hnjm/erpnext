@@ -11,13 +11,37 @@ from frappe.model import core_doctypes_list
 from frappe.model.document import Document
 from frappe.utils import cstr
 
+from erpnext.accounts.doctype.repost_accounting_ledger.repost_accounting_ledger import (
+	get_allowed_types_from_settings,
+)
+
 
 class AccountingDimension(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.accounting_dimension_detail.accounting_dimension_detail import (
+			AccountingDimensionDetail,
+		)
+
+		dimension_defaults: DF.Table[AccountingDimensionDetail]
+		disabled: DF.Check
+		document_type: DF.Link
+		fieldname: DF.Data | None
+		label: DF.Data | None
+	# end: auto-generated types
+
 	def before_insert(self):
 		self.set_fieldname_and_label()
 
 	def validate(self):
-		if self.document_type in core_doctypes_list + (
+		if self.document_type in (
+			*core_doctypes_list,
 			"Accounting Dimension",
 			"Project",
 			"Cost Center",
@@ -25,19 +49,18 @@ class AccountingDimension(Document):
 			"Company",
 			"Account",
 		):
-
 			msg = _("Not allowed to create accounting dimension for {0}").format(self.document_type)
 			frappe.throw(msg)
 
-		exists = frappe.db.get_value(
-			"Accounting Dimension", {"document_type": self.document_type}, ["name"]
-		)
+		exists = frappe.db.get_value("Accounting Dimension", {"document_type": self.document_type}, ["name"])
 
 		if exists and self.is_new():
 			frappe.throw(_("Document Type already used as a dimension"))
 
 		if not self.is_new():
 			self.validate_document_type_change()
+
+		self.validate_dimension_defaults()
 
 	def validate_document_type_change(self):
 		doctype_before_save = frappe.db.get_value("Accounting Dimension", self.name, "document_type")
@@ -46,17 +69,27 @@ class AccountingDimension(Document):
 			message += _("Please create a new Accounting Dimension if required.")
 			frappe.throw(message)
 
+	def validate_dimension_defaults(self):
+		companies = []
+		for default in self.get("dimension_defaults"):
+			if default.company not in companies:
+				companies.append(default.company)
+			else:
+				frappe.throw(_("Company {0} is added more than once").format(frappe.bold(default.company)))
+
 	def after_insert(self):
 		if frappe.flags.in_test:
 			make_dimension_in_accounting_doctypes(doc=self)
 		else:
-			frappe.enqueue(make_dimension_in_accounting_doctypes, doc=self, queue="long")
+			frappe.enqueue(
+				make_dimension_in_accounting_doctypes, doc=self, queue="long", enqueue_after_commit=True
+			)
 
 	def on_trash(self):
 		if frappe.flags.in_test:
 			delete_accounting_dimension(doc=self)
 		else:
-			frappe.enqueue(delete_accounting_dimension, doc=self, queue="long")
+			frappe.enqueue(delete_accounting_dimension, doc=self, queue="long", enqueue_after_commit=True)
 
 	def set_fieldname_and_label(self):
 		if not self.label:
@@ -75,9 +108,9 @@ def make_dimension_in_accounting_doctypes(doc, doclist=None):
 
 	doc_count = len(get_accounting_dimensions())
 	count = 0
+	repostable_doctypes = get_allowed_types_from_settings()
 
 	for doctype in doclist:
-
 		if (doc_count + 1) % 2 == 0:
 			insert_after_field = "dimension_col_break"
 		else:
@@ -90,6 +123,7 @@ def make_dimension_in_accounting_doctypes(doc, doclist=None):
 			"options": doc.document_type,
 			"insert_after": insert_after_field,
 			"owner": "Administrator",
+			"allow_on_submit": 1 if doctype in repostable_doctypes else 0,
 		}
 
 		meta = frappe.get_meta(doctype, cached=False)
@@ -111,7 +145,7 @@ def add_dimension_to_budget_doctype(df, doc):
 	df.update(
 		{
 			"insert_after": "cost_center",
-			"depends_on": "eval:doc.budget_against == '{0}'".format(doc.document_type),
+			"depends_on": f"eval:doc.budget_against == '{doc.document_type}'",
 		}
 	)
 
@@ -145,19 +179,17 @@ def delete_accounting_dimension(doc):
 	frappe.db.sql(
 		"""
 		DELETE FROM `tabCustom Field`
-		WHERE fieldname = %s
-		AND dt IN (%s)"""
-		% ("%s", ", ".join(["%s"] * len(doclist))),  # nosec
-		tuple([doc.fieldname] + doclist),
+		WHERE fieldname = {}
+		AND dt IN ({})""".format("%s", ", ".join(["%s"] * len(doclist))),  # nosec
+		tuple([doc.fieldname, *doclist]),
 	)
 
 	frappe.db.sql(
 		"""
 		DELETE FROM `tabProperty Setter`
-		WHERE field_name = %s
-		AND doc_type IN (%s)"""
-		% ("%s", ", ".join(["%s"] * len(doclist))),  # nosec
-		tuple([doc.fieldname] + doclist),
+		WHERE field_name = {}
+		AND doc_type IN ({})""".format("%s", ", ".join(["%s"] * len(doclist))),  # nosec
+		tuple([doc.fieldname, *doclist]),
 	)
 
 	budget_against_property = frappe.get_doc("Property Setter", "Budget-budget_against-options")
@@ -206,7 +238,6 @@ def get_doctypes_with_dimensions():
 
 
 def get_accounting_dimensions(as_list=True, filters=None):
-
 	if not filters:
 		filters = {"disabled": 0}
 
@@ -224,18 +255,19 @@ def get_accounting_dimensions(as_list=True, filters=None):
 
 
 def get_checks_for_pl_and_bs_accounts():
-	dimensions = frappe.db.sql(
-		"""SELECT p.label, p.disabled, p.fieldname, c.default_dimension, c.company, c.mandatory_for_pl, c.mandatory_for_bs
-		FROM `tabAccounting Dimension`p ,`tabAccounting Dimension Detail` c
-		WHERE p.name = c.parent""",
-		as_dict=1,
-	)
+	if frappe.flags.accounting_dimensions_details is None:
+		# nosemgrep
+		frappe.flags.accounting_dimensions_details = frappe.db.sql(
+			"""SELECT p.label, p.disabled, p.fieldname, c.default_dimension, c.company, c.mandatory_for_pl, c.mandatory_for_bs
+			FROM `tabAccounting Dimension`p ,`tabAccounting Dimension Detail` c
+			WHERE p.name = c.parent""",
+			as_dict=1,
+		)
 
-	return dimensions
+	return frappe.flags.accounting_dimensions_details
 
 
 def get_dimension_with_children(doctype, dimensions):
-
 	if isinstance(dimensions, str):
 		dimensions = [dimensions]
 
@@ -243,9 +275,7 @@ def get_dimension_with_children(doctype, dimensions):
 
 	for dimension in dimensions:
 		lft, rgt = frappe.db.get_value(doctype, dimension, ["lft", "rgt"])
-		children = frappe.get_all(
-			doctype, filters={"lft": [">=", lft], "rgt": ["<=", rgt]}, order_by="lft"
-		)
+		children = frappe.get_all(doctype, filters={"lft": [">=", lft], "rgt": ["<=", rgt]}, order_by="lft")
 		all_dimensions += [c.name for c in children]
 
 	return all_dimensions
@@ -253,21 +283,24 @@ def get_dimension_with_children(doctype, dimensions):
 
 @frappe.whitelist()
 def get_dimensions(with_cost_center_and_project=False):
-	dimension_filters = frappe.db.sql(
-		"""
-		SELECT label, fieldname, document_type
-		FROM `tabAccounting Dimension`
-		WHERE disabled = 0
-	""",
-		as_dict=1,
+	c = frappe.qb.DocType("Accounting Dimension Detail")
+	p = frappe.qb.DocType("Accounting Dimension")
+	dimension_filters = (
+		frappe.qb.from_(p).select(p.label, p.fieldname, p.document_type).where(p.disabled == 0).run(as_dict=1)
+	)
+	default_dimensions = (
+		frappe.qb.from_(c)
+		.inner_join(p)
+		.on(c.parent == p.name)
+		.select(p.fieldname, c.company, c.default_dimension)
+		.run(as_dict=1)
 	)
 
-	default_dimensions = frappe.db.sql(
-		"""SELECT p.fieldname, c.company, c.default_dimension
-		FROM `tabAccounting Dimension Detail` c, `tabAccounting Dimension` p
-		WHERE c.parent = p.name""",
-		as_dict=1,
-	)
+	if isinstance(with_cost_center_and_project, str):
+		if with_cost_center_and_project.lower().strip() == "true":
+			with_cost_center_and_project = True
+		else:
+			with_cost_center_and_project = False
 
 	if with_cost_center_and_project:
 		dimension_filters.extend(
@@ -283,3 +316,30 @@ def get_dimensions(with_cost_center_and_project=False):
 		default_dimensions_map[dimension.company][dimension.fieldname] = dimension.default_dimension
 
 	return dimension_filters, default_dimensions_map
+
+
+def create_accounting_dimensions_for_doctype(doctype):
+	accounting_dimensions = frappe.db.get_all(
+		"Accounting Dimension", fields=["fieldname", "label", "document_type", "disabled"]
+	)
+
+	if not accounting_dimensions:
+		return
+
+	for d in accounting_dimensions:
+		field = frappe.db.get_value("Custom Field", {"dt": doctype, "fieldname": d.fieldname})
+
+		if field:
+			continue
+
+		df = {
+			"fieldname": d.fieldname,
+			"label": d.label,
+			"fieldtype": "Link",
+			"options": d.document_type,
+			"insert_after": "accounting_dimensions_section",
+		}
+
+		create_custom_field(doctype, df, ignore_validate=True)
+
+	frappe.clear_cache(doctype=doctype)

@@ -17,6 +17,34 @@ from erpnext.controllers.accounts_controller import AccountsController
 
 
 class InvoiceDiscounting(AccountsController):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.discounted_invoice.discounted_invoice import DiscountedInvoice
+
+		accounts_receivable_credit: DF.Link
+		accounts_receivable_discounted: DF.Link
+		accounts_receivable_unpaid: DF.Link
+		amended_from: DF.Link | None
+		bank_account: DF.Link
+		bank_charges: DF.Currency
+		bank_charges_account: DF.Link
+		company: DF.Link
+		invoices: DF.Table[DiscountedInvoice]
+		loan_end_date: DF.Date | None
+		loan_period: DF.Int
+		loan_start_date: DF.Date | None
+		posting_date: DF.Date
+		short_term_loan: DF.Link
+		status: DF.Literal["Draft", "Sanctioned", "Disbursed", "Settled", "Cancelled"]
+		total_amount: DF.Currency
+	# end: auto-generated types
+
 	def validate(self):
 		self.validate_mandatory()
 		self.validate_invoices()
@@ -55,9 +83,7 @@ class InvoiceDiscounting(AccountsController):
 				frappe.throw(
 					_(
 						"Row({0}): Outstanding Amount cannot be greater than actual Outstanding Amount {1} in {2}"
-					).format(
-						record.idx, frappe.bold(actual_outstanding), frappe.bold(record.sales_invoice)
-					)
+					).format(record.idx, frappe.bold(actual_outstanding), frappe.bold(record.sales_invoice))
 				)
 
 	def calculate_total_amount(self):
@@ -77,7 +103,9 @@ class InvoiceDiscounting(AccountsController):
 			self.status = status
 			self.db_set("status", status)
 			for d in self.invoices:
-				frappe.get_doc("Sales Invoice", d.sales_invoice).set_status(update=True, update_modified=False)
+				frappe.get_doc("Sales Invoice", d.sales_invoice).set_status(
+					update=True, update_modified=False
+				)
 		else:
 			self.status = "Draft"
 			if self.docstatus == 1:

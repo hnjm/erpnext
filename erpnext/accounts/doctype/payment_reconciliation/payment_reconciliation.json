@@ -10,6 +10,7 @@
   "column_break_4",
   "party",
   "receivable_payable_account",
+  "default_advance_account",
   "col_break1",
   "from_invoice_date",
   "from_payment_date",
@@ -24,10 +25,14 @@
   "invoice_limit",
   "payment_limit",
   "bank_cash_account",
+  "accounting_dimensions_section",
   "cost_center",
+  "dimension_col_break",
   "sec_break1",
+  "invoice_name",
   "invoices",
   "column_break_15",
+  "payment_name",
   "payments",
   "sec_break2",
   "allocation"
@@ -36,6 +41,7 @@
   {
    "fieldname": "company",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Company",
    "options": "Company",
    "reqd": 1
@@ -136,6 +142,7 @@
    "label": "Minimum Invoice Amount"
   },
   {
+   "default": "50",
    "description": "System will fetch all the entries if limit value is zero.",
    "fieldname": "invoice_limit",
    "fieldtype": "Int",
@@ -166,6 +173,7 @@
    "label": "Maximum Payment Amount"
   },
   {
+   "default": "50",
    "description": "System will fetch all the entries if limit value is zero.",
    "fieldname": "payment_limit",
    "fieldtype": "Int",
@@ -185,13 +193,46 @@
    "fieldtype": "Link",
    "label": "Cost Center",
    "options": "Cost Center"
+  },
+  {
+   "depends_on": "eval:doc.party",
+   "description": "Only 'Payment Entries' made against this advance account are supported.",
+   "documentation_url": "https://docs.erpnext.com/docs/user/manual/en/advance-in-separate-party-account",
+   "fieldname": "default_advance_account",
+   "fieldtype": "Link",
+   "label": "Default Advance Account",
+   "mandatory_depends_on": "doc.party_type",
+   "options": "Account"
+  },
+  {
+   "fieldname": "invoice_name",
+   "fieldtype": "Data",
+   "label": "Filter on Invoice"
+  },
+  {
+   "fieldname": "payment_name",
+   "fieldtype": "Data",
+   "label": "Filter on Payment"
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval: doc.invoices.length == 0",
+   "depends_on": "eval:doc.receivable_payable_account",
+   "fieldname": "accounting_dimensions_section",
+   "fieldtype": "Section Break",
+   "label": "Accounting Dimensions Filter"
+  },
+  {
+   "fieldname": "dimension_col_break",
+   "fieldtype": "Column Break"
   }
  ],
  "hide_toolbar": 1,
  "icon": "icon-resize-horizontal",
+ "is_virtual": 1,
  "issingle": 1,
  "links": [],
- "modified": "2022-04-29 15:37:10.246831",
+ "modified": "2024-04-23 12:38:29.557315",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Payment Reconciliation",
@@ -214,8 +255,7 @@
    "write": 1
   }
  ],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
- "states": [],
- "track_changes": 1
+ "states": []
 }

@@ -8,7 +8,7 @@ import frappe
 from frappe import _
 from frappe.contacts.doctype.address.address import get_default_address
 from frappe.model.document import Document
-from frappe.utils import cint, cstr
+from frappe.utils import cstr
 from frappe.utils.nestedset import get_root_of
 
 from erpnext.setup.doctype.customer_group.customer_group import get_parent_customer_groups
@@ -27,6 +27,41 @@ class ConflictingTaxRule(frappe.ValidationError):
 
 
 class TaxRule(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		billing_city: DF.Data | None
+		billing_country: DF.Link | None
+		billing_county: DF.Data | None
+		billing_state: DF.Data | None
+		billing_zipcode: DF.Data | None
+		company: DF.Link | None
+		customer: DF.Link | None
+		customer_group: DF.Link | None
+		from_date: DF.Date | None
+		item: DF.Link | None
+		item_group: DF.Link | None
+		priority: DF.Int
+		purchase_tax_template: DF.Link | None
+		sales_tax_template: DF.Link | None
+		shipping_city: DF.Data | None
+		shipping_country: DF.Link | None
+		shipping_county: DF.Data | None
+		shipping_state: DF.Data | None
+		shipping_zipcode: DF.Data | None
+		supplier: DF.Link | None
+		supplier_group: DF.Link | None
+		tax_category: DF.Link | None
+		tax_type: DF.Literal["Sales", "Purchase"]
+		to_date: DF.Date | None
+		use_for_shopping_cart: DF.Check
+	# end: auto-generated types
+
 	def __setup__(self):
 		self.flags.ignore_these_exceptions_in_test = [ConflictingTaxRule]
 
@@ -34,7 +69,6 @@ class TaxRule(Document):
 		self.validate_tax_template()
 		self.validate_from_to_dates("from_date", "to_date")
 		self.validate_filters()
-		self.validate_use_for_shopping_cart()
 
 	def validate_tax_template(self):
 		if self.tax_type == "Sales":
@@ -78,48 +112,29 @@ class TaxRule(Document):
 		for d in filters:
 			if conds:
 				conds += " and "
-			conds += """ifnull({0}, '') = {1}""".format(d, frappe.db.escape(cstr(filters[d])))
+			conds += f"""ifnull({d}, '') = {frappe.db.escape(cstr(filters[d]))}"""
 
 		if self.from_date and self.to_date:
-			conds += """ and ((from_date > '{from_date}' and from_date < '{to_date}') or
-					(to_date > '{from_date}' and to_date < '{to_date}') or
-					('{from_date}' > from_date and '{from_date}' < to_date) or
-					('{from_date}' = from_date and '{to_date}' = to_date))""".format(
-				from_date=self.from_date, to_date=self.to_date
-			)
+			conds += f""" and ((from_date > '{self.from_date}' and from_date < '{self.to_date}') or
+					(to_date > '{self.from_date}' and to_date < '{self.to_date}') or
+					('{self.from_date}' > from_date and '{self.from_date}' < to_date) or
+					('{self.from_date}' = from_date and '{self.to_date}' = to_date))"""
 
 		elif self.from_date and not self.to_date:
-			conds += """ and to_date > '{from_date}'""".format(from_date=self.from_date)
+			conds += f""" and to_date > '{self.from_date}'"""
 
 		elif self.to_date and not self.from_date:
-			conds += """ and from_date < '{to_date}'""".format(to_date=self.to_date)
+			conds += f""" and from_date < '{self.to_date}'"""
 
 		tax_rule = frappe.db.sql(
-			"select name, priority \
-			from `tabTax Rule` where {0} and name != '{1}'".format(
-				conds, self.name
-			),
+			f"select name, priority \
+			from `tabTax Rule` where {conds} and name != '{self.name}'",
 			as_dict=1,
 		)
 
 		if tax_rule:
 			if tax_rule[0].priority == self.priority:
 				frappe.throw(_("Tax Rule Conflicts with {0}").format(tax_rule[0].name), ConflictingTaxRule)
-
-	def validate_use_for_shopping_cart(self):
-		"""If shopping cart is enabled and no tax rule exists for shopping cart, enable this one"""
-		if (
-			not self.use_for_shopping_cart
-			and cint(frappe.db.get_single_value("E Commerce Settings", "enabled"))
-			and not frappe.db.get_value("Tax Rule", {"use_for_shopping_cart": 1, "name": ["!=", self.name]})
-		):
-
-			self.use_for_shopping_cart = 1
-			frappe.msgprint(
-				_(
-					"Enabling 'Use for Shopping Cart', as Shopping Cart is enabled and there should be at least one Tax Rule for Shopping Cart"
-				)
-			)
 
 
 @frappe.whitelist()
@@ -170,27 +185,25 @@ def get_tax_template(posting_date, args):
 		conditions.append("(from_date is null) and (to_date is null)")
 
 	conditions.append(
-		"ifnull(tax_category, '') = {0}".format(frappe.db.escape(cstr(args.get("tax_category"))))
+		"ifnull(tax_category, '') = {}".format(frappe.db.escape(cstr(args.get("tax_category")), False))
 	)
 	if "tax_category" in args.keys():
 		del args["tax_category"]
 
 	for key, value in args.items():
 		if key == "use_for_shopping_cart":
-			conditions.append("use_for_shopping_cart = {0}".format(1 if value else 0))
+			conditions.append(f"use_for_shopping_cart = {1 if value else 0}")
 		elif key == "customer_group":
 			if not value:
 				value = get_root_of("Customer Group")
 			customer_group_condition = get_customer_group_condition(value)
-			conditions.append("ifnull({0}, '') in ('', {1})".format(key, customer_group_condition))
+			conditions.append(f"ifnull({key}, '') in ('', {customer_group_condition})")
 		else:
-			conditions.append("ifnull({0}, '') in ('', {1})".format(key, frappe.db.escape(cstr(value))))
+			conditions.append(f"ifnull({key}, '') in ('', {frappe.db.escape(cstr(value))})")
 
 	tax_rule = frappe.db.sql(
 		"""select * from `tabTax Rule`
-		where {0}""".format(
-			" and ".join(conditions)
-		),
+		where {}""".format(" and ".join(conditions)),
 		as_dict=True,
 	)
 
@@ -215,7 +228,7 @@ def get_tax_template(posting_date, args):
 	)[0]
 
 	tax_template = rule.sales_tax_template or rule.purchase_tax_template
-	doctype = "{0} Taxes and Charges Template".format(rule.tax_type)
+	doctype = f"{rule.tax_type} Taxes and Charges Template"
 
 	if frappe.db.get_value(doctype, tax_template, "disabled") == 1:
 		return None
@@ -225,9 +238,7 @@ def get_tax_template(posting_date, args):
 
 def get_customer_group_condition(customer_group):
 	condition = ""
-	customer_groups = [
-		"%s" % (frappe.db.escape(d.name)) for d in get_parent_customer_groups(customer_group)
-	]
+	customer_groups = ["%s" % (frappe.db.escape(d.name)) for d in get_parent_customer_groups(customer_group)]
 	if customer_groups:
 		condition = ",".join(["%s"] * len(customer_groups)) % (tuple(customer_groups))
 	return condition

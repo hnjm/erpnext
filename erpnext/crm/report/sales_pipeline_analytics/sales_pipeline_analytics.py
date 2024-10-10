@@ -8,7 +8,7 @@ from itertools import groupby
 import frappe
 from dateutil.relativedelta import relativedelta
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, getdate
 
 from erpnext.setup.utils import get_exchange_rate
 
@@ -17,11 +17,19 @@ def execute(filters=None):
 	return SalesPipelineAnalytics(filters).run()
 
 
-class SalesPipelineAnalytics(object):
+class SalesPipelineAnalytics:
 	def __init__(self, filters=None):
 		self.filters = frappe._dict(filters or {})
 
+	def validate_filters(self):
+		if not self.filters.from_date:
+			frappe.throw(_("From Date is mandatory"))
+
+		if not self.filters.to_date:
+			frappe.throw(_("To Date is mandatory"))
+
 	def run(self):
+		self.validate_filters()
 		self.get_columns()
 		self.get_data()
 		self.get_chart_data()
@@ -41,7 +49,9 @@ class SalesPipelineAnalytics(object):
 			month_list = self.get_month_list()
 
 			for month in month_list:
-				self.columns.append({"fieldname": month, "fieldtype": based_on, "label": month, "width": 200})
+				self.columns.append(
+					{"fieldname": month, "fieldtype": based_on, "label": _(month), "width": 200}
+				)
 
 		elif self.filters.get("range") == "Quarterly":
 			for quarter in range(1, 5):
@@ -96,7 +106,7 @@ class SalesPipelineAnalytics(object):
 				"Opportunity",
 				filters=self.get_conditions(),
 				fields=[self.based_on, self.data_based_on, self.duration],
-				group_by="{},{}".format(self.group_by_based_on, self.group_by_period),
+				group_by=f"{self.group_by_based_on},{self.group_by_period}",
 				order_by=self.group_by_period,
 			)
 
@@ -112,7 +122,9 @@ class SalesPipelineAnalytics(object):
 			self.grouped_data = []
 
 			grouping_key = lambda o: (o.get(self.pipeline_by) or "Not Assigned", o[self.period_by])  # noqa
-			for (pipeline_by, period_by), rows in groupby(self.query_result, grouping_key):
+			for (pipeline_by, period_by), rows in groupby(
+				sorted(self.query_result, key=grouping_key), grouping_key
+			):
 				self.grouped_data.append(
 					{
 						self.pipeline_by: pipeline_by,
@@ -130,7 +142,7 @@ class SalesPipelineAnalytics(object):
 		conditions = []
 
 		if self.filters.get("opportunity_source"):
-			conditions.append({"source": self.filters.get("opportunity_source")})
+			conditions.append({"utm_source": self.filters.get("opportunity_source")})
 
 		if self.filters.get("opportunity_type"):
 			conditions.append({"opportunity_type": self.filters.get("opportunity_type")})
@@ -156,7 +168,7 @@ class SalesPipelineAnalytics(object):
 
 		for column in self.columns:
 			if column["fieldname"] != "opportunity_owner" and column["fieldname"] != "sales_stage":
-				labels.append(column["fieldname"])
+				labels.append(_(column["fieldname"]))
 
 		self.chart = {"data": {"labels": labels, "datasets": datasets}, "type": "line"}
 
@@ -183,7 +195,7 @@ class SalesPipelineAnalytics(object):
 			count_or_amount = info.get(based_on)
 
 			if self.filters.get("pipeline_by") == "Owner":
-				if value == "Not Assigned" or value == "[]" or value is None:
+				if value == "Not Assigned" or value == "[]" or value is None or not value:
 					assigned_to = ["Not Assigned"]
 				else:
 					assigned_to = json.loads(value)
@@ -225,10 +237,9 @@ class SalesPipelineAnalytics(object):
 
 	def get_month_list(self):
 		month_list = []
-		current_date = date.today()
-		month_number = date.today().month
+		current_date = getdate(self.filters.get("from_date"))
 
-		for month in range(month_number, 13):
+		while current_date < getdate(self.filters.get("to_date")):
 			month_list.append(current_date.strftime("%B"))
 			current_date = current_date + relativedelta(months=1)
 

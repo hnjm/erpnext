@@ -14,6 +14,7 @@
   "to_reference_date",
   "filter_by_reference_date",
   "column_break_2",
+  "account_currency",
   "account_opening_balance",
   "bank_statement_closing_balance",
   "section_break_1",
@@ -25,6 +26,7 @@
   {
    "fieldname": "company",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Company",
    "options": "Company"
   },
@@ -59,7 +61,7 @@
    "fieldname": "account_opening_balance",
    "fieldtype": "Currency",
    "label": "Account Opening Balance",
-   "options": "Currency",
+   "options": "account_currency",
    "read_only": 1
   },
   {
@@ -67,7 +69,7 @@
    "fieldname": "bank_statement_closing_balance",
    "fieldtype": "Currency",
    "label": "Closing Balance",
-   "options": "Currency"
+   "options": "account_currency"
   },
   {
    "fieldname": "section_break_1",
@@ -104,13 +106,20 @@
    "fieldname": "filter_by_reference_date",
    "fieldtype": "Check",
    "label": "Filter by Reference Date"
+  },
+  {
+   "fieldname": "account_currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Account Currency",
+   "options": "Currency"
   }
  ],
  "hide_toolbar": 1,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2023-01-13 13:00:02.022919",
+ "modified": "2024-04-28 14:40:50.910884",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Bank Reconciliation Tool",
@@ -128,7 +137,7 @@
   }
  ],
  "quick_entry": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": []
 }

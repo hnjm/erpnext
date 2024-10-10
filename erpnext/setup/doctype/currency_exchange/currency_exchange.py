@@ -10,6 +10,22 @@ from frappe.utils import cint, formatdate, get_datetime_str, nowdate
 
 
 class CurrencyExchange(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		date: DF.Date
+		exchange_rate: DF.Float
+		for_buying: DF.Check
+		for_selling: DF.Check
+		from_currency: DF.Link
+		to_currency: DF.Link
+	# end: auto-generated types
+
 	def autoname(self):
 		purpose = ""
 		if not self.date:
@@ -22,7 +38,7 @@ class CurrencyExchange(Document):
 		if cint(self.for_buying) == 1 and cint(self.for_selling) == 0:
 			purpose = "Buying"
 
-		self.name = "{0}-{1}-{2}{3}".format(
+		self.name = "{}-{}-{}{}".format(
 			formatdate(get_datetime_str(self.date), "yyyy-MM-dd"),
 			self.from_currency,
 			self.to_currency,

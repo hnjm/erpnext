@@ -7,32 +7,32 @@ from erpnext.controllers.taxes_and_totals import get_itemised_tax
 
 
 def update_itemised_tax_data(doc):
+	# maybe this should be a standard function rather than a regional one
 	if not doc.taxes:
+		return
+
+	if not doc.items:
+		return
+
+	meta = frappe.get_meta(doc.items[0].doctype)
+	if not meta.has_field("tax_rate"):
 		return
 
 	itemised_tax = get_itemised_tax(doc.taxes)
 
 	for row in doc.items:
-		tax_rate = 0.0
-		item_tax_rate = 0.0
+		tax_rate, tax_amount = 0.0, 0.0
+		# dont even bother checking in item tax template as it contains both input and output accounts - double the tax rate
+		item_code = row.item_code or row.item_name
+		if itemised_tax.get(item_code):
+			for tax in itemised_tax.get(item_code).values():
+				_tax_rate = flt(tax.get("tax_rate", 0), row.precision("tax_rate"))
+				tax_amount += flt((row.net_amount * _tax_rate) / 100, row.precision("tax_amount"))
+				tax_rate += _tax_rate
 
-		if row.item_tax_rate:
-			item_tax_rate = frappe.parse_json(row.item_tax_rate)
-
-		# First check if tax rate is present
-		# If not then look up in item_wise_tax_detail
-		if item_tax_rate:
-			for account, rate in item_tax_rate.items():
-				tax_rate += rate
-		elif row.item_code and itemised_tax.get(row.item_code):
-			tax_rate = sum([tax.get("tax_rate", 0) for d, tax in itemised_tax.get(row.item_code).items()])
-
-		meta = frappe.get_meta(row.doctype)
-
-		if meta.has_field("tax_rate"):
-			row.tax_rate = flt(tax_rate, row.precision("tax_rate"))
-			row.tax_amount = flt((row.net_amount * tax_rate) / 100, row.precision("net_amount"))
-			row.total_amount = flt((row.net_amount + row.tax_amount), row.precision("total_amount"))
+		row.tax_rate = flt(tax_rate, row.precision("tax_rate"))
+		row.tax_amount = flt(tax_amount, row.precision("tax_amount"))
+		row.total_amount = flt((row.net_amount + row.tax_amount), row.precision("total_amount"))
 
 
 def get_account_currency(account):
@@ -55,14 +55,12 @@ def get_account_currency(account):
 def get_tax_accounts(company):
 	"""Get the list of tax accounts for a specific company."""
 	tax_accounts_dict = frappe._dict()
-	tax_accounts_list = frappe.get_all(
-		"UAE VAT Account", filters={"parent": company}, fields=["Account"]
-	)
+	tax_accounts_list = frappe.get_all("UAE VAT Account", filters={"parent": company}, fields=["Account"])
 
 	if not tax_accounts_list and not frappe.flags.in_test:
 		frappe.throw(_('Please set Vat Accounts for Company: "{0}" in UAE VAT Settings').format(company))
 	for tax_account in tax_accounts_list:
-		for account, name in tax_account.items():
+		for _account, name in tax_account.items():
 			tax_accounts_dict[name] = name
 
 	return tax_accounts_dict
@@ -106,7 +104,6 @@ def update_totals(vat_tax, base_vat_tax, doc):
 	doc.grand_total -= vat_tax
 
 	if doc.meta.get_field("rounded_total"):
-
 		if doc.is_rounded_total_disabled():
 			doc.outstanding_amount = doc.grand_total
 
@@ -120,9 +117,7 @@ def update_totals(vat_tax, base_vat_tax, doc):
 			doc.outstanding_amount = doc.rounded_total or doc.grand_total
 
 	doc.in_words = money_in_words(doc.grand_total, doc.currency)
-	doc.base_in_words = money_in_words(
-		doc.base_grand_total, erpnext.get_company_currency(doc.company)
-	)
+	doc.base_in_words = money_in_words(doc.base_grand_total, erpnext.get_company_currency(doc.company))
 	doc.set_payment_schedule()
 
 

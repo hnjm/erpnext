@@ -10,6 +10,7 @@
   "tax_withholding_category",
   "fiscal_year",
   "column_break_3",
+  "company",
   "certificate_no",
   "section_break_3",
   "supplier",
@@ -63,7 +64,7 @@
   {
    "fieldname": "valid_upto",
    "fieldtype": "Date",
-   "label": "Valid Upto",
+   "label": "Valid Up To",
    "reqd": 1
   },
   {
@@ -123,18 +124,63 @@
    "label": "Tax Withholding Category",
    "options": "Tax Withholding Category",
    "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2021-10-23 18:33:38.962622",
+ "modified": "2024-04-18 15:25:25.808355",
  "modified_by": "Administrator",
  "module": "Regional",
  "name": "Lower Deduction Certificate",
  "naming_rule": "By fieldname",
  "owner": "Administrator",
- "permissions": [],
- "sort_field": "modified",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

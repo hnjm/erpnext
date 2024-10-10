@@ -5,25 +5,125 @@
 import frappe
 from frappe import _, msgprint, qb
 from frappe.model.document import Document
+from frappe.query_builder import Criterion
 from frappe.query_builder.custom import ConstantColumn
-from frappe.query_builder.functions import IfNull
-from frappe.utils import flt, getdate, nowdate, today
+from frappe.utils import flt, fmt_money, get_link_to_form, getdate, nowdate, today
 
 import erpnext
+from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_dimensions
+from erpnext.accounts.doctype.process_payment_reconciliation.process_payment_reconciliation import (
+	is_any_doc_running,
+)
 from erpnext.accounts.utils import (
 	QueryPaymentLedger,
+	create_gain_loss_journal,
 	get_outstanding_invoices,
 	reconcile_against_document,
 )
-from erpnext.controllers.accounts_controller import get_advance_payment_entries
+from erpnext.controllers.accounts_controller import get_advance_payment_entries_for_regional
 
 
 class PaymentReconciliation(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.payment_reconciliation_allocation.payment_reconciliation_allocation import (
+			PaymentReconciliationAllocation,
+		)
+		from erpnext.accounts.doctype.payment_reconciliation_invoice.payment_reconciliation_invoice import (
+			PaymentReconciliationInvoice,
+		)
+		from erpnext.accounts.doctype.payment_reconciliation_payment.payment_reconciliation_payment import (
+			PaymentReconciliationPayment,
+		)
+
+		allocation: DF.Table[PaymentReconciliationAllocation]
+		bank_cash_account: DF.Link | None
+		company: DF.Link
+		cost_center: DF.Link | None
+		default_advance_account: DF.Link | None
+		from_invoice_date: DF.Date | None
+		from_payment_date: DF.Date | None
+		invoice_limit: DF.Int
+		invoice_name: DF.Data | None
+		invoices: DF.Table[PaymentReconciliationInvoice]
+		maximum_invoice_amount: DF.Currency
+		maximum_payment_amount: DF.Currency
+		minimum_invoice_amount: DF.Currency
+		minimum_payment_amount: DF.Currency
+		party: DF.DynamicLink
+		party_type: DF.Link
+		payment_limit: DF.Int
+		payment_name: DF.Data | None
+		payments: DF.Table[PaymentReconciliationPayment]
+		receivable_payable_account: DF.Link
+		to_invoice_date: DF.Date | None
+		to_payment_date: DF.Date | None
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
-		super(PaymentReconciliation, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 		self.common_filter_conditions = []
 		self.accounting_dimension_filter_conditions = []
 		self.ple_posting_date_filter = []
+		self.dimensions = get_dimensions()[0]
+
+	def load_from_db(self):
+		# 'modified' attribute is required for `run_doc_method` to work properly.
+		doc_dict = frappe._dict(
+			{
+				"modified": None,
+				"company": None,
+				"party": None,
+				"party_type": None,
+				"receivable_payable_account": None,
+				"default_advance_account": None,
+				"from_invoice_date": None,
+				"to_invoice_date": None,
+				"invoice_limit": 50,
+				"from_payment_date": None,
+				"to_payment_date": None,
+				"payment_limit": 50,
+				"minimum_invoice_amount": None,
+				"minimum_payment_amount": None,
+				"maximum_invoice_amount": None,
+				"maximum_payment_amount": None,
+				"bank_cash_account": None,
+				"cost_center": None,
+				"payment_name": None,
+				"invoice_name": None,
+			}
+		)
+		super(Document, self).__init__(doc_dict)
+
+	def save(self):
+		return
+
+	@staticmethod
+	def get_list(args):
+		pass
+
+	@staticmethod
+	def get_count(args):
+		pass
+
+	@staticmethod
+	def get_stats(args):
+		pass
+
+	def db_insert(self, *args, **kwargs):
+		pass
+
+	def db_update(self, *args, **kwargs):
+		pass
+
+	def delete(self):
+		pass
 
 	@frappe.whitelist()
 	def get_unreconciled_entries(self):
@@ -53,12 +153,39 @@ class PaymentReconciliation(Document):
 		self.add_payment_entries(non_reconciled_payments)
 
 	def get_payment_entries(self):
+		if self.default_advance_account:
+			party_account = [self.receivable_payable_account, self.default_advance_account]
+		else:
+			party_account = [self.receivable_payable_account]
+
 		order_doctype = "Sales Order" if self.party_type == "Customer" else "Purchase Order"
-		condition = self.get_conditions(get_payments=True)
-		payment_entries = get_advance_payment_entries(
+		condition = frappe._dict(
+			{
+				"company": self.get("company"),
+				"get_payments": True,
+				"cost_center": self.get("cost_center"),
+				"from_payment_date": self.get("from_payment_date"),
+				"to_payment_date": self.get("to_payment_date"),
+				"maximum_payment_amount": self.get("maximum_payment_amount"),
+				"minimum_payment_amount": self.get("minimum_payment_amount"),
+			}
+		)
+
+		if self.payment_name:
+			condition.update({"name": self.payment_name})
+
+		# pass dynamic dimension filter values to query builder
+		dimensions = {}
+		for x in self.dimensions:
+			dimension = x.fieldname
+			if self.get(dimension):
+				dimensions.update({dimension: self.get(dimension)})
+		condition.update({"accounting_dimensions": dimensions})
+
+		payment_entries = get_advance_payment_entries_for_regional(
 			self.party_type,
 			self.party,
-			self.receivable_payable_account,
+			party_account,
 			order_doctype,
 			against_all_orders=True,
 			limit=self.payment_limit,
@@ -68,64 +195,101 @@ class PaymentReconciliation(Document):
 		return payment_entries
 
 	def get_jv_entries(self):
-		condition = self.get_conditions()
+		je = qb.DocType("Journal Entry")
+		jea = qb.DocType("Journal Entry Account")
+		conditions = self.get_journal_filter_conditions()
+
+		# Dimension filters
+		for x in self.dimensions:
+			dimension = x.fieldname
+			if self.get(dimension):
+				conditions.append(jea[dimension] == self.get(dimension))
+
+		if self.payment_name:
+			conditions.append(je.name.like(f"%%{self.payment_name}%%"))
+
+		if self.get("cost_center"):
+			conditions.append(jea.cost_center == self.cost_center)
+
 		dr_or_cr = (
 			"credit_in_account_currency"
 			if erpnext.get_party_account_type(self.party_type) == "Receivable"
 			else "debit_in_account_currency"
 		)
+		conditions.append(jea[dr_or_cr].gt(0))
 
-		bank_account_condition = (
-			"t2.against_account like %(bank_cash_account)s" if self.bank_cash_account else "1=1"
+		if self.bank_cash_account:
+			conditions.append(jea.against_account.like(f"%%{self.bank_cash_account}%%"))
+
+		journal_query = (
+			qb.from_(je)
+			.inner_join(jea)
+			.on(jea.parent == je.name)
+			.select(
+				ConstantColumn("Journal Entry").as_("reference_type"),
+				je.name.as_("reference_name"),
+				je.posting_date,
+				je.remark.as_("remarks"),
+				jea.name.as_("reference_row"),
+				jea[dr_or_cr].as_("amount"),
+				jea.is_advance,
+				jea.exchange_rate,
+				jea.account_currency.as_("currency"),
+				jea.cost_center.as_("cost_center"),
+			)
+			.where(
+				(je.docstatus == 1)
+				& (jea.party_type == self.party_type)
+				& (jea.party == self.party)
+				& (jea.account == self.receivable_payable_account)
+				& (
+					(jea.reference_type == "")
+					| (jea.reference_type.isnull())
+					| (jea.reference_type.isin(("Sales Order", "Purchase Order")))
+				)
+			)
+			.where(Criterion.all(conditions))
+			.orderby(je.posting_date)
 		)
 
-		# nosemgrep
-		journal_entries = frappe.db.sql(
-			"""
-			select
-				"Journal Entry" as reference_type, t1.name as reference_name,
-				t1.posting_date, t1.remark as remarks, t2.name as reference_row,
-				{dr_or_cr} as amount, t2.is_advance, t2.exchange_rate,
-				t2.account_currency as currency
-			from
-				`tabJournal Entry` t1, `tabJournal Entry Account` t2
-			where
-				t1.name = t2.parent and t1.docstatus = 1 and t2.docstatus = 1
-				and t2.party_type = %(party_type)s and t2.party = %(party)s
-				and t2.account = %(account)s and {dr_or_cr} > 0 {condition}
-				and (t2.reference_type is null or t2.reference_type = '' or
-					(t2.reference_type in ('Sales Order', 'Purchase Order')
-						and t2.reference_name is not null and t2.reference_name != ''))
-				and (CASE
-					WHEN t1.voucher_type in ('Debit Note', 'Credit Note')
-					THEN 1=1
-					ELSE {bank_account_condition}
-				END)
-			order by t1.posting_date
-			""".format(
-				**{
-					"dr_or_cr": dr_or_cr,
-					"bank_account_condition": bank_account_condition,
-					"condition": condition,
-				}
-			),
-			{
-				"party_type": self.party_type,
-				"party": self.party,
-				"account": self.receivable_payable_account,
-				"bank_cash_account": "%%%s%%" % self.bank_cash_account,
-			},
-			as_dict=1,
-		)
+		if self.payment_limit:
+			journal_query = journal_query.limit(self.payment_limit)
+
+		journal_entries = journal_query.run(as_dict=True)
 
 		return list(journal_entries)
 
-	def get_dr_or_cr_notes(self):
+	def get_return_invoices(self):
+		voucher_type = "Sales Invoice" if self.party_type == "Customer" else "Purchase Invoice"
+		doc = qb.DocType(voucher_type)
 
+		conditions = []
+		conditions.append(doc.docstatus == 1)
+		conditions.append(doc[frappe.scrub(self.party_type)] == self.party)
+		conditions.append(doc.is_return == 1)
+		conditions.append(doc.outstanding_amount != 0)
+
+		if self.payment_name:
+			conditions.append(doc.name.like(f"%{self.payment_name}%"))
+
+		self.return_invoices_query = (
+			qb.from_(doc)
+			.select(
+				ConstantColumn(voucher_type).as_("voucher_type"),
+				doc.name.as_("voucher_no"),
+				doc.return_against,
+			)
+			.where(Criterion.all(conditions))
+		)
+		if self.payment_limit:
+			self.return_invoices_query = self.return_invoices_query.limit(self.payment_limit)
+
+		self.return_invoices = self.return_invoices_query.run(as_dict=True)
+
+	def get_dr_or_cr_notes(self):
 		self.build_qb_filter_conditions(get_return_invoices=True)
 
 		ple = qb.DocType("Payment Ledger Entry")
-		voucher_type = "Sales Invoice" if self.party_type == "Customer" else "Purchase Invoice"
 
 		if erpnext.get_party_account_type(self.party_type) == "Receivable":
 			self.common_filter_conditions.append(ple.account_type == "Receivable")
@@ -133,30 +297,19 @@ class PaymentReconciliation(Document):
 			self.common_filter_conditions.append(ple.account_type == "Payable")
 		self.common_filter_conditions.append(ple.account == self.receivable_payable_account)
 
-		# get return invoices
-		doc = qb.DocType(voucher_type)
-		return_invoices = (
-			qb.from_(doc)
-			.select(ConstantColumn(voucher_type).as_("voucher_type"), doc.name.as_("voucher_no"))
-			.where(
-				(doc.docstatus == 1)
-				& (doc[frappe.scrub(self.party_type)] == self.party)
-				& (doc.is_return == 1)
-				& (IfNull(doc.return_against, "") == "")
-			)
-			.run(as_dict=True)
-		)
+		self.get_return_invoices()
 
 		outstanding_dr_or_cr = []
-		if return_invoices:
+		if self.return_invoices:
 			ple_query = QueryPaymentLedger()
 			return_outstanding = ple_query.get_voucher_outstandings(
-				vouchers=return_invoices,
+				vouchers=self.return_invoices,
 				common_filter=self.common_filter_conditions,
 				posting_date=self.ple_posting_date_filter,
 				min_outstanding=-(self.minimum_payment_amount) if self.minimum_payment_amount else None,
 				max_outstanding=-(self.maximum_payment_amount) if self.maximum_payment_amount else None,
 				get_payments=True,
+				accounting_dimensions=self.accounting_dimension_filter_conditions,
 			)
 
 			for inv in return_outstanding:
@@ -169,6 +322,7 @@ class PaymentReconciliation(Document):
 								"amount": -(inv.outstanding_in_account_currency),
 								"posting_date": inv.posting_date,
 								"currency": inv.currency,
+								"cost_center": inv.cost_center,
 							}
 						)
 					)
@@ -186,16 +340,32 @@ class PaymentReconciliation(Document):
 
 		self.build_qb_filter_conditions(get_invoices=True)
 
+		accounts = [self.receivable_payable_account]
+
+		if self.default_advance_account:
+			accounts.append(self.default_advance_account)
+
 		non_reconciled_invoices = get_outstanding_invoices(
 			self.party_type,
 			self.party,
-			self.receivable_payable_account,
+			accounts,
 			common_filter=self.common_filter_conditions,
 			posting_date=self.ple_posting_date_filter,
 			min_outstanding=self.minimum_invoice_amount if self.minimum_invoice_amount else None,
 			max_outstanding=self.maximum_invoice_amount if self.maximum_invoice_amount else None,
 			accounting_dimensions=self.accounting_dimension_filter_conditions,
+			limit=self.invoice_limit,
+			voucher_no=self.invoice_name,
 		)
+
+		cr_dr_notes = (
+			[x.voucher_no for x in self.return_invoices]
+			if self.party_type in ["Customer", "Supplier"]
+			else []
+		)
+		# Filter out cr/dr notes from outstanding invoices list
+		# Happens when non-standalone cr/dr notes are linked with another invoice through journal entry
+		non_reconciled_invoices = [x for x in non_reconciled_invoices if x.voucher_no not in cr_dr_notes]
 
 		if self.invoice_limit:
 			non_reconciled_invoices = non_reconciled_invoices[: self.invoice_limit]
@@ -217,20 +387,39 @@ class PaymentReconciliation(Document):
 
 	def get_difference_amount(self, payment_entry, invoice, allocated_amount):
 		difference_amount = 0
-		if invoice.get("exchange_rate") and payment_entry.get("exchange_rate", 1) != invoice.get(
-			"exchange_rate", 1
-		):
-			allocated_amount_in_ref_rate = payment_entry.get("exchange_rate", 1) * allocated_amount
-			allocated_amount_in_inv_rate = invoice.get("exchange_rate", 1) * allocated_amount
-			difference_amount = allocated_amount_in_ref_rate - allocated_amount_in_inv_rate
+		if frappe.get_cached_value(
+			"Account", self.receivable_payable_account, "account_currency"
+		) != frappe.get_cached_value("Company", self.company, "default_currency"):
+			if invoice.get("exchange_rate") and payment_entry.get("exchange_rate", 1) != invoice.get(
+				"exchange_rate", 1
+			):
+				allocated_amount_in_ref_rate = payment_entry.get("exchange_rate", 1) * allocated_amount
+				allocated_amount_in_inv_rate = invoice.get("exchange_rate", 1) * allocated_amount
+				difference_amount = allocated_amount_in_ref_rate - allocated_amount_in_inv_rate
 
 		return difference_amount
+
+	@frappe.whitelist()
+	def is_auto_process_enabled(self):
+		return frappe.db.get_single_value("Accounts Settings", "auto_reconcile_payments")
+
+	@frappe.whitelist()
+	def calculate_difference_on_allocation_change(self, payment_entry, invoice, allocated_amount):
+		invoice_exchange_map = self.get_invoice_exchange_map(invoice, payment_entry)
+		invoice[0]["exchange_rate"] = invoice_exchange_map.get(invoice[0].get("invoice_number"))
+		if payment_entry[0].get("reference_type") in ["Sales Invoice", "Purchase Invoice"]:
+			payment_entry[0]["exchange_rate"] = invoice_exchange_map.get(
+				payment_entry[0].get("reference_name")
+			)
+
+		new_difference_amount = self.get_difference_amount(payment_entry[0], invoice[0], allocated_amount)
+		return new_difference_amount
 
 	@frappe.whitelist()
 	def allocate_entries(self, args):
 		self.validate_entries()
 
-		invoice_exchange_map = self.get_invoice_exchange_map(args.get("invoices"))
+		invoice_exchange_map = self.get_invoice_exchange_map(args.get("invoices"), args.get("payments"))
 		default_exchange_gain_loss_account = frappe.get_cached_value(
 			"Company", self.company, "exchange_gain_loss_account"
 		)
@@ -249,9 +438,13 @@ class PaymentReconciliation(Document):
 					pay["amount"] = 0
 
 				inv["exchange_rate"] = invoice_exchange_map.get(inv.get("invoice_number"))
+				if pay.get("reference_type") in ["Sales Invoice", "Purchase Invoice"]:
+					pay["exchange_rate"] = invoice_exchange_map.get(pay.get("reference_name"))
+
 				res.difference_amount = self.get_difference_amount(pay, inv, res["allocated_amount"])
 				res.difference_account = default_exchange_gain_loss_account
 				res.exchange_rate = inv.get("exchange_rate")
+				res.update({"gain_loss_posting_date": pay.get("posting_date")})
 
 				if pay.get("amount") == 0:
 					entries.append(res)
@@ -269,8 +462,15 @@ class PaymentReconciliation(Document):
 				row = self.append("allocation", {})
 				row.update(entry)
 
+	def update_dimension_values_in_allocated_entries(self, res):
+		for x in self.dimensions:
+			dimension = x.fieldname
+			if self.get(dimension):
+				res[dimension] = self.get(dimension)
+		return res
+
 	def get_allocated_entry(self, pay, inv, allocated_amount):
-		return frappe._dict(
+		res = frappe._dict(
 			{
 				"reference_type": pay.get("reference_type"),
 				"reference_name": pay.get("reference_name"),
@@ -282,12 +482,15 @@ class PaymentReconciliation(Document):
 				"allocated_amount": allocated_amount,
 				"difference_amount": pay.get("difference_amount"),
 				"currency": inv.get("currency"),
+				"cost_center": pay.get("cost_center"),
 			}
 		)
 
-	@frappe.whitelist()
-	def reconcile(self):
-		self.validate_allocation()
+		res = self.update_dimension_values_in_allocated_entries(res)
+		return res
+
+	def reconcile_allocations(self, skip_ref_details_update_for_pe=False):
+		adjust_allocations_for_taxes(self)
 		dr_or_cr = (
 			"credit_in_account_currency"
 			if erpnext.get_party_account_type(self.party_type) == "Receivable"
@@ -307,70 +510,40 @@ class PaymentReconciliation(Document):
 				payment_details = self.get_payment_details(row, dr_or_cr)
 				reconciled_entry.append(payment_details)
 
-				if payment_details.difference_amount:
-					self.make_difference_entry(payment_details)
-
 		if entry_list:
-			reconcile_against_document(entry_list)
+			reconcile_against_document(entry_list, skip_ref_details_update_for_pe, self.dimensions)
 
 		if dr_or_cr_notes:
-			reconcile_dr_cr_note(dr_or_cr_notes, self.company)
+			reconcile_dr_cr_note(dr_or_cr_notes, self.company, self.dimensions)
 
+	@frappe.whitelist()
+	def reconcile(self):
+		if frappe.db.get_single_value("Accounts Settings", "auto_reconcile_payments"):
+			running_doc = is_any_doc_running(
+				dict(
+					company=self.company,
+					party_type=self.party_type,
+					party=self.party,
+					receivable_payable_account=self.receivable_payable_account,
+				)
+			)
+
+			if running_doc:
+				frappe.throw(
+					_(
+						"A Reconciliation Job {0} is running for the same filters. Cannot reconcile now"
+					).format(get_link_to_form("Auto Reconcile", running_doc))
+				)
+				return
+
+		self.validate_allocation()
+		self.reconcile_allocations()
 		msgprint(_("Successfully Reconciled"))
+
 		self.get_unreconciled_entries()
 
-	def make_difference_entry(self, row):
-		journal_entry = frappe.new_doc("Journal Entry")
-		journal_entry.voucher_type = "Exchange Gain Or Loss"
-		journal_entry.company = self.company
-		journal_entry.posting_date = nowdate()
-		journal_entry.multi_currency = 1
-
-		party_account_currency = frappe.get_cached_value(
-			"Account", self.receivable_payable_account, "account_currency"
-		)
-		difference_account_currency = frappe.get_cached_value(
-			"Account", row.difference_account, "account_currency"
-		)
-
-		# Account Currency has balance
-		dr_or_cr = "debit" if self.party_type == "Customer" else "credit"
-		reverse_dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
-
-		journal_account = frappe._dict(
-			{
-				"account": self.receivable_payable_account,
-				"party_type": self.party_type,
-				"party": self.party,
-				"account_currency": party_account_currency,
-				"exchange_rate": 0,
-				"cost_center": erpnext.get_default_cost_center(self.company),
-				"reference_type": row.against_voucher_type,
-				"reference_name": row.against_voucher,
-				dr_or_cr: flt(row.difference_amount),
-				dr_or_cr + "_in_account_currency": 0,
-			}
-		)
-
-		journal_entry.append("accounts", journal_account)
-
-		journal_account = frappe._dict(
-			{
-				"account": row.difference_account,
-				"account_currency": difference_account_currency,
-				"exchange_rate": 1,
-				"cost_center": erpnext.get_default_cost_center(self.company),
-				reverse_dr_or_cr + "_in_account_currency": flt(row.difference_amount),
-			}
-		)
-
-		journal_entry.append("accounts", journal_account)
-
-		journal_entry.save()
-		journal_entry.submit()
-
 	def get_payment_details(self, row, dr_or_cr):
-		return frappe._dict(
+		payment_details = frappe._dict(
 			{
 				"voucher_type": row.get("reference_type"),
 				"voucher_no": row.get("reference_name"),
@@ -388,8 +561,16 @@ class PaymentReconciliation(Document):
 				"allocated_amount": flt(row.get("allocated_amount")),
 				"difference_amount": flt(row.get("difference_amount")),
 				"difference_account": row.get("difference_account"),
+				"difference_posting_date": row.get("gain_loss_posting_date"),
+				"cost_center": row.get("cost_center"),
 			}
 		)
+
+		for x in self.dimensions:
+			if row.get(x.fieldname):
+				payment_details[x.fieldname] = row.get(x.fieldname)
+
+		return payment_details
 
 	def check_mandatory_to_fetch(self):
 		for fieldname in ["company", "party_type", "party", "receivable_payable_account"]:
@@ -403,13 +584,21 @@ class PaymentReconciliation(Document):
 		if not self.get("payments"):
 			frappe.throw(_("No records found in the Payments table"))
 
-	def get_invoice_exchange_map(self, invoices):
+	def get_invoice_exchange_map(self, invoices, payments):
 		sales_invoices = [
 			d.get("invoice_number") for d in invoices if d.get("invoice_type") == "Sales Invoice"
 		]
+
+		sales_invoices.extend(
+			[d.get("reference_name") for d in payments if d.get("reference_type") == "Sales Invoice"]
+		)
 		purchase_invoices = [
 			d.get("invoice_number") for d in invoices if d.get("invoice_type") == "Purchase Invoice"
 		]
+		purchase_invoices.extend(
+			[d.get("reference_name") for d in payments if d.get("reference_type") == "Purchase Invoice"]
+		)
+
 		invoice_exchange_map = frappe._dict()
 
 		if sales_invoices:
@@ -435,6 +624,30 @@ class PaymentReconciliation(Document):
 			)
 
 			invoice_exchange_map.update(purchase_invoice_map)
+
+		journals = [d.get("invoice_number") for d in invoices if d.get("invoice_type") == "Journal Entry"]
+		journals.extend(
+			[d.get("reference_name") for d in payments if d.get("reference_type") == "Journal Entry"]
+		)
+		if journals:
+			journals = list(set(journals))
+			journals_map = frappe._dict(
+				frappe.db.get_all(
+					"Journal Entry Account",
+					filters={
+						"parent": ("in", journals),
+						"account": ("in", [self.receivable_payable_account]),
+						"party_type": self.party_type,
+						"party": self.party,
+					},
+					fields=[
+						"parent as `name`",
+						"exchange_rate",
+					],
+					as_list=1,
+				)
+			)
+			invoice_exchange_map.update(journals_map)
 
 		return invoice_exchange_map
 
@@ -469,6 +682,13 @@ class PaymentReconciliation(Document):
 		if not invoices_to_reconcile:
 			frappe.throw(_("No records found in Allocation table"))
 
+	def build_dimensions_filter_conditions(self):
+		ple = qb.DocType("Payment Ledger Entry")
+		for x in self.dimensions:
+			dimension = x.fieldname
+			if self.get(dimension):
+				self.accounting_dimension_filter_conditions.append(ple[dimension] == self.get(dimension))
+
 	def build_qb_filter_conditions(self, get_invoices=False, get_return_invoices=False):
 		self.common_filter_conditions.clear()
 		self.accounting_dimension_filter_conditions.clear()
@@ -492,40 +712,30 @@ class PaymentReconciliation(Document):
 			if self.to_payment_date:
 				self.ple_posting_date_filter.append(ple.posting_date.lte(self.to_payment_date))
 
-	def get_conditions(self, get_payments=False):
-		condition = " and company = '{0}' ".format(self.company)
+		self.build_dimensions_filter_conditions()
 
-		if self.get("cost_center") and get_payments:
-			condition = " and cost_center = '{0}' ".format(self.cost_center)
+	def get_journal_filter_conditions(self):
+		conditions = []
+		je = qb.DocType("Journal Entry")
+		qb.DocType("Journal Entry Account")
+		conditions.append(je.company == self.company)
 
-		condition += (
-			" and posting_date >= {0}".format(frappe.db.escape(self.from_payment_date))
-			if self.from_payment_date
-			else ""
-		)
-		condition += (
-			" and posting_date <= {0}".format(frappe.db.escape(self.to_payment_date))
-			if self.to_payment_date
-			else ""
-		)
+		if self.from_payment_date:
+			conditions.append(je.posting_date.gte(self.from_payment_date))
+
+		if self.to_payment_date:
+			conditions.append(je.posting_date.lte(self.to_payment_date))
 
 		if self.minimum_payment_amount:
-			condition += (
-				" and unallocated_amount >= {0}".format(flt(self.minimum_payment_amount))
-				if get_payments
-				else " and total_debit >= {0}".format(flt(self.minimum_payment_amount))
-			)
+			conditions.append(je.total_debit.gte(self.minimum_payment_amount))
+
 		if self.maximum_payment_amount:
-			condition += (
-				" and unallocated_amount <= {0}".format(flt(self.maximum_payment_amount))
-				if get_payments
-				else " and total_debit <= {0}".format(flt(self.maximum_payment_amount))
-			)
+			conditions.append(je.total_debit.lte(self.maximum_payment_amount))
 
-		return condition
+		return conditions
 
 
-def reconcile_dr_cr_note(dr_cr_notes, company):
+def reconcile_dr_cr_note(dr_cr_notes, company, active_dimensions=None):
 	for inv in dr_cr_notes:
 		voucher_type = "Credit Note" if inv.voucher_type == "Sales Invoice" else "Debit Note"
 
@@ -552,7 +762,9 @@ def reconcile_dr_cr_note(dr_cr_notes, company):
 						inv.dr_or_cr: abs(inv.allocated_amount),
 						"reference_type": inv.against_voucher_type,
 						"reference_name": inv.against_voucher,
-						"cost_center": erpnext.get_default_cost_center(company),
+						"cost_center": inv.cost_center or erpnext.get_default_cost_center(company),
+						"exchange_rate": inv.exchange_rate,
+						"user_remark": f"{fmt_money(flt(inv.allocated_amount), currency=company_currency)} against {inv.against_voucher}",
 					},
 					{
 						"account": inv.account,
@@ -565,10 +777,77 @@ def reconcile_dr_cr_note(dr_cr_notes, company):
 						),
 						"reference_type": inv.voucher_type,
 						"reference_name": inv.voucher_no,
-						"cost_center": erpnext.get_default_cost_center(company),
+						"cost_center": inv.cost_center or erpnext.get_default_cost_center(company),
+						"exchange_rate": inv.exchange_rate,
+						"user_remark": f"{fmt_money(flt(inv.allocated_amount), currency=company_currency)} from {inv.voucher_no}",
 					},
 				],
 			}
 		)
+
+		# Credit Note(JE) will inherit the same dimension values as payment
+		dimensions_dict = frappe._dict()
+		if active_dimensions:
+			for dim in active_dimensions:
+				dimensions_dict[dim.fieldname] = inv.get(dim.fieldname)
+
+		jv.accounts[0].update(dimensions_dict)
+		jv.accounts[1].update(dimensions_dict)
+
 		jv.flags.ignore_mandatory = True
+		jv.flags.ignore_exchange_rate = True
+		jv.remark = None
+		jv.flags.skip_remarks_creation = True
+		jv.is_system_generated = True
 		jv.submit()
+
+		if inv.difference_amount != 0:
+			# make gain/loss journal
+			if inv.party_type == "Customer":
+				dr_or_cr = "credit" if inv.difference_amount < 0 else "debit"
+			else:
+				dr_or_cr = "debit" if inv.difference_amount < 0 else "credit"
+
+			reverse_dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
+
+			create_gain_loss_journal(
+				company,
+				today(),
+				inv.party_type,
+				inv.party,
+				inv.account,
+				inv.difference_account,
+				inv.difference_amount,
+				dr_or_cr,
+				reverse_dr_or_cr,
+				inv.voucher_type,
+				inv.voucher_no,
+				None,
+				inv.against_voucher_type,
+				inv.against_voucher,
+				None,
+				inv.cost_center,
+				dimensions_dict,
+			)
+
+
+@erpnext.allow_regional
+def adjust_allocations_for_taxes(doc):
+	pass
+
+
+@frappe.whitelist()
+def get_queries_for_dimension_filters(company: str | None = None):
+	dimensions_with_filters = []
+	for d in get_dimensions()[0]:
+		filters = {}
+		meta = frappe.get_meta(d.document_type)
+		if meta.has_field("company") and company:
+			filters.update({"company": company})
+
+		if meta.is_tree:
+			filters.update({"is_group": 0})
+
+		dimensions_with_filters.append({"fieldname": d.fieldname, "filters": filters})
+
+	return dimensions_with_filters

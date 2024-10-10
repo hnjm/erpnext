@@ -8,6 +8,7 @@ from functools import reduce
 
 import frappe
 from frappe import _
+from frappe.desk.form.linked_with import get_linked_fields
 from frappe.model.document import Document
 from frappe.utils import cint, cstr
 from frappe.utils.csvutils import UnicodeWriter
@@ -23,11 +24,21 @@ from erpnext.accounts.doctype.account.chart_of_accounts.chart_of_accounts import
 
 
 class ChartofAccountsImporter(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		company: DF.Link | None
+		import_file: DF.Attach | None
+	# end: auto-generated types
+
 	def validate(self):
 		if self.import_file:
-			get_coa(
-				"Chart of Accounts Importer", "All Accounts", file_name=self.import_file, for_validate=1
-			)
+			get_coa("Chart of Accounts Importer", "All Accounts", file_name=self.import_file, for_validate=1)
 
 
 def validate_columns(data):
@@ -36,9 +47,11 @@ def validate_columns(data):
 
 	no_of_columns = max([len(d) for d in data])
 
-	if no_of_columns > 7:
+	if no_of_columns != 8:
 		frappe.throw(
-			_("More columns found than expected. Please compare the uploaded file with standard template"),
+			_(
+				"Columns are not according to template. Please compare the uploaded file with standard template"
+			),
 			title=(_("Wrong Template")),
 		)
 
@@ -103,7 +116,7 @@ def generate_data_from_csv(file_doc, as_dict=False):
 	file_path = file_doc.get_full_path()
 
 	data = []
-	with open(file_path, "r") as in_file:
+	with open(file_path) as in_file:
 		csv_reader = list(csv.reader(in_file))
 		headers = csv_reader[0]
 		del csv_reader[0]  # delete top row and headers row
@@ -112,7 +125,7 @@ def generate_data_from_csv(file_doc, as_dict=False):
 			if as_dict:
 				data.append({frappe.scrub(header): row[index] for index, header in enumerate(headers)})
 			else:
-				if not row[1]:
+				if not row[1] and len(row) > 1:
 					row[1] = row[0]
 					row[3] = row[2]
 				data.append(row)
@@ -202,10 +215,10 @@ def build_forest(data):
 		for row in data:
 			account_name, parent_account, account_number, parent_account_number = row[0:4]
 			if account_number:
-				account_name = "{} - {}".format(account_number, account_name)
+				account_name = f"{account_number} - {account_name}"
 			if parent_account_number:
 				parent_account_number = cstr(parent_account_number).strip()
-				parent_account = "{} - {}".format(parent_account_number, parent_account)
+				parent_account = f"{parent_account_number} - {parent_account}"
 
 			if parent_account == account_name == child:
 				return [parent_account]
@@ -217,7 +230,7 @@ def build_forest(data):
 							frappe.bold(parent_account)
 						)
 					)
-				return [child] + parent_account_list
+				return [child, *parent_account_list]
 
 	charts_map, paths = {}, []
 
@@ -233,15 +246,16 @@ def build_forest(data):
 			is_group,
 			account_type,
 			root_type,
+			account_currency,
 		) = i
 
 		if not account_name:
-			error_messages.append("Row {0}: Please enter Account Name".format(line_no))
+			error_messages.append(f"Row {line_no}: Please enter Account Name")
 
 		name = account_name
 		if account_number:
 			account_number = cstr(account_number).strip()
-			account_name = "{} - {}".format(account_number, account_name)
+			account_name = f"{account_number} - {account_name}"
 
 		charts_map[account_name] = {}
 		charts_map[account_name]["account_name"] = name
@@ -253,6 +267,8 @@ def build_forest(data):
 			charts_map[account_name]["account_type"] = account_type
 		if root_type:
 			charts_map[account_name]["root_type"] = root_type
+		if account_currency:
+			charts_map[account_name]["account_currency"] = account_currency
 		path = return_parent(data, account_name)[::-1]
 		paths.append(path)  # List of path is created
 		line_no += 1
@@ -291,10 +307,8 @@ def build_response_as_excel(writer):
 
 
 @frappe.whitelist()
-def download_template(file_type, template_type):
-	data = frappe._dict(frappe.local.form_dict)
-
-	writer = get_template(template_type)
+def download_template(file_type, template_type, company):
+	writer = get_template(template_type, company)
 
 	if file_type == "CSV":
 		# download csv file
@@ -305,8 +319,7 @@ def download_template(file_type, template_type):
 		build_response_as_excel(writer)
 
 
-def get_template(template_type):
-
+def get_template(template_type, company):
 	fields = [
 		"Account Name",
 		"Parent Account",
@@ -315,50 +328,34 @@ def get_template(template_type):
 		"Is Group",
 		"Account Type",
 		"Root Type",
+		"Account Currency",
 	]
 	writer = UnicodeWriter()
 	writer.writerow(fields)
 
 	if template_type == "Blank Template":
 		for root_type in get_root_types():
-			writer.writerow(["", "", "", 1, "", root_type])
+			writer.writerow(["", "", "", "", 1, "", root_type])
 
 		for account in get_mandatory_group_accounts():
-			writer.writerow(["", "", "", 1, account, "Asset"])
+			writer.writerow(["", "", "", "", 1, account, "Asset"])
 
 		for account_type in get_mandatory_account_types():
 			writer.writerow(
-				["", "", "", 0, account_type.get("account_type"), account_type.get("root_type")]
+				["", "", "", "", 0, account_type.get("account_type"), account_type.get("root_type")]
 			)
 	else:
-		writer = get_sample_template(writer)
+		writer = get_sample_template(writer, company)
 
 	return writer
 
 
-def get_sample_template(writer):
-	template = [
-		["Application Of Funds(Assets)", "", "", "", 1, "", "Asset"],
-		["Sources Of Funds(Liabilities)", "", "", "", 1, "", "Liability"],
-		["Equity", "", "", "", 1, "", "Equity"],
-		["Expenses", "", "", "", 1, "", "Expense"],
-		["Income", "", "", "", 1, "", "Income"],
-		["Bank Accounts", "Application Of Funds(Assets)", "", "", 1, "Bank", "Asset"],
-		["Cash In Hand", "Application Of Funds(Assets)", "", "", 1, "Cash", "Asset"],
-		["Stock Assets", "Application Of Funds(Assets)", "", "", 1, "Stock", "Asset"],
-		["Cost Of Goods Sold", "Expenses", "", "", 0, "Cost of Goods Sold", "Expense"],
-		["Asset Depreciation", "Expenses", "", "", 0, "Depreciation", "Expense"],
-		["Fixed Assets", "Application Of Funds(Assets)", "", "", 0, "Fixed Asset", "Asset"],
-		["Accounts Payable", "Sources Of Funds(Liabilities)", "", "", 0, "Payable", "Liability"],
-		["Accounts Receivable", "Application Of Funds(Assets)", "", "", 1, "Receivable", "Asset"],
-		["Stock Expenses", "Expenses", "", "", 0, "Stock Adjustment", "Expense"],
-		["Sample Bank", "Bank Accounts", "", "", 0, "Bank", "Asset"],
-		["Cash", "Cash In Hand", "", "", 0, "Cash", "Asset"],
-		["Stores", "Stock Assets", "", "", 0, "Stock", "Asset"],
-	]
-
-	for row in template:
-		writer.writerow(row)
+def get_sample_template(writer, company):
+	currency = frappe.db.get_value("Company", company, "default_currency")
+	with open(os.path.join(os.path.dirname(__file__), "coa_sample_template.csv")) as f:
+		for row in f:
+			row = [*row.strip().split(","), currency]
+			writer.writerow(row)
 
 	return writer
 
@@ -449,14 +446,11 @@ def get_mandatory_account_types():
 
 
 def unset_existing_data(company):
-	linked = frappe.db.sql(
-		'''select fieldname from tabDocField
-		where fieldtype="Link" and options="Account" and parent="Company"''',
-		as_dict=True,
-	)
-
 	# remove accounts data from company
-	update_values = {d.fieldname: "" for d in linked}
+
+	fieldnames = get_linked_fields("Account").get("Company", {}).get("fieldname", [])
+	linked = [{"fieldname": name} for name in fieldnames]
+	update_values = {d.get("fieldname"): "" for d in linked}
 	frappe.db.set_value("Company", company, update_values, update_values)
 
 	# remove accounts data from various doctypes
@@ -469,7 +463,7 @@ def unset_existing_data(company):
 		"Purchase Taxes and Charges Template",
 	]:
 		frappe.db.sql(
-			'''delete from `tab{0}` where `company`="%s"'''.format(doctype) % (company)  # nosec
+			f'''delete from `tab{doctype}` where `company`="%s"''' % (company)  # nosec
 		)
 
 

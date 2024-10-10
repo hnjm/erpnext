@@ -2,7 +2,7 @@
 # See license.txt
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 
 from erpnext.accounts.doctype.accounting_dimension.test_accounting_dimension import (
 	create_dimension,
@@ -15,7 +15,16 @@ from erpnext.accounts.doctype.opening_invoice_creation_tool.opening_invoice_crea
 test_dependencies = ["Customer", "Supplier", "Accounting Dimension"]
 
 
-class TestOpeningInvoiceCreationTool(FrappeTestCase):
+class UnitTestOpeningInvoiceCreationTool(UnitTestCase):
+	"""
+	Unit tests for OpeningInvoiceCreationTool.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestOpeningInvoiceCreationTool(IntegrationTestCase):
 	@classmethod
 	def setUpClass(self):
 		if not frappe.db.exists("Company", "_Test Opening Invoice Company"):
@@ -83,9 +92,7 @@ class TestOpeningInvoiceCreationTool(FrappeTestCase):
 		company = "_Test Opening Invoice Company"
 		party_1, party_2 = make_customer("Customer A"), make_customer("Customer B")
 
-		old_default_receivable_account = frappe.db.get_value(
-			"Company", company, "default_receivable_account"
-		)
+		old_default_receivable_account = frappe.db.get_value("Company", company, "default_receivable_account")
 		frappe.db.set_value("Company", company, "default_receivable_account", "")
 
 		if not frappe.db.exists("Cost Center", "_Test Opening Invoice Company - _TOIC"):
@@ -121,9 +128,7 @@ class TestOpeningInvoiceCreationTool(FrappeTestCase):
 		self.assertTrue(error_log)
 
 		# teardown
-		frappe.db.set_value(
-			"Company", company, "default_receivable_account", old_default_receivable_account
-		)
+		frappe.db.set_value("Company", company, "default_receivable_account", old_default_receivable_account)
 
 	def test_renaming_of_invoice_using_invoice_number_field(self):
 		company = "_Test Opening Invoice Company"
@@ -169,7 +174,7 @@ def get_opening_invoice_creation_dict(**args):
 				{
 					"qty": 1.0,
 					"outstanding_amount": 300,
-					"party": args.get("party_1") or "_Test {0}".format(party),
+					"party": args.get("party_1") or f"_Test {party}",
 					"item_name": "Opening Item",
 					"due_date": "2016-09-10",
 					"posting_date": "2016-09-05",
@@ -179,7 +184,7 @@ def get_opening_invoice_creation_dict(**args):
 				{
 					"qty": 2.0,
 					"outstanding_amount": 250,
-					"party": args.get("party_2") or "_Test {0} 1".format(party),
+					"party": args.get("party_2") or f"_Test {party} 1",
 					"item_name": "Opening Item",
 					"due_date": "2016-09-10",
 					"posting_date": "2016-09-05",
@@ -218,6 +223,7 @@ def make_customer(customer=None):
 			"territory": "All Territories",
 		}
 	)
+
 	if not frappe.db.exists("Customer", customer_name):
 		customer.insert(ignore_permissions=True)
 		return customer.name

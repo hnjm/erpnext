@@ -1,12 +1,12 @@
 {
  "actions": [],
- "allow_workflow": 1,
  "creation": "2020-08-03 16:35:21.852178",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
   "customer",
+  "customer_name",
   "billing_email",
   "primary_email"
  ],
@@ -27,21 +27,29 @@
   },
   {
    "fieldname": "billing_email",
-   "fieldtype": "Read Only",
+   "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Billing Email"
+  },
+  {
+   "fetch_from": "customer.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "label": "Customer Name",
+   "read_only": 1
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2020-08-03 22:55:38.875601",
+ "modified": "2024-03-27 13:10:19.335889",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Process Statement Of Accounts Customer",
  "owner": "Administrator",
  "permissions": [],
  "quick_entry": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

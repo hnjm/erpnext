@@ -6,7 +6,7 @@ import frappe
 from frappe import _, scrub
 from frappe.model.document import Document
 from frappe.utils import flt, nowdate
-from frappe.utils.background_jobs import enqueue, is_job_queued
+from frappe.utils.background_jobs import enqueue, is_job_enqueued
 
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_accounting_dimensions,
@@ -14,6 +14,25 @@ from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
 
 
 class OpeningInvoiceCreationTool(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.opening_invoice_creation_tool_item.opening_invoice_creation_tool_item import (
+			OpeningInvoiceCreationToolItem,
+		)
+
+		company: DF.Link
+		cost_center: DF.Link | None
+		create_missing_party: DF.Check
+		invoice_type: DF.Literal["Sales", "Purchase"]
+		invoices: DF.Table[OpeningInvoiceCreationToolItem]
+	# end: auto-generated types
+
 	def onload(self):
 		"""Load the Opening Invoice summary"""
 		summary, max_count = self.get_opening_invoice_summary()
@@ -153,7 +172,7 @@ class OpeningInvoiceCreationTool(Document):
 			income_expense_account_field = (
 				"income_account" if row.party_type == "Customer" else "expense_account"
 			)
-			default_uom = frappe.db.get_single_value("Stock Settings", "stock_uom") or _("Nos")
+			default_uom = frappe.db.get_single_value("Stock Settings", "stock_uom") or "Nos"
 			rate = flt(row.outstanding_amount) / flt(row.qty)
 
 			item_dict = frappe._dict(
@@ -212,13 +231,15 @@ class OpeningInvoiceCreationTool(Document):
 			if is_scheduler_inactive() and not frappe.flags.in_test:
 				frappe.throw(_("Scheduler is inactive. Cannot import data."), title=_("Scheduler Inactive"))
 
-			if not is_job_queued(self.name):
+			job_id = f"opening_invoice::{self.name}"
+
+			if not is_job_enqueued(job_id):
 				enqueue(
 					start_import,
 					queue="default",
 					timeout=6000,
 					event="opening_invoice_creation",
-					job_name=self.name,
+					job_id=job_id,
 					invoices=invoices,
 					now=frappe.conf.developer_mode or frappe.flags.in_test,
 				)
@@ -249,7 +270,7 @@ def start_import(invoices):
 				errors, "<a href='/app/List/Error Log' class='variant-click'>Error Log</a>"
 			),
 			indicator="red",
-			title=_("Error Occured"),
+			title=_("Error Occurred"),
 		)
 	return names
 

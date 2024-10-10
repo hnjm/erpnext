@@ -78,7 +78,9 @@
   "salary_mode",
   "bank_details_section",
   "bank_name",
+  "column_break_heye",
   "bank_ac_no",
+  "iban",
   "personal_details",
   "marital_status",
   "family_background",
@@ -439,13 +441,13 @@
   {
    "fieldname": "prefered_contact_email",
    "fieldtype": "Select",
-   "label": "Prefered Contact Email",
+   "label": "Preferred Contact Email",
    "options": "\nCompany Email\nPersonal Email\nUser ID"
   },
   {
    "fieldname": "prefered_email",
    "fieldtype": "Data",
-   "label": "Prefered Email",
+   "label": "Preferred Email",
    "options": "Email",
    "read_only": 1
   },
@@ -522,7 +524,7 @@
   {
    "fieldname": "valid_upto",
    "fieldtype": "Date",
-   "label": "Valid Upto"
+   "label": "Valid Up To"
   },
   {
    "fieldname": "place_of_issue",
@@ -615,6 +617,7 @@
    "fieldtype": "Date",
    "label": "Relieving Date",
    "mandatory_depends_on": "eval:doc.status == \"Left\"",
+   "no_copy": 1,
    "oldfieldname": "relieving_date",
    "oldfieldtype": "Date"
   },
@@ -804,18 +807,29 @@
   {
    "fieldname": "column_break_104",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_heye",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.salary_mode == 'Bank'",
+   "fieldname": "iban",
+   "fieldtype": "Data",
+   "label": "IBAN"
   }
  ],
  "icon": "fa fa-user",
  "idx": 24,
  "image_field": "image",
+ "is_tree": 1,
  "links": [],
- "modified": "2022-09-13 10:27:14.579197",
+ "modified": "2024-03-27 13:09:36.900706",
  "modified_by": "Administrator",
  "module": "Setup",
  "name": "Employee",
- "name_case": "Title Case",
  "naming_rule": "By \"Naming Series\" field",
+ "nsm_parent_field": "reports_to",
  "owner": "Administrator",
  "permissions": [
   {
@@ -848,14 +862,13 @@
    "read": 1,
    "report": 1,
    "role": "HR Manager",
-   "set_user_permissions": 1,
    "share": 1,
    "write": 1
   }
  ],
  "search_fields": "employee_name",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "title_field": "employee_name"

@@ -20,8 +20,33 @@ INVALID_VALUES = ("", None)
 
 
 class BankStatementImport(DataImport):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		bank: DF.Link | None
+		bank_account: DF.Link
+		company: DF.Link
+		custom_delimiters: DF.Check
+		delimiter_options: DF.Data | None
+		google_sheets_url: DF.Data | None
+		import_file: DF.Attach | None
+		import_type: DF.Literal["", "Insert New Records", "Update Existing Records"]
+		mute_emails: DF.Check
+		reference_doctype: DF.Link
+		show_failed_logs: DF.Check
+		status: DF.Literal["Pending", "Success", "Partial Success", "Error"]
+		submit_after_import: DF.Check
+		template_options: DF.Code | None
+		template_warnings: DF.Code | None
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
-		super(BankStatementImport, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 
 	def validate(self):
 		doc_before_save = self.get_doc_before_save()
@@ -30,7 +55,6 @@ class BankStatementImport(DataImport):
 			or (doc_before_save and doc_before_save.import_file != self.import_file)
 			or (doc_before_save and doc_before_save.google_sheets_url != self.google_sheets_url)
 		):
-
 			template_options_dict = {}
 			column_to_field_map = {}
 			bank = frappe.get_doc("Bank", self.bank)
@@ -45,7 +69,6 @@ class BankStatementImport(DataImport):
 		self.validate_google_sheets_url()
 
 	def start_import(self):
-
 		preview = frappe.get_doc("Bank Statement Import", self.name).get_preview_from_template(
 			self.import_file, self.google_sheets_url
 		)
@@ -53,26 +76,28 @@ class BankStatementImport(DataImport):
 		if "Bank Account" not in json.dumps(preview["columns"]):
 			frappe.throw(_("Please add the Bank Account column"))
 
-		from frappe.utils.background_jobs import is_job_queued
+		from frappe.utils.background_jobs import is_job_enqueued
 		from frappe.utils.scheduler import is_scheduler_inactive
 
-		if is_scheduler_inactive() and not frappe.flags.in_test:
+		run_now = frappe.flags.in_test or frappe.conf.developer_mode
+		if is_scheduler_inactive() and not run_now:
 			frappe.throw(_("Scheduler is inactive. Cannot import data."), title=_("Scheduler Inactive"))
 
-		if not is_job_queued(self.name):
+		job_id = f"bank_statement_import::{self.name}"
+		if not is_job_enqueued(job_id):
 			enqueue(
 				start_import,
 				queue="default",
 				timeout=6000,
 				event="data_import",
-				job_name=self.name,
+				job_id=job_id,
 				data_import=self.name,
 				bank_account=self.bank_account,
 				import_file_path=self.import_file,
 				google_sheets_url=self.google_sheets_url,
 				bank=self.bank,
 				template_options=self.template_options,
-				now=frappe.conf.developer_mode or frappe.flags.in_test,
+				now=run_now,
 			)
 			return True
 
@@ -97,10 +122,15 @@ def download_errored_template(data_import_name):
 	data_import.export_errored_rows()
 
 
+@frappe.whitelist()
+def download_import_log(data_import_name):
+	return frappe.get_doc("Bank Statement Import", data_import_name).download_import_log()
+
+
 def parse_data_from_template(raw_data):
 	data = []
 
-	for i, row in enumerate(raw_data):
+	for _i, row in enumerate(raw_data):
 		if all(v in INVALID_VALUES for v in row):
 			# empty row
 			continue
@@ -110,9 +140,7 @@ def parse_data_from_template(raw_data):
 	return data
 
 
-def start_import(
-	data_import, bank_account, import_file_path, google_sheets_url, bank, template_options
-):
+def start_import(data_import, bank_account, import_file_path, google_sheets_url, bank, template_options):
 	"""This method runs in background job"""
 
 	update_mapping_db(bank, template_options)
@@ -123,6 +151,9 @@ def start_import(
 	import_file = ImportFile("Bank Transaction", file=file, import_type="Insert New Records")
 
 	data = parse_data_from_template(import_file.raw_data)
+	# Importer expects 'Data Import' class, which has 'payload_count' attribute
+	if not data_import.get("payload_count"):
+		data_import.payload_count = len(data) - 1
 
 	if import_file_path:
 		add_bank_account(data, bank_account)
@@ -215,6 +246,47 @@ def write_xlsx(data, sheet_name, wb=None, column_widths=None, file_path=None):
 
 	wb.save(file_path)
 	return True
+
+
+@frappe.whitelist()
+def get_import_status(docname):
+	import_status = {}
+
+	data_import = frappe.get_doc("Bank Statement Import", docname)
+	import_status["status"] = data_import.status
+
+	logs = frappe.get_all(
+		"Data Import Log",
+		fields=["count(*) as count", "success"],
+		filters={"data_import": docname},
+		group_by="success",
+	)
+
+	total_payload_count = 0
+
+	for log in logs:
+		total_payload_count += log.get("count", 0)
+		if log.get("success"):
+			import_status["success"] = log.get("count")
+		else:
+			import_status["failed"] = log.get("count")
+
+	import_status["total_records"] = total_payload_count
+
+	return import_status
+
+
+@frappe.whitelist()
+def get_import_logs(docname: str):
+	frappe.has_permission("Bank Statement Import")
+
+	return frappe.get_all(
+		"Data Import Log",
+		fields=["success", "docname", "messages", "exception", "row_indexes"],
+		filters={"data_import": docname},
+		limit_page_length=5000,
+		order_by="log_index",
+	)
 
 
 @frappe.whitelist()

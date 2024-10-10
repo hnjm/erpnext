@@ -35,8 +35,12 @@ def get_data(filters):
 			sq_item.parent,
 			sq_item.item_code,
 			sq_item.qty,
+			sq.currency,
 			sq_item.stock_qty,
 			sq_item.amount,
+			sq_item.base_rate,
+			sq_item.base_amount,
+			sq.price_list_currency,
 			sq_item.uom,
 			sq_item.stock_uom,
 			sq_item.request_for_quotation,
@@ -78,18 +82,14 @@ def prepare_data(supplier_quotation_data, filters):
 	group_wise_map = defaultdict(list)
 	supplier_qty_price_map = {}
 
-	group_by_field = (
-		"supplier_name" if filters.get("group_by") == "Group by Supplier" else "item_code"
-	)
+	group_by_field = "supplier_name" if filters.get("group_by") == "Group by Supplier" else "item_code"
 	company_currency = frappe.db.get_default("currency")
 	float_precision = cint(frappe.db.get_default("float_precision")) or 2
 
 	for data in supplier_quotation_data:
 		group = data.get(group_by_field)  # get item or supplier value for this row
 
-		supplier_currency = frappe.db.get_value(
-			"Supplier", data.get("supplier_name"), "default_currency"
-		)
+		supplier_currency = frappe.db.get_value("Supplier", data.get("supplier_name"), "default_currency")
 
 		if supplier_currency:
 			exchange_rate = get_exchange_rate(supplier_currency, company_currency)
@@ -105,7 +105,11 @@ def prepare_data(supplier_quotation_data, filters):
 			"qty": data.get("qty"),
 			"price": flt(data.get("amount") * exchange_rate, float_precision),
 			"uom": data.get("uom"),
+			"price_list_currency": data.get("price_list_currency"),
+			"currency": data.get("currency"),
 			"stock_uom": data.get("stock_uom"),
+			"base_amount": flt(data.get("base_amount"), float_precision),
+			"base_rate": flt(data.get("base_rate"), float_precision),
 			"request_for_quotation": data.get("request_for_quotation"),
 			"valid_till": data.get("valid_till"),
 			"lead_time_days": data.get("lead_time_days"),
@@ -118,7 +122,7 @@ def prepare_data(supplier_quotation_data, filters):
 		# map for chart preparation of the form {'supplier1': {'qty': 'price'}}
 		supplier = data.get("supplier_name")
 		if filters.get("item_code"):
-			if not supplier in supplier_qty_price_map:
+			if supplier not in supplier_qty_price_map:
 				supplier_qty_price_map[supplier] = {}
 			supplier_qty_price_map[supplier][row["qty"]] = row["price"]
 
@@ -161,7 +165,7 @@ def prepare_chart_data(suppliers, qty_list, supplier_qty_price_map):
 	for supplier in suppliers:
 		entry = supplier_qty_price_map[supplier]
 		for qty in qty_list:
-			if not qty in data_points_map:
+			if qty not in data_points_map:
 				data_points_map[qty] = []
 			if qty in entry:
 				data_points_map[qty].append(entry[qty])
@@ -183,6 +187,8 @@ def prepare_chart_data(suppliers, qty_list, supplier_qty_price_map):
 
 
 def get_columns(filters):
+	currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
+
 	group_by_columns = [
 		{
 			"fieldname": "supplier_name",
@@ -204,10 +210,17 @@ def get_columns(filters):
 		{"fieldname": "uom", "label": _("UOM"), "fieldtype": "Link", "options": "UOM", "width": 90},
 		{"fieldname": "qty", "label": _("Quantity"), "fieldtype": "Float", "width": 80},
 		{
+			"fieldname": "currency",
+			"label": _("Currency"),
+			"fieldtype": "Link",
+			"options": "Currency",
+			"width": 110,
+		},
+		{
 			"fieldname": "price",
 			"label": _("Price"),
 			"fieldtype": "Currency",
-			"options": "Company:company:default_currency",
+			"options": "currency",
 			"width": 110,
 		},
 		{
@@ -221,8 +234,22 @@ def get_columns(filters):
 			"fieldname": "price_per_unit",
 			"label": _("Price per Unit (Stock UOM)"),
 			"fieldtype": "Currency",
-			"options": "Company:company:default_currency",
+			"options": "currency",
 			"width": 120,
+		},
+		{
+			"fieldname": "base_amount",
+			"label": _("Price ({0})").format(currency),
+			"fieldtype": "Currency",
+			"options": "price_list_currency",
+			"width": 180,
+		},
+		{
+			"fieldname": "base_rate",
+			"label": _("Price Per Unit ({0})").format(currency),
+			"fieldtype": "Currency",
+			"options": "price_list_currency",
+			"width": 180,
 		},
 		{
 			"fieldname": "quotation",
@@ -265,3 +292,13 @@ def get_message():
 		<span class="indicator red">
 		Expires today / Already Expired
 		</span>"""
+
+
+@frappe.whitelist()
+def set_default_supplier(item_code, supplier, company):
+	frappe.db.set_value(
+		"Item Default",
+		{"parent": item_code, "company": company},
+		"default_supplier",
+		supplier,
+	)

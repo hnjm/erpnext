@@ -62,11 +62,11 @@
    "fieldtype": "Column Break"
   },
   {
-   "fetch_from": "process_owner.full_name",
+   "fetch_from": "procedure.process_owner_full_name",
    "fieldname": "full_name",
    "fieldtype": "Data",
-   "hidden": 1,
-   "label": "Full Name"
+   "label": "Full Name",
+   "read_only": 1
   },
   {
    "fieldname": "corrective_action",
@@ -81,7 +81,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2021-02-26 15:27:47.247814",
+ "modified": "2024-03-27 13:10:06.304357",
  "modified_by": "Administrator",
  "module": "Quality Management",
  "name": "Non Conformance",
@@ -112,7 +112,8 @@
    "write": 1
   }
  ],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

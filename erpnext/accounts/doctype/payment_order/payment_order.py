@@ -11,6 +11,30 @@ from erpnext.accounts.party import get_party_account
 
 
 class PaymentOrder(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.payment_order_reference.payment_order_reference import (
+			PaymentOrderReference,
+		)
+
+		account: DF.Data | None
+		amended_from: DF.Link | None
+		company: DF.Link
+		company_bank: DF.Link | None
+		company_bank_account: DF.Link
+		naming_series: DF.Literal["PMO-"]
+		party: DF.Link | None
+		payment_order_type: DF.Literal["", "Payment Request", "Payment Entry"]
+		posting_date: DF.Date | None
+		references: DF.Table[PaymentOrderReference]
+	# end: auto-generated types
+
 	def on_submit(self):
 		self.update_payment_status()
 
@@ -66,9 +90,7 @@ def make_journal_entry(doc, supplier, mode_of_payment=None):
 	je = frappe.new_doc("Journal Entry")
 	je.payment_order = doc.name
 	je.posting_date = nowdate()
-	mode_of_payment_type = frappe._dict(
-		frappe.get_all("Mode of Payment", fields=["name", "type"], as_list=1)
-	)
+	mode_of_payment_type = frappe._dict(frappe.get_all("Mode of Payment", fields=["name", "type"], as_list=1))
 
 	je.voucher_type = "Bank Entry"
 	if mode_of_payment and mode_of_payment_type.get(mode_of_payment) == "Cash":

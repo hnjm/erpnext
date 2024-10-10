@@ -9,15 +9,14 @@
   "production_item_tab",
   "item",
   "company",
-  "item_name",
   "uom",
+  "quantity",
   "cb0",
   "is_active",
   "is_default",
   "allow_alternative_item",
   "set_rate_of_sub_assembly_item_based_on_bom",
   "project",
-  "quantity",
   "image",
   "currency_detail",
   "rm_cost_as_per",
@@ -27,13 +26,16 @@
   "column_break_ivyw",
   "currency",
   "conversion_rate",
-  "section_break_21",
   "operations_section_section",
   "with_operations",
+  "track_semi_finished_goods",
   "column_break_23",
   "transfer_material_against",
   "routing",
   "fg_based_operating_cost",
+  "column_break_joxb",
+  "default_source_warehouse",
+  "default_target_warehouse",
   "fg_based_section_section",
   "operating_cost_per_bom_quantity",
   "operations_section",
@@ -59,8 +61,9 @@
   "total_cost",
   "base_total_cost",
   "more_info_tab",
-  "description",
+  "item_name",
   "column_break_27",
+  "description",
   "has_variants",
   "quality_inspection_section_break",
   "inspection_required",
@@ -78,6 +81,10 @@
   "show_items",
   "show_operations",
   "web_long_description",
+  "reference_section",
+  "bom_creator",
+  "bom_creator_item",
+  "column_break_oxbz",
   "amended_from",
   "connections_tab"
  ],
@@ -192,6 +199,7 @@
    "options": "Quality Inspection Template"
   },
   {
+   "collapsible": 1,
    "fieldname": "currency_detail",
    "fieldtype": "Section Break",
    "label": "Cost Configuration"
@@ -206,13 +214,14 @@
   },
   {
    "default": "Work Order",
-   "depends_on": "with_operations",
+   "depends_on": "eval: doc.with_operations === 1 && doc.track_semi_finished_goods === 0",
    "fieldname": "transfer_material_against",
    "fieldtype": "Select",
    "label": "Transfer Material Against",
    "options": "\nWork Order\nJob Card"
   },
   {
+   "default": "1",
    "fieldname": "conversion_rate",
    "fieldtype": "Float",
    "label": "Conversion Rate",
@@ -289,7 +298,7 @@
   {
    "fieldname": "scrap_items",
    "fieldtype": "Table",
-   "label": "Items",
+   "label": "Scrap Items",
    "options": "BOM Scrap Item"
   },
   {
@@ -400,8 +409,8 @@
   {
    "depends_on": "eval:!doc.__islocal",
    "fieldname": "section_break0",
-   "fieldtype": "Section Break",
-   "label": "Materials Required (Exploded)"
+   "fieldtype": "Tab Break",
+   "label": "Exploded Items"
   },
   {
    "fieldname": "exploded_items",
@@ -417,7 +426,7 @@
   {
    "collapsible": 1,
    "fieldname": "website_section",
-   "fieldtype": "Section Break",
+   "fieldtype": "Tab Break",
    "label": "Website"
   },
   {
@@ -480,11 +489,6 @@
    "label": "Show Operations"
   },
   {
-   "fieldname": "section_break_21",
-   "fieldtype": "Tab Break",
-   "label": "Operations & Materials"
-  },
-  {
    "fieldname": "column_break_23",
    "fieldtype": "Column Break"
   },
@@ -528,6 +532,8 @@
    "show_dashboard": 1
   },
   {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.with_operations",
    "fieldname": "operations_section_section",
    "fieldtype": "Section Break",
    "label": "Operations"
@@ -585,19 +591,71 @@
    "default": "0",
    "fieldname": "fg_based_operating_cost",
    "fieldtype": "Check",
-   "label": "FG based Operating Cost"
+   "label": "Finished Goods based Operating Cost"
   },
   {
    "depends_on": "fg_based_operating_cost",
    "fieldname": "fg_based_section_section",
    "fieldtype": "Section Break",
-   "label": "FG Based Operating Cost Section"
+   "label": "Finished Goods Based Operating Cost"
   },
   {
    "depends_on": "fg_based_operating_cost",
    "fieldname": "operating_cost_per_bom_quantity",
    "fieldtype": "Currency",
    "label": "Operating Cost Per BOM Quantity"
+  },
+  {
+   "fieldname": "reference_section",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "bom_creator",
+   "fieldtype": "Link",
+   "label": "BOM Creator",
+   "no_copy": 1,
+   "options": "BOM Creator",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "bom_creator_item",
+   "fieldtype": "Data",
+   "label": "BOM Creator Item",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_oxbz",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "depends_on": "with_operations",
+   "description": "Users can consume raw materials and add semi-finished goods or final finished goods against the operation using job cards.",
+   "fieldname": "track_semi_finished_goods",
+   "fieldtype": "Check",
+   "label": "Track Semi Finished Goods"
+  },
+  {
+   "fieldname": "column_break_joxb",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "default_source_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Source Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "default_target_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Target Warehouse",
+   "options": "Warehouse"
   }
  ],
  "icon": "fa fa-sitemap",
@@ -605,7 +663,7 @@
  "image_field": "image",
  "is_submittable": 1,
  "links": [],
- "modified": "2023-01-10 07:47:08.652616",
+ "modified": "2024-06-03 16:24:47.518411",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "BOM",
@@ -640,7 +698,7 @@
  ],
  "search_fields": "item, item_name",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

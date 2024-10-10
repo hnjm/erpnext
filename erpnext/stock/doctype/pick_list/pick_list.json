@@ -16,7 +16,10 @@
   "for_qty",
   "column_break_4",
   "parent_warehouse",
+  "consider_rejected_warehouses",
   "get_item_locations",
+  "pick_manually",
+  "ignore_pricing_rule",
   "section_break_6",
   "scan_barcode",
   "column_break_13",
@@ -26,7 +29,8 @@
   "locations",
   "amended_from",
   "print_settings_section",
-  "group_same_items"
+  "group_same_items",
+  "status"
  ],
  "fields": [
   {
@@ -50,7 +54,7 @@
    "description": "Items under this warehouse will be suggested",
    "fieldname": "parent_warehouse",
    "fieldtype": "Link",
-   "label": "Parent Warehouse",
+   "label": "Warehouse",
    "options": "Warehouse"
   },
   {
@@ -168,11 +172,47 @@
    "fieldtype": "Data",
    "label": "Customer Name",
    "read_only": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "no_copy": 1,
+   "options": "Draft\nOpen\nCompleted\nCancelled",
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "description": "Enable it if users want to consider rejected materials to dispatch.",
+   "fieldname": "consider_rejected_warehouses",
+   "fieldtype": "Check",
+   "label": "Consider Rejected Warehouses"
+  },
+  {
+   "default": "0",
+   "description": "If enabled then system won't override the picked qty / batches / serial numbers.",
+   "fieldname": "pick_manually",
+   "fieldtype": "Check",
+   "label": "Pick Manually"
+  },
+  {
+   "default": "0",
+   "description": "If enabled then system won't apply the pricing rule on the delivery note which will be create from the pick list",
+   "fieldname": "ignore_pricing_rule",
+   "fieldtype": "Check",
+   "label": "Ignore Pricing Rule"
   }
  ],
  "is_submittable": 1,
  "links": [],
- "modified": "2022-07-19 11:03:04.442174",
+ "modified": "2024-08-14 13:20:42.168827",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Pick List",

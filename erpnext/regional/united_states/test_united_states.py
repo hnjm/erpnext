@@ -1,16 +1,15 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
-
 import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 from erpnext.regional.report.irs_1099.irs_1099 import execute as execute_1099_report
 
 
-class TestUnitedStates(unittest.TestCase):
+class TestUnitedStates(IntegrationTestCase):
 	def test_irs_1099_custom_field(self):
-
 		if not frappe.db.exists("Supplier", "_US 1099 Test Supplier"):
 			doc = frappe.new_doc("Supplier")
 			doc.supplier_name = "_US 1099 Test Supplier"
@@ -38,7 +37,6 @@ class TestUnitedStates(unittest.TestCase):
 
 
 def make_payment_entry_to_irs_1099_supplier():
-
 	frappe.db.sql("delete from `tabGL Entry` where party='_US 1099 Test Supplier'")
 	frappe.db.sql("delete from `tabGL Entry` where against='_US 1099 Test Supplier'")
 	frappe.db.sql("delete from `tabPayment Entry` where party='_US 1099 Test Supplier'")

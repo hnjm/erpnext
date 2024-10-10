@@ -1,23 +1,22 @@
 {
  "actions": [],
  "allow_import": 1,
- "creation": "2013-03-07 18:50:32",
+ "creation": "2023-05-29 13:02:17.121296",
  "description": "A logical Warehouse against which stock entries are made.",
  "doctype": "DocType",
  "document_type": "Setup",
  "engine": "InnoDB",
  "field_order": [
   "warehouse_detail",
+  "disabled",
   "warehouse_name",
   "column_break_3",
-  "warehouse_type",
-  "parent_warehouse",
-  "default_in_transit_warehouse",
   "is_group",
+  "parent_warehouse",
+  "is_rejected_warehouse",
   "column_break_4",
   "account",
   "company",
-  "disabled",
   "address_and_contact",
   "address_html",
   "column_break_10",
@@ -32,6 +31,10 @@
   "city",
   "state",
   "pin",
+  "transit_section",
+  "warehouse_type",
+  "column_break_qajx",
+  "default_in_transit_warehouse",
   "tree_details",
   "lft",
   "rgt",
@@ -58,7 +61,7 @@
    "fieldname": "is_group",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Is Group"
+   "label": "Is Group Warehouse"
   },
   {
    "fieldname": "company",
@@ -78,7 +81,7 @@
    "default": "0",
    "fieldname": "disabled",
    "fieldtype": "Check",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "Disabled"
   },
   {
@@ -164,7 +167,6 @@
   {
    "fieldname": "city",
    "fieldtype": "Data",
-   "in_list_view": 1,
    "label": "City",
    "oldfieldname": "city",
    "oldfieldtype": "Data"
@@ -238,13 +240,30 @@
    "fieldtype": "Link",
    "label": "Default In-Transit Warehouse",
    "options": "Warehouse"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "transit_section",
+   "fieldtype": "Section Break",
+   "label": "Transit"
+  },
+  {
+   "fieldname": "column_break_qajx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "If yes, then this warehouse will be used to store rejected materials",
+   "fieldname": "is_rejected_warehouse",
+   "fieldtype": "Check",
+   "label": "Is Rejected Warehouse"
   }
  ],
  "icon": "fa fa-building",
  "idx": 1,
  "is_tree": 1,
  "links": [],
- "modified": "2022-03-01 02:37:48.034944",
+ "modified": "2024-08-14 16:08:15.733597",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Warehouse",
@@ -261,7 +280,6 @@
    "read": 1,
    "report": 1,
    "role": "Item Manager",
-   "set_user_permissions": 1,
    "share": 1,
    "write": 1
   },
@@ -299,9 +317,8 @@
   }
  ],
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "title_field": "warehouse_name",
  "track_changes": 1
 }

@@ -9,6 +9,23 @@ from frappe.utils import add_months, flt
 
 
 class MonthlyDistribution(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.monthly_distribution_percentage.monthly_distribution_percentage import (
+			MonthlyDistributionPercentage,
+		)
+
+		distribution_id: DF.Data
+		fiscal_year: DF.Link | None
+		percentages: DF.Table[MonthlyDistributionPercentage]
+	# end: auto-generated types
+
 	@frappe.whitelist()
 	def get_months(self):
 		month_list = [
@@ -37,9 +54,7 @@ class MonthlyDistribution(Document):
 		total = sum(flt(d.percentage_allocation) for d in self.get("percentages"))
 
 		if flt(total, 2) != 100.0:
-			frappe.throw(
-				_("Percentage Allocation should be equal to 100%") + " ({0}%)".format(str(flt(total, 2)))
-			)
+			frappe.throw(_("Percentage Allocation should be equal to 100%") + f" ({flt(total, 2)!s}%)")
 
 
 def get_periodwise_distribution_data(distribution_id, period_list, periodicity):

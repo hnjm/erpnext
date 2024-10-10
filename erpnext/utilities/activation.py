@@ -54,9 +54,7 @@ def get_level():
 	sales_data.append({"Communication": communication_number})
 
 	# recent login
-	if frappe.db.sql(
-		"select name from tabUser where last_login > date_sub(now(), interval 2 day) limit 1"
-	):
+	if frappe.db.sql("select name from tabUser where last_login > date_sub(now(), interval 2 day) limit 1"):
 		activation_level += 1
 
 	level = {"activation_level": activation_level, "sales_data": sales_data}
@@ -124,7 +122,7 @@ def get_help_messages():
 			doctype="Timesheet",
 			title=_("Add Timesheets"),
 			description=_(
-				"Timesheets help keep track of time, cost and billing for activites done by your team"
+				"Timesheets help keep track of time, cost and billing for activities done by your team"
 			),
 			action=_("Create Timesheet"),
 			route="List/Timesheet",

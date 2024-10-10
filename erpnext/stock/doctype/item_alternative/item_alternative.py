@@ -8,6 +8,21 @@ from frappe.model.document import Document
 
 
 class ItemAlternative(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		alternative_item_code: DF.Link | None
+		alternative_item_name: DF.ReadOnly | None
+		item_code: DF.Link | None
+		item_name: DF.ReadOnly | None
+		two_way: DF.Check
+	# end: auto-generated types
+
 	def validate(self):
 		self.has_alternative_item()
 		self.validate_alternative_item()
@@ -30,9 +45,7 @@ class ItemAlternative(Document):
 			"allow_alternative_item",
 		]
 		item_data = frappe.db.get_value("Item", self.item_code, fields, as_dict=1)
-		alternative_item_data = frappe.db.get_value(
-			"Item", self.alternative_item_code, fields, as_dict=1
-		)
+		alternative_item_data = frappe.db.get_value("Item", self.alternative_item_code, fields, as_dict=1)
 
 		for field in fields:
 			if item_data.get(field) != alternative_item_data.get(field):
@@ -54,7 +67,7 @@ class ItemAlternative(Document):
 		if not item_data.allow_alternative_item:
 			frappe.throw(alternate_item_check_msg.format(self.item_code))
 		if self.two_way and not alternative_item_data.allow_alternative_item:
-			frappe.throw(alternate_item_check_msg.format(self.item_code))
+			frappe.throw(alternate_item_check_msg.format(self.alternative_item_code))
 
 	def validate_duplicate(self):
 		if frappe.db.get_value(
@@ -72,14 +85,12 @@ class ItemAlternative(Document):
 @frappe.validate_and_sanitize_search_inputs
 def get_alternative_items(doctype, txt, searchfield, start, page_len, filters):
 	return frappe.db.sql(
-		""" (select alternative_item_code from `tabItem Alternative`
+		f""" (select alternative_item_code from `tabItem Alternative`
 			where item_code = %(item_code)s and alternative_item_code like %(txt)s)
 		union
 			(select item_code from `tabItem Alternative`
 			where alternative_item_code = %(item_code)s and item_code like %(txt)s
-			and two_way = 1) limit {1} offset {0}
-		""".format(
-			start, page_len
-		),
+			and two_way = 1) limit {page_len} offset {start}
+		""",
 		{"item_code": filters.get("item_code"), "txt": "%" + txt + "%"},
 	)

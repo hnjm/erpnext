@@ -12,12 +12,29 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt, get_datetime_str, today
 from frappe.utils.data import format_datetime
-from frappe.utils.file_manager import save_file
 
 import erpnext
 
 
 class ImportSupplierInvoice(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		company: DF.Link
+		default_buying_price_list: DF.Link
+		invoice_series: DF.Literal["ACC-PINV-.YYYY.-"]
+		item_code: DF.Link
+		status: DF.Data | None
+		supplier_group: DF.Link
+		tax_account: DF.Link
+		zip_file: DF.Attach | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not frappe.db.get_value("Stock Settings", fieldname="stock_uom"):
 			frappe.throw(_("Please set default UOM in Stock Settings"))
@@ -77,22 +94,21 @@ class ImportSupplierInvoice(Document):
 			invoices_args["terms"] = get_payment_terms_from_file(file_content)
 
 			supplier_name = create_supplier(self.supplier_group, supp_dict)
-			address = create_address(supplier_name, supp_dict)
+			create_address(supplier_name, supp_dict)
 			pi_name = create_purchase_invoice(supplier_name, file_name, invoices_args, self.name)
 
 			self.file_count += 1
 			if pi_name:
 				self.purchase_invoices_count += 1
-				file_save = save_file(
-					file_name,
-					encoded_content,
-					"Purchase Invoice",
-					pi_name,
-					folder=None,
-					decode=False,
-					is_private=0,
-					df=None,
-				)
+
+				file_doc = frappe.new_doc("File")
+				file_doc.file_name = file_name
+				file_doc.attached_to_doctype = "Purchase Invoice"
+				file_doc.attached_to_name = pi_name
+				file_doc.content = encoded_content
+				file_doc.decode = False
+				file_doc.is_private = False
+				file_doc.insert(ignore_permissions=True)
 
 	def prepare_items_for_invoice(self, file_content, invoices_args):
 		qty = 1
@@ -161,7 +177,7 @@ def get_file_content(file_name, zip_file_object):
 	except UnicodeDecodeError:
 		try:
 			content = encoded_content.decode("utf-16")
-		except UnicodeDecodeError as e:
+		except UnicodeDecodeError:
 			frappe.log_error("UTF-16 encoding error for File Name: " + file_name)
 
 	return content
@@ -279,7 +295,6 @@ def create_supplier(supplier_group, args):
 
 		return existing_supplier_name
 	else:
-
 		new_supplier = frappe.new_doc("Supplier")
 		new_supplier.supplier_name = re.sub("&amp", "&", args.supplier)
 		new_supplier.supplier_group = supplier_group
@@ -390,7 +405,7 @@ def create_purchase_invoice(supplier_name, file_name, args, name):
 		pi.imported_grand_total = calc_total
 		pi.save()
 		return pi.name
-	except Exception as e:
+	except Exception:
 		frappe.db.set_value("Import Supplier Invoice", name, "status", "Error")
 		pi.log_error("Unable to create Puchase Invoice")
 		return None

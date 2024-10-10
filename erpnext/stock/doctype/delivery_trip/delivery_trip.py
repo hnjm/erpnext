@@ -12,8 +12,35 @@ from frappe.utils import cint, get_datetime, get_link_to_form
 
 
 class DeliveryTrip(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.stock.doctype.delivery_stop.delivery_stop import DeliveryStop
+
+		amended_from: DF.Link | None
+		company: DF.Link
+		delivery_stops: DF.Table[DeliveryStop]
+		departure_time: DF.Datetime
+		driver: DF.Link | None
+		driver_address: DF.Link | None
+		driver_email: DF.Data | None
+		driver_name: DF.Data | None
+		email_notification_sent: DF.Check
+		employee: DF.Link | None
+		naming_series: DF.Literal["MAT-DT-.YYYY.-"]
+		status: DF.Literal["Draft", "Scheduled", "In Transit", "Completed", "Cancelled"]
+		total_distance: DF.Float
+		uom: DF.Link | None
+		vehicle: DF.Link
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
-		super(DeliveryTrip, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 
 		# Google Maps returns distances in meters by default
 		self.default_distance_uom = (
@@ -24,11 +51,21 @@ class DeliveryTrip(Document):
 		)
 
 	def validate(self):
+		if self._action == "submit" and not self.driver:
+			frappe.throw(_("A driver must be set to submit."))
+
+		if self._action == "submit":
+			self.validate_delivery_note_not_draft()
 		self.validate_stop_addresses()
+
+	def on_update(self):
+		self.update_delivery_notes()
+
+	def on_trash(self):
+		self.update_delivery_notes(delete=True)
 
 	def on_submit(self):
 		self.update_status()
-		self.update_delivery_notes()
 
 	def on_update_after_submit(self):
 		self.update_status()
@@ -41,6 +78,20 @@ class DeliveryTrip(Document):
 		for stop in self.delivery_stops:
 			if not stop.customer_address:
 				stop.customer_address = get_address_display(frappe.get_doc("Address", stop.address).as_dict())
+
+	def validate_delivery_note_not_draft(self):
+		delivery_notes = list(set(stop.delivery_note for stop in self.delivery_stops if stop.delivery_note))
+		draft_delivery_notes = frappe.get_all(
+			"Delivery Note",
+			{"docstatus": 0, "name": ["in", delivery_notes]},
+			pluck="name",
+		)
+		if draft_delivery_notes:
+			frappe.throw(
+				_(
+					"Delivery Notes should not be in draft state when submitting a Delivery Trip. The following Delivery Notes are still in draft state: {0}. Please submit them first."
+				).format(", ".join(draft_delivery_notes))
+			)
 
 	def update_status(self):
 		status = {0: "Draft", 1: "Scheduled", 2: "Cancelled"}[self.docstatus]
@@ -64,30 +115,35 @@ class DeliveryTrip(Document):
 		        delete (bool, optional): Defaults to `False`. `True` if driver details need to be emptied, else `False`.
 		"""
 
-		delivery_notes = list(
-			set(stop.delivery_note for stop in self.delivery_stops if stop.delivery_note)
-		)
+		delivery_notes = list(set(stop.delivery_note for stop in self.delivery_stops if stop.delivery_note))
 
 		update_fields = {
 			"driver": self.driver,
 			"driver_name": self.driver_name,
 			"vehicle_no": self.vehicle,
+			"delivery_trip": self.name,
 			"lr_no": self.name,
 			"lr_date": self.departure_time,
 		}
+
+		delivery_notes_updated = set()
 
 		for delivery_note in delivery_notes:
 			note_doc = frappe.get_doc("Delivery Note", delivery_note)
 
 			for field, value in update_fields.items():
+				prev_value = getattr(note_doc, field)
 				value = None if delete else value
+				if prev_value != value:
+					delivery_notes_updated.add(delivery_note)
 				setattr(note_doc, field, value)
 
-			note_doc.flags.ignore_validate_update_after_submit = True
-			note_doc.save()
+			if delivery_note in delivery_notes_updated:
+				note_doc.flags.ignore_validate_update_after_submit = True
+				note_doc.save()
 
-		delivery_notes = [get_link_to_form("Delivery Note", note) for note in delivery_notes]
-		frappe.msgprint(_("Delivery Notes {0} updated").format(", ".join(delivery_notes)))
+		delivery_notes_updated = [get_link_to_form("Delivery Note", note) for note in delivery_notes_updated]
+		frappe.msgprint(_("Delivery Notes {0} updated").format(", ".join(delivery_notes_updated)))
 
 	@frappe.whitelist()
 	def process_route(self, optimize):
@@ -167,7 +223,7 @@ class DeliveryTrip(Document):
 		for stop in self.delivery_stops:
 			leg.append(stop.customer_address)
 
-			if optimize and stop.lock:
+			if optimize and stop.locked:
 				route_list.append(leg)
 				leg = [stop.customer_address]
 
@@ -312,14 +368,11 @@ def get_contact_display(contact):
 		"Contact", contact, ["first_name", "last_name", "phone", "mobile_no"], as_dict=1
 	)
 
-	contact_info.html = (
-		""" <b>%(first_name)s %(last_name)s</b> <br> %(phone)s <br> %(mobile_no)s"""
-		% {
-			"first_name": contact_info.first_name,
-			"last_name": contact_info.last_name or "",
-			"phone": contact_info.phone or "",
-			"mobile_no": contact_info.mobile_no or "",
-		}
+	contact_info.html = """ <b>{first_name} {last_name}</b> <br> {phone} <br> {mobile_no}""".format(
+		first_name=contact_info.first_name,
+		last_name=contact_info.last_name or "",
+		phone=contact_info.phone or "",
+		mobile_no=contact_info.mobile_no or "",
 	)
 
 	return contact_info.html

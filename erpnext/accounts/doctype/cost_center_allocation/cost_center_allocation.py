@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, format_date, getdate
+from frappe.utils import add_days, flt, format_date, getdate
 
 
 class MainCostCenterCantBeChild(frappe.ValidationError):
@@ -28,20 +28,42 @@ class InvalidDateError(frappe.ValidationError):
 
 
 class CostCenterAllocation(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.cost_center_allocation_percentage.cost_center_allocation_percentage import (
+			CostCenterAllocationPercentage,
+		)
+
+		allocation_percentages: DF.Table[CostCenterAllocationPercentage]
+		amended_from: DF.Link | None
+		company: DF.Link
+		main_cost_center: DF.Link
+		valid_from: DF.Date
+	# end: auto-generated types
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self._skip_from_date_validation = False
+
 	def validate(self):
 		self.validate_total_allocation_percentage()
-		self.validate_from_date_based_on_existing_gle()
+		if not self._skip_from_date_validation:
+			self.validate_from_date_based_on_existing_gle()
 		self.validate_backdated_allocation()
 		self.validate_main_cost_center()
 		self.validate_child_cost_centers()
 
 	def validate_total_allocation_percentage(self):
-		total_percentage = sum([d.percentage for d in self.get("allocation_percentages", [])])
+		total_percentage = sum([flt(d.percentage) for d in self.get("allocation_percentages", [])])
 
 		if total_percentage != 100:
-			frappe.throw(
-				_("Total percentage against cost centers should be 100"), WrongPercentageAllocation
-			)
+			frappe.throw(_("Total percentage against cost centers should be 100"), WrongPercentageAllocation)
 
 	def validate_from_date_based_on_existing_gle(self):
 		# Check if GLE exists against the main cost center

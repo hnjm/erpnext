@@ -1,18 +1,18 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import datetime
 import unittest
 
 import frappe
-from frappe.utils import add_months, add_to_date, now_datetime, nowdate
+from frappe.tests import IntegrationTestCase
+from frappe.utils import add_to_date, now_datetime, nowdate
 
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.projects.doctype.timesheet.timesheet import OverlapError, make_sales_invoice
 from erpnext.setup.doctype.employee.test_employee import make_employee
 
 
-class TestTimesheet(unittest.TestCase):
+class TestTimesheet(IntegrationTestCase):
 	def setUp(self):
 		frappe.db.delete("Timesheet")
 
@@ -40,9 +40,7 @@ class TestTimesheet(unittest.TestCase):
 		emp = make_employee("test_employee_6@salary.com")
 
 		timesheet = make_timesheet(emp, simulate=True, is_billable=1)
-		sales_invoice = make_sales_invoice(
-			timesheet.name, "_Test Item", "_Test Customer", currency="INR"
-		)
+		sales_invoice = make_sales_invoice(timesheet.name, "_Test Item", "_Test Customer", currency="INR")
 		sales_invoice.due_date = nowdate()
 		sales_invoice.submit()
 		timesheet = frappe.get_doc("Timesheet", timesheet.name)
@@ -161,6 +159,37 @@ class TestTimesheet(unittest.TestCase):
 		to_time = timesheet.time_logs[0].to_time
 		self.assertEqual(to_time, add_to_date(from_time, hours=2, as_datetime=True))
 
+	def test_per_billed_hours(self):
+		"""If amounts are 0, per_billed should be calculated based on hours."""
+		ts = frappe.new_doc("Timesheet")
+		ts.total_billable_amount = 0
+		ts.total_billed_amount = 0
+		ts.total_billable_hours = 2
+
+		ts.total_billed_hours = 0.5
+		ts.calculate_percentage_billed()
+		self.assertEqual(ts.per_billed, 25)
+
+		ts.total_billed_hours = 2
+		ts.calculate_percentage_billed()
+		self.assertEqual(ts.per_billed, 100)
+
+	def test_per_billed_amount(self):
+		"""If amounts are > 0, per_billed should be calculated based on amounts, regardless of hours."""
+		ts = frappe.new_doc("Timesheet")
+		ts.total_billable_hours = 2
+		ts.total_billed_hours = 1
+		ts.total_billable_amount = 200
+		ts.total_billed_amount = 50
+		ts.calculate_percentage_billed()
+		self.assertEqual(ts.per_billed, 25)
+
+		ts.total_billed_hours = 3
+		ts.total_billable_amount = 200
+		ts.total_billed_amount = 200
+		ts.calculate_percentage_billed()
+		self.assertEqual(ts.per_billed, 100)
+
 
 def make_timesheet(
 	employee,
@@ -180,9 +209,7 @@ def make_timesheet(
 	timesheet_detail.activity_type = activity_type
 	timesheet_detail.from_time = now_datetime()
 	timesheet_detail.hours = 2
-	timesheet_detail.to_time = timesheet_detail.from_time + datetime.timedelta(
-		hours=timesheet_detail.hours
-	)
+	timesheet_detail.to_time = timesheet_detail.from_time + datetime.timedelta(hours=timesheet_detail.hours)
 	timesheet_detail.project = project
 	timesheet_detail.task = task
 

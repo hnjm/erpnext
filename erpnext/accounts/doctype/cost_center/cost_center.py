@@ -10,14 +10,31 @@ from erpnext.accounts.utils import validate_field_number
 
 
 class CostCenter(NestedSet):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		company: DF.Link
+		cost_center_name: DF.Data
+		cost_center_number: DF.Data | None
+		disabled: DF.Check
+		is_group: DF.Check
+		lft: DF.Int
+		old_parent: DF.Link | None
+		parent_cost_center: DF.Link
+		rgt: DF.Int
+	# end: auto-generated types
+
 	nsm_parent_field = "parent_cost_center"
 
 	def autoname(self):
 		from erpnext.accounts.utils import get_autoname_with_number
 
-		self.name = get_autoname_with_number(
-			self.cost_center_number, self.cost_center_name, self.company
-		)
+		self.name = get_autoname_with_number(self.cost_center_number, self.cost_center_name, self.company)
 
 	def validate(self):
 		self.validate_mandatory()
@@ -90,14 +107,14 @@ class CostCenter(NestedSet):
 		new_cost_center = get_name_with_abbr(newdn, self.company)
 
 		# Validate properties before merging
-		super(CostCenter, self).before_rename(olddn, new_cost_center, merge, "is_group")
+		super().before_rename(olddn, new_cost_center, merge, "is_group")
 		if not merge:
 			new_cost_center = get_name_with_number(new_cost_center, self.cost_center_number)
 
 		return new_cost_center
 
 	def after_rename(self, olddn, newdn, merge=False):
-		super(CostCenter, self).after_rename(olddn, newdn, merge)
+		super().after_rename(olddn, newdn, merge)
 
 		if not merge:
 			new_cost_center = frappe.db.get_value(

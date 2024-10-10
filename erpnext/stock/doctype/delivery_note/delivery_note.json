@@ -28,9 +28,6 @@
   "column_break_18",
   "project",
   "dimension_col_break",
-  "campaign",
-  "source",
-  "custom_dimensions_section",
   "currency_and_price_list",
   "currency",
   "conversion_rate",
@@ -127,13 +124,14 @@
   "per_returned",
   "transporter_info",
   "transporter",
-  "driver",
   "lr_no",
-  "vehicle_no",
+  "delivery_trip",
+  "driver",
   "col_break34",
   "transporter_name",
-  "driver_name",
   "lr_date",
+  "vehicle_no",
+  "driver_name",
   "customer_po_details",
   "po_no",
   "column_break_17",
@@ -161,11 +159,15 @@
   "inter_company_reference",
   "customer_group",
   "territory",
+  "column_break_pxls",
+  "utm_source",
+  "utm_campaign",
+  "utm_medium",
+  "utm_content",
   "column_break5",
   "excise_page",
   "instructions",
-  "connections_tab",
-  "column_break_25"
+  "connections_tab"
  ],
  "fields": [
   {
@@ -302,7 +304,8 @@
    "no_copy": 1,
    "options": "Delivery Note",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "collapsible": 1,
@@ -352,7 +355,7 @@
   },
   {
    "fieldname": "shipping_address",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Shipping Address",
    "read_only": 1
   },
@@ -375,6 +378,7 @@
    "fieldtype": "Small Text",
    "hidden": 1,
    "label": "Mobile No",
+   "options": "Phone",
    "read_only": 1
   },
   {
@@ -408,7 +412,7 @@
   },
   {
    "fieldname": "address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Billing Address",
    "read_only": 1
   },
@@ -420,7 +424,7 @@
   },
   {
    "fieldname": "company_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Company Address",
    "read_only": 1
   },
@@ -521,6 +525,7 @@
    "allow_bulk_edit": 1,
    "fieldname": "items",
    "fieldtype": "Table",
+   "label": "Delivery Note Item",
    "oldfieldname": "delivery_note_details",
    "oldfieldtype": "Table",
    "options": "Delivery Note Item",
@@ -666,6 +671,7 @@
   {
    "fieldname": "taxes",
    "fieldtype": "Table",
+   "label": "Sales Taxes and Charges",
    "oldfieldname": "other_charges",
    "oldfieldtype": "Table",
    "options": "Sales Taxes and Charges"
@@ -678,7 +684,7 @@
   },
   {
    "fieldname": "other_charges_calculation",
-   "fieldtype": "Long Text",
+   "fieldtype": "Text Editor",
    "label": "Taxes and Charges Calculation",
    "no_copy": 1,
    "oldfieldtype": "HTML",
@@ -924,7 +930,7 @@
    "width": "50%"
   },
   {
-   "fetch_from": "transporter.name",
+   "fetch_from": "transporter.supplier_name",
    "fieldname": "transporter_name",
    "fieldtype": "Data",
    "label": "Transporter Name",
@@ -965,24 +971,6 @@
    "oldfieldname": "project",
    "oldfieldtype": "Link",
    "options": "Project"
-  },
-  {
-   "fieldname": "campaign",
-   "fieldtype": "Link",
-   "label": "Campaign",
-   "oldfieldname": "campaign",
-   "oldfieldtype": "Link",
-   "options": "Campaign",
-   "print_hide": 1
-  },
-  {
-   "fieldname": "source",
-   "fieldtype": "Link",
-   "label": "Source",
-   "oldfieldname": "source",
-   "oldfieldtype": "Select",
-   "options": "Lead Source",
-   "print_hide": 1
   },
   {
    "fieldname": "column_break5",
@@ -1044,9 +1032,12 @@
    "report_hide": 1
   },
   {
+   "fetch_from": "customer.language",
+   "fetch_if_empty": 1,
    "fieldname": "language",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Print Language",
+   "options": "Language",
    "print_hide": 1,
    "read_only": 1
   },
@@ -1221,7 +1212,8 @@
    "hidden": 1,
    "label": "Pick List",
    "options": "Pick List",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "default": "0",
@@ -1250,6 +1242,7 @@
    "depends_on": "eval: doc.is_internal_customer",
    "fieldname": "set_target_warehouse",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "in_standard_filter": 1,
    "label": "Set Target Warehouse",
    "no_copy": 1,
@@ -1285,7 +1278,7 @@
   {
    "depends_on": "dispatch_address_name",
    "fieldname": "dispatch_address",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Dispatch Address",
    "print_hide": 1,
    "read_only": 1
@@ -1338,10 +1331,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "column_break_25",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "section_break_30",
    "fieldtype": "Section Break",
    "hide_border": 1
@@ -1353,10 +1342,6 @@
   {
    "fieldname": "column_break_43",
    "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "custom_dimensions_section",
-   "fieldtype": "Section Break"
   },
   {
    "fieldname": "shipping_address_section",
@@ -1395,13 +1380,55 @@
    "fieldname": "named_place",
    "fieldtype": "Data",
    "label": "Named Place"
+  },
+  {
+   "fieldname": "delivery_trip",
+   "fieldtype": "Link",
+   "label": "Delivery Trip",
+   "options": "Delivery Trip",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "column_break_pxls",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "utm_medium",
+   "print_hide": 1,
+   "fieldtype": "Link",
+   "label": "Medium",
+   "options": "UTM Medium"
+  },
+  {
+   "fieldname": "utm_content",
+   "print_hide": 1,
+   "fieldtype": "Data",
+   "label": "Content"
+  },
+  {
+   "fieldname": "utm_source",
+   "fieldtype": "Link",
+   "label": "Source",
+   "oldfieldname": "source",
+   "oldfieldtype": "Select",
+   "options": "UTM Source",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_campaign",
+   "fieldtype": "Link",
+   "label": "Campaign",
+   "oldfieldname": "campaign",
+   "oldfieldtype": "Link",
+   "options": "UTM Campaign",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-truck",
  "idx": 146,
  "is_submittable": 1,
  "links": [],
- "modified": "2022-12-12 18:38:53.067799",
+ "modified": "2024-05-23 14:18:20.679692",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Delivery Note",
@@ -1460,11 +1487,41 @@
    "read": 1,
    "role": "Stock Manager",
    "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Delivery User",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Delivery Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
   }
  ],
  "search_fields": "status,customer,customer_name, territory,base_grand_total",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "customer",

@@ -12,8 +12,8 @@
   "column_break_3",
   "accumulated_depreciation_amount",
   "journal_entry",
-  "make_depreciation_entry",
-  "depreciation_method"
+  "shift",
+  "make_depreciation_entry"
  ],
  "fields": [
   {
@@ -54,31 +54,28 @@
   },
   {
    "allow_on_submit": 1,
-   "depends_on": "eval:(doc.docstatus==1 && !doc.journal_entry && doc.schedule_date <= get_today())",
+   "depends_on": "eval:(doc.docstatus==1 && !doc.journal_entry && doc.schedule_date <= frappe.datetime.now_date())",
    "fieldname": "make_depreciation_entry",
    "fieldtype": "Button",
    "label": "Make Depreciation Entry"
   },
   {
-   "fieldname": "depreciation_method",
-   "fieldtype": "Select",
-   "hidden": 1,
-   "label": "Depreciation Method",
-   "options": "\nStraight Line\nDouble Declining Balance\nWritten Down Value\nManual",
-   "print_hide": 1,
-   "read_only": 1
+   "fieldname": "shift",
+   "fieldtype": "Link",
+   "label": "Shift",
+   "options": "Asset Shift Factor"
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2022-12-06 20:35:50.264281",
+ "modified": "2024-03-27 13:06:51.227001",
  "modified_by": "Administrator",
  "module": "Assets",
  "name": "Depreciation Schedule",
  "owner": "Administrator",
  "permissions": [],
  "quick_entry": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": []
 }

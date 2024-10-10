@@ -2,18 +2,16 @@ import unittest
 from functools import partial
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 from erpnext.controllers import queries
 
 
 def add_default_params(func, doctype):
-	return partial(
-		func, doctype=doctype, txt="", searchfield="name", start=0, page_len=20, filters=None
-	)
+	return partial(func, doctype=doctype, txt="", searchfield="name", start=0, page_len=20, filters=None)
 
 
-class TestQueries(unittest.TestCase):
-
+class TestQueries(IntegrationTestCase):
 	# All tests are based on doctype/test_records.json
 
 	def assert_nested_in(self, item, container):
@@ -30,18 +28,6 @@ class TestQueries(unittest.TestCase):
 
 		self.assertGreaterEqual(len(query(txt="_Test Lead")), 4)
 		self.assertEqual(len(query(txt="_Test Lead 4")), 1)
-
-	def test_customer_query(self):
-		query = add_default_params(queries.customer_query, "Customer")
-
-		self.assertGreaterEqual(len(query(txt="_Test Customer")), 7)
-		self.assertGreaterEqual(len(query(txt="_Test Customer USD")), 1)
-
-	def test_supplier_query(self):
-		query = add_default_params(queries.supplier_query, "Supplier")
-
-		self.assertGreaterEqual(len(query(txt="_Test Supplier")), 7)
-		self.assertGreaterEqual(len(query(txt="_Test Supplier USD")), 1)
 
 	def test_item_query(self):
 		query = add_default_params(queries.item_query, "Item")
@@ -68,7 +54,7 @@ class TestQueries(unittest.TestCase):
 		self.assertGreaterEqual(len(query(txt="_Test Item Home Desktop Manufactured")), 1)
 
 	def test_project_query(self):
-		query = add_default_params(queries.get_project_name, "BOM")
+		query = add_default_params(queries.get_project_name, "Project")
 
 		self.assertGreaterEqual(len(query(txt="_Test Project")), 1)
 

@@ -30,8 +30,52 @@ from frappe.model.document import Document
 
 
 class EmailDigest(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.setup.doctype.email_digest_recipient.email_digest_recipient import (
+			EmailDigestRecipient,
+		)
+
+		add_quote: DF.Check
+		bank_balance: DF.Check
+		calendar_events: DF.Check
+		company: DF.Link
+		credit_balance: DF.Check
+		enabled: DF.Check
+		expense_year_to_date: DF.Check
+		expenses_booked: DF.Check
+		frequency: DF.Literal["Daily", "Weekly", "Monthly"]
+		income: DF.Check
+		income_year_to_date: DF.Check
+		invoiced_amount: DF.Check
+		issue: DF.Check
+		new_quotations: DF.Check
+		next_send: DF.Data | None
+		notifications: DF.Check
+		payables: DF.Check
+		pending_quotations: DF.Check
+		project: DF.Check
+		purchase_invoice: DF.Check
+		purchase_order: DF.Check
+		purchase_orders_items_overdue: DF.Check
+		purchase_orders_to_bill: DF.Check
+		purchase_orders_to_receive: DF.Check
+		recipients: DF.TableMultiSelect[EmailDigestRecipient]
+		sales_invoice: DF.Check
+		sales_order: DF.Check
+		sales_orders_to_bill: DF.Check
+		sales_orders_to_deliver: DF.Check
+		todo_list: DF.Check
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
-		super(EmailDigest, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 
 		self.from_date, self.to_date = self.get_from_to_date()
 		self.set_dates()
@@ -46,9 +90,7 @@ class EmailDigest(Document):
 			select name, enabled from tabUser
 			where name not in ({})
 			and user_type != "Website User"
-			order by enabled desc, name asc""".format(
-				", ".join(["%s"] * len(STANDARD_USERS))
-			),
+			order by enabled desc, name asc""".format(", ".join(["%s"] * len(STANDARD_USERS))),
 			STANDARD_USERS,
 			as_dict=1,
 		)
@@ -79,7 +121,7 @@ class EmailDigest(Document):
 				if msg_for_this_recipient and row.recipient in valid_users:
 					frappe.sendmail(
 						recipients=row.recipient,
-						subject=_("{0} Digest").format(self.frequency),
+						subject=_("{0} Digest").format(_(self.frequency)),
 						message=msg_for_this_recipient,
 						reference_doctype=self.doctype,
 						reference_name=self.name,
@@ -151,15 +193,11 @@ class EmailDigest(Document):
 		context.text_color = "#36414C"
 		context.h1 = "margin-bottom: 30px; margin-top: 40px; font-weight: 400; font-size: 30px;"
 		context.h2 = "margin-bottom: 30px; margin-top: -20px; font-weight: 400; font-size: 20px;"
-		context.label_css = """display: inline-block; color: {text_muted};
-			padding: 3px 7px; margin-right: 7px;""".format(
-			text_muted=context.text_muted
-		)
+		context.label_css = f"""display: inline-block; color: {context.text_muted};
+			padding: 3px 7px; margin-right: 7px;"""
 		context.section_head = "margin-top: 60px; font-size: 16px;"
 		context.line_item = "padding: 5px 0px; margin: 0; border-bottom: 1px solid #d1d8dd;"
-		context.link_css = "color: {text_color}; text-decoration: none;".format(
-			text_color=context.text_color
-		)
+		context.link_css = f"color: {context.text_color}; text-decoration: none;"
 
 	def get_notifications(self):
 		"""Get notifications for user"""
@@ -182,7 +220,7 @@ class EmailDigest(Document):
 		events = get_events(from_date, to_date)
 
 		event_count = 0
-		for i, e in enumerate(events):
+		for _i, e in enumerate(events):
 			e.starts_on_label = format_time(e.starts_on)
 			e.ends_on_label = format_time(e.ends_on) if e.ends_on else None
 			e.date = formatdate(e.starts)
@@ -233,7 +271,7 @@ class EmailDigest(Document):
 		issue_list = frappe.db.sql(
 			"""select *
 			from `tabIssue` where status in ("Replied","Open")
-			order by modified asc limit 10""",
+			order by creation asc limit 10""",
 			as_dict=True,
 		)
 
@@ -257,7 +295,7 @@ class EmailDigest(Document):
 		project_list = frappe.db.sql(
 			"""select *
 			from `tabProject` where status='Open' and project_type='External'
-			order by modified asc limit 10""",
+			order by creation asc limit 10""",
 			as_dict=True,
 		)
 
@@ -298,11 +336,8 @@ class EmailDigest(Document):
 			"new_quotations",
 			"pending_quotations",
 		):
-
 			if self.get(key):
-				cache_key = "email_digest:card:{0}:{1}:{2}:{3}".format(
-					self.company, self.frequency, key, self.from_date
-				)
+				cache_key = f"email_digest:card:{self.company}:{self.frequency}:{key}:{self.from_date}"
 				card = cache.get(cache_key)
 
 				if card:
@@ -382,9 +417,10 @@ class EmailDigest(Document):
 		"""Get income to date"""
 		balance = 0.0
 		count = 0
+		fy_start_date = get_fiscal_year(self.future_to_date)[1]
 
 		for account in self.get_root_type_accounts(root_type):
-			balance += get_balance_on(account, date=self.future_to_date)
+			balance += get_balance_on(account, date=self.future_to_date, start_date=fy_start_date)
 			count += get_count_on(account, fieldname, date=self.future_to_date)
 
 		if fieldname == "income":
@@ -420,9 +456,7 @@ class EmailDigest(Document):
 		return self.get_type_balance("invoiced_amount", "Receivable")
 
 	def get_expenses_booked(self):
-		expenses, past_expenses, count = self.get_period_amounts(
-			self.get_roots("expense"), "expenses_booked"
-		)
+		expenses, past_expenses, count = self.get_period_amounts(self.get_roots("expense"), "expenses_booked")
 
 		expense_account = frappe.db.get_all(
 			"Account",
@@ -558,7 +592,6 @@ class EmailDigest(Document):
 		return {"label": label, "value": value, "count": count}
 
 	def get_type_balance(self, fieldname, account_type, root_type=None):
-
 		if root_type:
 			accounts = [
 				d.name
@@ -644,57 +677,47 @@ class EmailDigest(Document):
 		]
 
 	def get_root_type_accounts(self, root_type):
-		if not root_type in self._accounts:
+		if root_type not in self._accounts:
 			self._accounts[root_type] = [
 				d.name
 				for d in frappe.db.get_all(
-					"Account", filters={"root_type": root_type.title(), "company": self.company, "is_group": 0}
+					"Account",
+					filters={"root_type": root_type.title(), "company": self.company, "is_group": 0},
 				)
 			]
 		return self._accounts[root_type]
 
 	def get_purchase_order(self):
-
 		return self.get_summary_of_doc("Purchase Order", "purchase_order")
 
 	def get_sales_order(self):
-
 		return self.get_summary_of_doc("Sales Order", "sales_order")
 
 	def get_pending_purchase_orders(self):
-
 		return self.get_summary_of_pending("Purchase Order", "pending_purchase_orders", "per_received")
 
 	def get_pending_sales_orders(self):
-
 		return self.get_summary_of_pending("Sales Order", "pending_sales_orders", "per_delivered")
 
 	def get_sales_invoice(self):
-
 		return self.get_summary_of_doc("Sales Invoice", "sales_invoice")
 
 	def get_purchase_invoice(self):
-
 		return self.get_summary_of_doc("Purchase Invoice", "purchase_invoice")
 
 	def get_new_quotations(self):
-
 		return self.get_summary_of_doc("Quotation", "new_quotations")
 
 	def get_pending_quotations(self):
-
 		return self.get_summary_of_pending_quotations("pending_quotations")
 
 	def get_summary_of_pending(self, doc_type, fieldname, getfield):
-
 		value, count, billed_value, delivered_value = frappe.db.sql(
 			"""select ifnull(sum(grand_total),0), count(*),
-			ifnull(sum(grand_total*per_billed/100),0), ifnull(sum(grand_total*{0}/100),0)  from `tab{1}`
+			ifnull(sum(grand_total*per_billed/100),0), ifnull(sum(grand_total*{}/100),0)  from `tab{}`
 			where (transaction_date <= %(to_date)s)
 			and status not in ('Closed','Cancelled', 'Completed')
-			and company = %(company)s """.format(
-				getfield, doc_type
-			),
+			and company = %(company)s """.format(getfield, doc_type),
 			{"to_date": self.future_to_date, "company": self.company},
 		)[0]
 
@@ -707,7 +730,6 @@ class EmailDigest(Document):
 		}
 
 	def get_summary_of_pending_quotations(self, fieldname):
-
 		value, count = frappe.db.sql(
 			"""select ifnull(sum(grand_total),0), count(*) from `tabQuotation`
 			where (transaction_date <= %(to_date)s)
@@ -740,19 +762,14 @@ class EmailDigest(Document):
 		return {"label": label, "value": value, "last_value": last_value, "count": count}
 
 	def get_summary_of_doc(self, doc_type, fieldname):
-
 		date_field = (
 			"posting_date" if doc_type in ["Sales Invoice", "Purchase Invoice"] else "transaction_date"
 		)
 
-		value = flt(
-			self.get_total_on(doc_type, self.future_from_date, self.future_to_date)[0].grand_total
-		)
+		value = flt(self.get_total_on(doc_type, self.future_from_date, self.future_to_date)[0].grand_total)
 		count = self.get_total_on(doc_type, self.future_from_date, self.future_to_date)[0].count
 
-		last_value = flt(
-			self.get_total_on(doc_type, self.past_from_date, self.past_to_date)[0].grand_total
-		)
+		last_value = flt(self.get_total_on(doc_type, self.past_from_date, self.past_to_date)[0].grand_total)
 
 		filters = {
 			date_field: [[">=", self.future_from_date], ["<=", self.future_to_date]],
@@ -771,7 +788,6 @@ class EmailDigest(Document):
 		return {"label": label, "value": value, "last_value": last_value, "count": count}
 
 	def get_total_on(self, doc_type, from_date, to_date):
-
 		date_field = (
 			"posting_date" if doc_type in ["Sales Invoice", "Purchase Invoice"] else "transaction_date"
 		)
@@ -852,20 +868,16 @@ class EmailDigest(Document):
 			"received_qty, qty - received_qty as missing_qty, rate, amount"
 		)
 
-		sql_po = """select {fields} from `tabPurchase Order Item`
+		sql_po = f"""select {fields_po} from `tabPurchase Order Item`
 			left join `tabPurchase Order` on `tabPurchase Order`.name = `tabPurchase Order Item`.parent
 			where status<>'Closed' and `tabPurchase Order Item`.docstatus=1 and CURRENT_DATE > `tabPurchase Order Item`.schedule_date
 			and received_qty < qty order by `tabPurchase Order Item`.parent DESC,
-			`tabPurchase Order Item`.schedule_date DESC""".format(
-			fields=fields_po
-		)
+			`tabPurchase Order Item`.schedule_date DESC"""
 
-		sql_poi = """select {fields} from `tabPurchase Order Item`
+		sql_poi = f"""select {fields_poi} from `tabPurchase Order Item`
 			left join `tabPurchase Order` on `tabPurchase Order`.name = `tabPurchase Order Item`.parent
 			where status<>'Closed' and `tabPurchase Order Item`.docstatus=1 and CURRENT_DATE > `tabPurchase Order Item`.schedule_date
-			and received_qty < qty order by `tabPurchase Order Item`.idx""".format(
-			fields=fields_poi
-		)
+			and received_qty < qty order by `tabPurchase Order Item`.idx"""
 		purchase_order_list = frappe.db.sql(sql_po, as_dict=True)
 		purchase_order_items_overdue_list = frappe.db.sql(sql_poi, as_dict=True)
 

@@ -157,9 +157,14 @@
 	},
 
 	"Botswana": {
-		"Botswana Tax": {
+		"Botswana Tax 14%": {
 			"account_name": "VAT",
-			"tax_rate": 12.00
+			"tax_rate": 14.00
+		},
+		"Botswana Tax 12%": {
+			"account_name": "VAT",
+			"tax_rate": 12.00,
+			"default": 1
 		}
 	},
 
@@ -579,6 +584,11 @@
 					},
 					{
 						"title": "Bauleistungen nach § 13b UStG",
+						"is_default": 0,
+						"taxes": []
+					},
+					{
+						"title": "Nullsteuersatz nach § 12 Abs. 3 UStG",
 						"is_default": 0,
 						"taxes": []
 					}
@@ -1339,6 +1349,11 @@
 						"title": "Bauleistungen nach § 13b UStG",
 						"is_default": 0,
 						"taxes": []
+					},
+					{
+						"title": "Nullsteuersatz nach § 12 Abs. 3 UStG",
+						"is_default": 0,
+						"taxes": []
 					}
 				],
 				"purchase_tax_templates": [
@@ -2097,6 +2112,11 @@
 						"title": "Bauleistungen nach § 13b UStG",
 						"is_default": 0,
 						"taxes": []
+					},
+					{
+						"title": "Nullsteuersatz nach § 12 Abs. 3 UStG",
+						"is_default": 0,
+						"taxes": []
 					}
 				],
 				"purchase_tax_templates": [
@@ -2847,6 +2867,11 @@
 					},
 					{
 						"title": "Bauleistungen nach § 13b UStG",
+						"is_default": 0,
+						"taxes": []
+					},
+					{
+						"title": "Nullsteuersatz nach § 12 Abs. 3 UStG",
 						"is_default": 0,
 						"taxes": []
 					}
@@ -4015,34 +4040,6 @@
 			"tax_rate": 18.00
 		}
 	},
-
-	"Saudi Arabia": {
-		"KSA VAT 15%": {
-			"account_name": "VAT 15%",
-			"tax_rate": 15.00
-		},
-		"KSA VAT 5%": {
-			"account_name": "VAT 5%",
-			"tax_rate": 5.00
-		},
-		"KSA VAT Zero": {
-			"account_name": "VAT Zero",
-			"tax_rate": 0.00
-		},
-		"KSA VAT Exempted": {
-			"account_name": "VAT Exempted",
-			"tax_rate": 0.00
-		},
-		"KSA Excise 50%": {
-			"account_name": "Excise 50%",
-			"tax_rate": 50.00
-		},
-		"KSA Excise 100%": {
-			"account_name": "Excise 100%",
-			"tax_rate": 100.00
-		}
-	},
-
 	"Serbia": {
 		"Serbia Tax": {
 			"account_name": "VAT",
@@ -4174,17 +4171,17 @@
 
 	"Switzerland": {
 		"Switzerland normal VAT": {
-			"account_name": "VAT 7.7%",
-			"tax_rate": 7.70,
+			"account_name": "VAT 8.1%",
+			"tax_rate": 8.10,
 			"default": 1
 		},
 		"Switzerland reduced VAT": {
-			"account_name": "VAT 2.5%",
-			"tax_rate": 2.50
+			"account_name": "VAT 2.6%",
+			"tax_rate": 2.60
 		},
 		"Switzerland lodging VAT": {
-			"account_name": "VAT 3.7%",
-			"tax_rate": 3.70
+			"account_name": "VAT 3.8%",
+			"tax_rate": 3.80
 		}
 	},
 

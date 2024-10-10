@@ -4,6 +4,7 @@
 
 import frappe
 from frappe import _
+from frappe.utils import get_link_to_form, parse_json
 
 import erpnext
 from erpnext.accounts.utils import get_currency_precision, get_stock_accounts
@@ -13,9 +14,7 @@ from erpnext.stock.doctype.warehouse.warehouse import get_warehouses_based_on_ac
 def execute(filters=None):
 	if not erpnext.is_perpetual_inventory_enabled(filters.company):
 		frappe.throw(
-			_("Perpetual inventory required for the company {0} to view this report.").format(
-				filters.company
-			)
+			_("Perpetual inventory required for the company {0} to view this report.").format(filters.company)
 		)
 
 	data = get_data(filters)
@@ -33,7 +32,7 @@ def get_data(report_filters):
 		"posting_date": ("<=", report_filters.as_on_date),
 	}
 
-	currency_precision = get_currency_precision() or 2
+	get_currency_precision() or 2
 	stock_ledger_entries = get_stock_ledger_data(report_filters, filters)
 	voucher_wise_gl_data = get_gl_data(report_filters, filters)
 
@@ -134,3 +133,35 @@ def get_columns(filters):
 			"width": "120",
 		},
 	]
+
+
+@frappe.whitelist()
+def create_reposting_entries(rows, company):
+	if isinstance(rows, str):
+		rows = parse_json(rows)
+
+	entries = []
+	for row in rows:
+		row = frappe._dict(row)
+
+		try:
+			doc = frappe.get_doc(
+				{
+					"doctype": "Repost Item Valuation",
+					"based_on": "Transaction",
+					"status": "Queued",
+					"voucher_type": row.voucher_type,
+					"voucher_no": row.voucher_no,
+					"posting_date": row.posting_date,
+					"company": company,
+					"allow_nagative_stock": 1,
+				}
+			).submit()
+
+			entries.append(get_link_to_form("Repost Item Valuation", doc.name))
+		except frappe.DuplicateEntryError:
+			pass
+
+	if entries:
+		entries = ", ".join(entries)
+		frappe.msgprint(_("Reposting entries created: {0}").format(entries))

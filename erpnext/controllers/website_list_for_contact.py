@@ -35,7 +35,7 @@ def get_webform_list_context(module):
 
 
 def get_webform_transaction_list(
-	doctype, txt=None, filters=None, limit_start=0, limit_page_length=20, order_by="modified"
+	doctype, txt=None, filters=None, limit_start=0, limit_page_length=20, order_by="creation"
 ):
 	"""Get List of transactions for custom doctypes"""
 	from frappe.www.list import get_list
@@ -59,7 +59,7 @@ def get_webform_transaction_list(
 		limit_page_length,
 		ignore_permissions=False,
 		fields=None,
-		order_by="modified",
+		order_by="creation",
 	)
 
 
@@ -69,35 +69,30 @@ def get_transaction_list(
 	filters=None,
 	limit_start=0,
 	limit_page_length=20,
-	order_by="modified",
+	order_by="creation",
 	custom=False,
 ):
 	user = frappe.session.user
 	ignore_permissions = False
 
 	if not filters:
-		filters = []
+		filters = {}
 
-	if doctype in ["Supplier Quotation", "Purchase Invoice"]:
-		filters.append((doctype, "docstatus", "<", 2))
-	else:
-		filters.append((doctype, "docstatus", "=", 1))
+	filters["docstatus"] = ["<", "2"] if doctype in ["Supplier Quotation", "Purchase Invoice"] else 1
 
 	if (user != "Guest" and is_website_user()) or doctype == "Request for Quotation":
-		parties_doctype = (
-			"Request for Quotation Supplier" if doctype == "Request for Quotation" else doctype
-		)
+		parties_doctype = "Request for Quotation Supplier" if doctype == "Request for Quotation" else doctype
 		# find party for this contact
 		customers, suppliers = get_customers_suppliers(parties_doctype, user)
 
 		if customers:
 			if doctype == "Quotation":
-				filters.append(("quotation_to", "=", "Customer"))
-				filters.append(("party_name", "in", customers))
+				filters["quotation_to"] = "Customer"
+				filters["party_name"] = ["in", customers]
 			else:
-				filters.append(("customer", "in", customers))
+				filters["customer"] = ["in", customers]
 		elif suppliers:
-			filters.append(("supplier", "in", suppliers))
+			filters["supplier"] = ["in", suppliers]
 		elif not custom:
 			return []
 
@@ -110,7 +105,7 @@ def get_transaction_list(
 
 		if not customers and not suppliers and custom:
 			ignore_permissions = False
-			filters = []
+			filters = {}
 
 	transactions = get_list_for_transactions(
 		doctype,
@@ -120,7 +115,7 @@ def get_transaction_list(
 		limit_page_length,
 		fields="name",
 		ignore_permissions=ignore_permissions,
-		order_by="modified desc",
+		order_by="creation desc",
 	)
 
 	if custom:
@@ -154,7 +149,7 @@ def get_list_for_transactions(
 		limit_start=limit_start,
 		limit_page_length=limit_page_length,
 		ignore_permissions=ignore_permissions,
-		order_by="modified desc",
+		order_by="creation desc",
 	):
 		data.append(d)
 
@@ -185,7 +180,7 @@ def get_list_for_transactions(
 def rfq_transaction_list(parties_doctype, doctype, parties, limit_start, limit_page_length):
 	data = frappe.db.sql(
 		"""select distinct parent as name, supplier from `tab{doctype}`
-			where supplier = '{supplier}' and docstatus=1  order by modified desc limit {start}, {len}""".format(
+			where supplier = '{supplier}' and docstatus=1  order by creation desc limit {start}, {len}""".format(
 			doctype=parties_doctype, supplier=parties[0], start=limit_start, len=limit_page_length
 		),
 		as_dict=1,
@@ -209,9 +204,11 @@ def post_process(doctype, data):
 			)
 
 		if doc.get("per_delivered"):
-			doc.status_percent += flt(doc.per_delivered)
+			doc.status_percent += flt(doc.per_delivered, 2)
 			doc.status_display.append(
-				_("Delivered") if doc.per_delivered == 100 else _("{0}% Delivered").format(doc.per_delivered)
+				_("Delivered")
+				if flt(doc.per_delivered, 2) == 100
+				else _("{0}% Delivered").format(doc.per_delivered)
 			)
 
 		if hasattr(doc, "set_indicator"):
@@ -235,27 +232,24 @@ def get_customers_suppliers(doctype, user):
 	has_supplier_field = meta.has_field("supplier")
 
 	if has_common(["Supplier", "Customer"], frappe.get_roles(user)):
-		contacts = frappe.db.sql(
-			"""
-			select
-				`tabContact`.email_id,
-				`tabDynamic Link`.link_doctype,
-				`tabDynamic Link`.link_name
-			from
-				`tabContact`, `tabDynamic Link`
-			where
-				`tabContact`.name=`tabDynamic Link`.parent and `tabContact`.email_id =%s
-			""",
-			user,
-			as_dict=1,
-		)
-		customers = [c.link_name for c in contacts if c.link_doctype == "Customer"]
-		suppliers = [c.link_name for c in contacts if c.link_doctype == "Supplier"]
+		suppliers = get_parents_for_user("Supplier")
+		customers = get_parents_for_user("Customer")
 	elif frappe.has_permission(doctype, "read", user=user):
 		customer_list = frappe.get_list("Customer")
 		customers = suppliers = [customer.name for customer in customer_list]
 
 	return customers if has_customer_field else None, suppliers if has_supplier_field else None
+
+
+def get_parents_for_user(parenttype: str) -> list[str]:
+	portal_user = frappe.qb.DocType("Portal User")
+
+	return (
+		frappe.qb.from_(portal_user)
+		.select(portal_user.parent)
+		.where(portal_user.user == frappe.session.user)
+		.where(portal_user.parenttype == parenttype)
+	).run(pluck="name")
 
 
 def has_website_permission(doc, ptype, user, verbose=False):
@@ -285,3 +279,26 @@ def get_customer_field_name(doctype):
 		return "party_name"
 	else:
 		return "customer"
+
+
+def add_role_for_portal_user(portal_user, role):
+	"""When a new portal user is added, give appropriate roles to user if
+	posssible, else warn user to add roles."""
+	if not portal_user.is_new():
+		return
+
+	user_doc = frappe.get_doc("User", portal_user.user)
+	roles = {r.role for r in user_doc.roles}
+
+	if role in roles:
+		return
+
+	if "System Manager" not in frappe.get_roles():
+		frappe.msgprint(
+			_("Please add {1} role to user {0}.").format(portal_user.user, role),
+			alert=True,
+		)
+		return
+
+	user_doc.add_roles(role)
+	frappe.msgprint(_("Added {1} Role to User {0}.").format(frappe.bold(user_doc.name), role), alert=True)

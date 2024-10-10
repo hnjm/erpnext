@@ -25,16 +25,15 @@
   "is_consolidated",
   "is_return",
   "return_against",
+  "update_outstanding_for_self",
   "update_billed_amount_in_sales_order",
+  "update_billed_amount_in_delivery_note",
   "is_debit_note",
   "amended_from",
   "accounting_dimensions_section",
   "cost_center",
   "dimension_col_break",
   "project",
-  "column_break_27",
-  "campaign",
-  "source",
   "currency_and_price_list",
   "currency",
   "conversion_rate",
@@ -82,6 +81,7 @@
   "column_break5",
   "grand_total",
   "rounding_adjustment",
+  "use_company_roundoff_cost_center",
   "rounded_total",
   "in_words",
   "total_advance",
@@ -90,6 +90,7 @@
   "section_break_49",
   "apply_discount_on",
   "base_discount_amount",
+  "coupon_code",
   "is_cash_or_non_trade_discount",
   "additional_discount_account",
   "column_break_51",
@@ -123,6 +124,7 @@
   "account_for_change_amount",
   "advances_section",
   "allocate_advances_automatically",
+  "only_include_allocated_payments",
   "get_advances",
   "advances",
   "write_off_section",
@@ -138,6 +140,7 @@
   "loyalty_amount",
   "column_break_77",
   "loyalty_program",
+  "dont_create_loyalty_points",
   "loyalty_redemption_account",
   "loyalty_redemption_cost_center",
   "contact_and_address_tab",
@@ -195,6 +198,7 @@
   "select_print_heading",
   "language",
   "subscription_section",
+  "subscription",
   "from_date",
   "auto_repeat",
   "column_break_140",
@@ -205,11 +209,15 @@
   "inter_company_invoice_reference",
   "represents_company",
   "customer_group",
+  "column_break_imbx",
+  "utm_source",
+  "utm_campaign",
+  "utm_medium",
+  "utm_content",
   "col_break23",
   "is_internal_customer",
   "is_discounted",
   "remarks",
-  "repost_required",
   "connections_tab"
  ],
  "fields": [
@@ -285,6 +293,7 @@
    "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "project",
    "fieldtype": "Link",
    "hide_days": 1,
@@ -319,6 +328,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval: !doc.is_debit_note",
    "fieldname": "is_return",
    "fieldtype": "Check",
    "hide_days": 1,
@@ -349,6 +359,7 @@
    "reqd": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "cost_center",
    "fieldtype": "Link",
    "hide_days": 1,
@@ -488,7 +499,7 @@
   },
   {
    "fieldname": "address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Address",
@@ -519,6 +530,7 @@
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Mobile No",
+   "options": "Phone",
    "read_only": 1
   },
   {
@@ -558,7 +570,7 @@
   },
   {
    "fieldname": "shipping_address",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Shipping Address",
@@ -576,7 +588,7 @@
   },
   {
    "fieldname": "company_address_display",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Company Address",
@@ -712,6 +724,7 @@
    "fieldtype": "Table",
    "hide_days": 1,
    "hide_seconds": 1,
+   "label": "Items",
    "oldfieldname": "entries",
    "oldfieldtype": "Table",
    "options": "Sales Invoice Item",
@@ -778,6 +791,7 @@
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Time Sheets",
+   "no_copy": 1,
    "options": "Sales Invoice Timesheet",
    "print_hide": 1
   },
@@ -937,7 +951,7 @@
   },
   {
    "fieldname": "other_charges_calculation",
-   "fieldtype": "Long Text",
+   "fieldtype": "Text Editor",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Taxes and Charges Calculation",
@@ -1035,8 +1049,7 @@
    "label": "Loyalty Program",
    "no_copy": 1,
    "options": "Loyalty Program",
-   "print_hide": 1,
-   "read_only": 1
+   "print_hide": 1
   },
   {
    "allow_on_submit": 1,
@@ -1564,12 +1577,14 @@
    "print_hide": 1
   },
   {
+   "fetch_from": "customer.language",
+   "fetch_if_empty": 1,
    "fieldname": "language",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Print Language",
-   "length": 6,
+   "options": "Language",
    "print_hide": 1,
    "read_only": 1
   },
@@ -1609,7 +1624,8 @@
    "hide_seconds": 1,
    "label": "Inter Company Invoice Reference",
    "options": "Purchase Invoice",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "customer_group",
@@ -1619,17 +1635,6 @@
    "hide_seconds": 1,
    "label": "Customer Group",
    "options": "Customer Group",
-   "print_hide": 1
-  },
-  {
-   "fieldname": "campaign",
-   "fieldtype": "Link",
-   "hide_days": 1,
-   "hide_seconds": 1,
-   "label": "Campaign",
-   "oldfieldname": "campaign",
-   "oldfieldtype": "Link",
-   "options": "Campaign",
    "print_hide": 1
   },
   {
@@ -1662,17 +1667,6 @@
    "options": "\nDraft\nReturn\nCredit Note Issued\nSubmitted\nPaid\nPartly Paid\nUnpaid\nUnpaid and Discounted\nPartly Paid and Discounted\nOverdue and Discounted\nOverdue\nCancelled\nInternal Transfer",
    "print_hide": 1,
    "read_only": 1
-  },
-  {
-   "fieldname": "source",
-   "fieldtype": "Link",
-   "hide_days": 1,
-   "hide_seconds": 1,
-   "label": "Source",
-   "oldfieldname": "source",
-   "oldfieldtype": "Select",
-   "options": "Lead Source",
-   "print_hide": 1
   },
   {
    "collapsible": 1,
@@ -1776,6 +1770,8 @@
    "width": "50%"
   },
   {
+   "fetch_from": "sales_partner.commission_rate",
+   "fetch_if_empty": 1,
    "fieldname": "commission_rate",
    "fieldtype": "Float",
    "hide_days": 1,
@@ -1956,6 +1952,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval: !doc.is_return",
    "description": "Issue a debit note with 0 qty against an existing Sales Invoice",
    "fieldname": "is_debit_note",
    "fieldtype": "Check",
@@ -1986,7 +1983,7 @@
   {
    "allow_on_submit": 1,
    "fieldname": "dispatch_address",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Dispatch Address",
    "read_only": 1
   },
@@ -2012,6 +2009,12 @@
    "read_only": 1
   },
   {
+   "fieldname": "subscription",
+   "fieldtype": "Link",
+   "label": "Subscription",
+   "options": "Subscription"
+  },
+  {
    "default": "0",
    "depends_on": "eval: doc.apply_discount_on == \"Grand Total\"",
    "fieldname": "is_cash_or_non_trade_discount",
@@ -2021,7 +2024,7 @@
   {
    "fieldname": "contact_and_address_tab",
    "fieldtype": "Tab Break",
-   "label": "Contact & Address"
+   "label": "Address & Contact"
   },
   {
    "fieldname": "payments_tab",
@@ -2082,10 +2085,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "column_break_27",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "column_break_52",
    "fieldtype": "Column Break"
   },
@@ -2110,15 +2109,6 @@
    "width": "50%"
   },
   {
-   "default": "0",
-   "fieldname": "repost_required",
-   "fieldtype": "Check",
-   "hidden": 1,
-   "label": "Repost Required",
-   "no_copy": 1,
-   "read_only": 1
-  },
-  {
    "fieldname": "incoterm",
    "fieldtype": "Link",
    "label": "Incoterm",
@@ -2129,6 +2119,90 @@
    "fieldname": "named_place",
    "fieldtype": "Data",
    "label": "Named Place"
+  },
+  {
+   "default": "0",
+   "depends_on": "allocate_advances_automatically",
+   "description": "Advance payments allocated against orders will only be fetched",
+   "fieldname": "only_include_allocated_payments",
+   "fieldtype": "Check",
+   "label": "Only Include Allocated Payments"
+  },
+  {
+   "default": "0",
+   "fieldname": "use_company_roundoff_cost_center",
+   "fieldtype": "Check",
+   "label": "Use Company default Cost Center for Round off"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval: doc.is_return",
+   "fieldname": "update_billed_amount_in_delivery_note",
+   "fieldtype": "Check",
+   "label": "Update Billed Amount in Delivery Note"
+  },
+  {
+   "default": "0",
+   "depends_on": "loyalty_program",
+   "fieldname": "dont_create_loyalty_points",
+   "fieldtype": "Check",
+   "label": "Don't Create Loyalty Points",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "coupon_code",
+   "fieldtype": "Link",
+   "label": "Coupon Code",
+   "options": "Coupon Code"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval: doc.is_return && doc.return_against",
+   "description": "Credit Note will update it's own outstanding amount, even if \"Return Against\" is specified.",
+   "fieldname": "update_outstanding_for_self",
+   "fieldtype": "Check",
+   "label": "Update Outstanding for Self",
+   "no_copy": 1,
+   "print_hide": 1
+  },
+  {
+   "fieldname": "column_break_imbx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "utm_medium",
+   "fieldtype": "Link",
+   "label": "Medium",
+   "options": "UTM Medium",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_content",
+   "fieldtype": "Data",
+   "label": "Content",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_campaign",
+   "fieldtype": "Link",
+   "hide_days": 1,
+   "hide_seconds": 1,
+   "label": "Campaign",
+   "oldfieldname": "campaign",
+   "oldfieldtype": "Link",
+   "options": "UTM Campaign",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "utm_source",
+   "fieldtype": "Link",
+   "hide_days": 1,
+   "hide_seconds": 1,
+   "label": "Source",
+   "oldfieldname": "source",
+   "oldfieldtype": "Select",
+   "options": "UTM Source",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
@@ -2141,11 +2215,10 @@
    "link_fieldname": "consolidated_invoice"
   }
  ],
- "modified": "2022-12-12 18:34:33.409895",
+ "modified": "2024-07-18 15:30:39.428519",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Sales Invoice",
- "name_case": "Title Case",
  "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
@@ -2190,7 +2263,7 @@
  "quick_entry": 1,
  "search_fields": "posting_date, due_date, customer, base_grand_total, outstanding_amount",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "customer",

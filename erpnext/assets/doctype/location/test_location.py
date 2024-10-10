@@ -1,15 +1,15 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-
 import json
 import unittest
 
 import frappe
+from frappe.tests import IntegrationTestCase
 
 test_records = frappe.get_test_records("Location")
 
 
-class TestLocation(unittest.TestCase):
+class TestLocation(IntegrationTestCase):
 	def runTest(self):
 		locations = ["Basil Farm", "Division 1", "Field 1", "Block 1"]
 		area = 0
@@ -31,9 +31,7 @@ class TestLocation(unittest.TestCase):
 		ordered_test_location_features = sorted(
 			test_location_features, key=lambda x: x["properties"]["feature_of"]
 		)
-		ordered_formatted_locations = sorted(
-			formatted_locations, key=lambda x: x["properties"]["feature_of"]
-		)
+		ordered_formatted_locations = sorted(formatted_locations, key=lambda x: x["properties"]["feature_of"])
 
 		self.assertEqual(ordered_formatted_locations, ordered_test_location_features)
 		self.assertEqual(area, test_location.get("area"))

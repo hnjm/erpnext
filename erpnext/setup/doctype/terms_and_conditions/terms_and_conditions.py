@@ -12,15 +12,25 @@ from frappe.utils.jinja import validate_template
 
 
 class TermsandConditions(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		buying: DF.Check
+		disabled: DF.Check
+		selling: DF.Check
+		terms: DF.TextEditor | None
+		title: DF.Data
+	# end: auto-generated types
+
 	def validate(self):
 		if self.terms:
 			validate_template(self.terms)
-		if (
-			not cint(self.buying)
-			and not cint(self.selling)
-			and not cint(self.hr)
-			and not cint(self.disabled)
-		):
+		if not cint(self.buying) and not cint(self.selling) and not cint(self.hr) and not cint(self.disabled):
 			throw(_("At least one of the Applicable Modules should be selected"))
 
 

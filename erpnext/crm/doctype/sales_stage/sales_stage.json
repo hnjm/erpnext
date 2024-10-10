@@ -18,10 +18,11 @@
   }
  ],
  "links": [],
- "modified": "2020-05-20 12:22:01.866472",
+ "modified": "2024-03-27 13:10:38.067960",
  "modified_by": "Administrator",
  "module": "CRM",
  "name": "Sales Stage",
+ "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [
   {
@@ -38,7 +39,9 @@
   }
  ],
  "quick_entry": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
- "track_changes": 1
+ "states": [],
+ "track_changes": 1,
+ "translated_doctype": 1
 }

@@ -9,12 +9,10 @@
  "field_order": [
   "account",
   "account_type",
-  "balance",
   "col_break1",
   "bank_account",
   "party_type",
   "party",
-  "party_balance",
   "accounting_dimensions_section",
   "cost_center",
   "dimension_col_break",
@@ -64,17 +62,7 @@
    "print_hide": 1
   },
   {
-   "fieldname": "balance",
-   "fieldtype": "Currency",
-   "label": "Account Balance",
-   "no_copy": 1,
-   "oldfieldname": "balance",
-   "oldfieldtype": "Data",
-   "options": "account_currency",
-   "print_hide": 1,
-   "read_only": 1
-  },
-  {
+   "allow_on_submit": 1,
    "default": ":Company",
    "description": "If Income or Expense",
    "fieldname": "cost_center",
@@ -106,14 +94,6 @@
    "in_list_view": 1,
    "label": "Party",
    "options": "party_type"
-  },
-  {
-   "fieldname": "party_balance",
-   "fieldtype": "Currency",
-   "label": "Party Balance",
-   "options": "account_currency",
-   "print_hide": 1,
-   "read_only": 1
   },
   {
    "fieldname": "currency_section",
@@ -203,7 +183,8 @@
    "fieldtype": "Select",
    "label": "Reference Type",
    "no_copy": 1,
-   "options": "\nSales Invoice\nPurchase Invoice\nJournal Entry\nSales Order\nPurchase Order\nExpense Claim\nAsset\nLoan\nPayroll Entry\nEmployee Advance\nExchange Rate Revaluation\nInvoice Discounting\nFees\nFull and Final Statement"
+   "options": "\nSales Invoice\nPurchase Invoice\nJournal Entry\nSales Order\nPurchase Order\nExpense Claim\nAsset\nLoan\nPayroll Entry\nEmployee Advance\nExchange Rate Revaluation\nInvoice Discounting\nFees\nFull and Final Statement\nPayment Entry",
+   "search_index": 1
   },
   {
    "fieldname": "reference_name",
@@ -211,7 +192,8 @@
    "in_list_view": 1,
    "label": "Reference Name",
    "no_copy": 1,
-   "options": "reference_type"
+   "options": "reference_type",
+   "search_index": 1
   },
   {
    "depends_on": "eval:doc.reference_type&&!in_list(doc.reference_type, ['Expense Claim', 'Asset', 'Employee Loan', 'Employee Advance'])",
@@ -221,6 +203,7 @@
    "no_copy": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "project",
    "fieldtype": "Link",
    "label": "Project",
@@ -284,14 +267,14 @@
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2022-10-26 20:03:10.906259",
+ "modified": "2024-03-27 13:09:58.647732",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Journal Entry Account",
  "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

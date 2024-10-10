@@ -4,27 +4,30 @@
 
 import frappe
 from dateutil.relativedelta import relativedelta
-from frappe import _, msgprint
+from frappe import _
 from frappe.model.document import Document
 from frappe.utils import add_days, add_years, cstr, getdate
 
 
 class FiscalYear(Document):
-	@frappe.whitelist()
-	def set_as_default(self):
-		frappe.db.set_value("Global Defaults", None, "current_fiscal_year", self.name)
-		global_defaults = frappe.get_doc("Global Defaults")
-		global_defaults.check_permission("write")
-		global_defaults.on_update()
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
 
-		# clear cache
-		frappe.clear_cache()
+	from typing import TYPE_CHECKING
 
-		msgprint(
-			_(
-				"{0} is now the default Fiscal Year. Please refresh your browser for the change to take effect."
-			).format(self.name)
-		)
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.accounts.doctype.fiscal_year_company.fiscal_year_company import FiscalYearCompany
+
+		auto_created: DF.Check
+		companies: DF.Table[FiscalYearCompany]
+		disabled: DF.Check
+		is_short_year: DF.Check
+		year: DF.Data
+		year_end_date: DF.Date
+		year_start_date: DF.Date
+	# end: auto-generated types
 
 	def validate(self):
 		self.validate_dates()
@@ -68,13 +71,6 @@ class FiscalYear(Document):
 		frappe.cache().delete_value("fiscal_years")
 
 	def on_trash(self):
-		global_defaults = frappe.get_doc("Global Defaults")
-		if global_defaults.current_fiscal_year == self.name:
-			frappe.throw(
-				_(
-					"You cannot delete Fiscal Year {0}. Fiscal Year {0} is set as default in Global Settings"
-				).format(self.name)
-			)
 		frappe.cache().delete_value("fiscal_years")
 
 	def validate_overlap(self):
@@ -112,9 +108,9 @@ class FiscalYear(Document):
 
 				if overlap:
 					frappe.throw(
-						_("Year start date or end date is overlapping with {0}. To avoid please set company").format(
-							existing.name
-						),
+						_(
+							"Year start date or end date is overlapping with {0}. To avoid please set company"
+						).format(existing.name),
 						frappe.NameError,
 					)
 
@@ -130,9 +126,9 @@ def check_duplicate_fiscal_year(doc):
 			not frappe.flags.in_test
 		):
 			frappe.throw(
-				_("Fiscal Year Start Date and Fiscal Year End Date are already set in Fiscal Year {0}").format(
-					fiscal_year
-				)
+				_(
+					"Fiscal Year Start Date and Fiscal Year End Date are already set in Fiscal Year {0}"
+				).format(fiscal_year)
 			)
 
 

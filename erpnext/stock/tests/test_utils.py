@@ -1,7 +1,7 @@
 import json
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 from erpnext.stock.utils import scan_barcode
 
@@ -28,7 +28,7 @@ class StockTestMixin:
 		)
 		self.assertGreaterEqual(len(sles), len(expected_sles))
 
-		for exp_sle, act_sle in zip(expected_sles, sles):
+		for exp_sle, act_sle in zip(expected_sles, sles, strict=False):
 			for k, v in exp_sle.items():
 				act_value = act_sle[k]
 				if k == "stock_queue":
@@ -51,13 +51,13 @@ class StockTestMixin:
 			order_by=order_by or "posting_date, creation",
 		)
 		self.assertGreaterEqual(len(actual_gles), len(expected_gles))
-		for exp_gle, act_gle in zip(expected_gles, actual_gles):
+		for exp_gle, act_gle in zip(expected_gles, actual_gles, strict=False):
 			for k, exp_value in exp_gle.items():
 				act_value = act_gle[k]
 				self.assertEqual(exp_value, act_value, msg=f"{k} doesn't match \n{exp_gle}\n{act_gle}")
 
 
-class TestStockUtilities(FrappeTestCase, StockTestMixin):
+class TestStockUtilities(IntegrationTestCase, StockTestMixin):
 	def test_barcode_scanning(self):
 		simple_item = self.make_item(properties={"barcodes": [{"barcode": "12399"}]})
 		self.assertEqual(scan_barcode("12399")["item_code"], simple_item.name)

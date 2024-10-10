@@ -2,8 +2,8 @@
 # License: GNU General Public License v3. See license.txt
 
 import frappe
-from frappe.test_runner import make_test_records
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.utils import make_test_records
 
 import erpnext
 from erpnext.accounts.doctype.account.test_account import create_account
@@ -14,7 +14,16 @@ from erpnext.stock.doctype.warehouse.warehouse import convert_to_group_or_ledger
 test_records = frappe.get_test_records("Warehouse")
 
 
-class TestWarehouse(FrappeTestCase):
+class UnitTestWarehouse(UnitTestCase):
+	"""
+	Unit tests for Warehouse.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestWarehouse(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		if not frappe.get_value("Item", "_Test Item"):
@@ -58,7 +67,7 @@ class TestWarehouse(FrappeTestCase):
 			warehouse_ids.append(warehouse_id)
 
 		item_names = [f"_Test Item {i} for Unlinking" for i in range(2)]
-		for item, warehouse in zip(item_names, warehouse_ids):
+		for item, warehouse in zip(item_names, warehouse_ids, strict=False):
 			create_item(item, warehouse=warehouse, company=company)
 
 		# Delete warehouses
@@ -78,7 +87,6 @@ class TestWarehouse(FrappeTestCase):
 				)
 
 	def test_group_non_group_conversion(self):
-
 		warehouse = frappe.get_doc("Warehouse", create_warehouse("TestGroupConversion"))
 
 		convert_to_group_or_ledger(warehouse.name)

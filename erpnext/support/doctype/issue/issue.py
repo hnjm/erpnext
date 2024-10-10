@@ -18,6 +18,50 @@ from frappe.utils.user import is_website_user
 
 
 class Issue(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		agreement_status: DF.Literal["First Response Due", "Resolution Due", "Fulfilled", "Failed"]
+		attachment: DF.Attach | None
+		avg_response_time: DF.Duration | None
+		company: DF.Link | None
+		contact: DF.Link | None
+		content_type: DF.Data | None
+		customer: DF.Link | None
+		customer_name: DF.Data | None
+		description: DF.TextEditor | None
+		email_account: DF.Link | None
+		first_responded_on: DF.Datetime | None
+		first_response_time: DF.Duration | None
+		issue_split_from: DF.Link | None
+		issue_type: DF.Link | None
+		lead: DF.Link | None
+		naming_series: DF.Literal["ISS-.YYYY.-"]
+		on_hold_since: DF.Datetime | None
+		opening_date: DF.Date | None
+		opening_time: DF.Time | None
+		priority: DF.Link | None
+		project: DF.Link | None
+		raised_by: DF.Data | None
+		resolution_by: DF.Datetime | None
+		resolution_date: DF.Datetime | None
+		resolution_details: DF.TextEditor | None
+		resolution_time: DF.Duration | None
+		response_by: DF.Datetime | None
+		service_level_agreement: DF.Link | None
+		service_level_agreement_creation: DF.Datetime | None
+		status: DF.Literal["Open", "Replied", "On Hold", "Resolved", "Closed"]
+		subject: DF.Data
+		total_hold_time: DF.Duration | None
+		user_resolution_time: DF.Duration | None
+		via_customer_portal: DF.Check
+	# end: auto-generated types
+
 	def validate(self):
 		if self.is_new() and self.via_customer_portal:
 			self.flags.create_communication = True
@@ -69,8 +113,8 @@ class Issue(Document):
 				"reference_name": self.name,
 			}
 		)
-		communication.ignore_permissions = True
-		communication.ignore_mandatory = True
+		communication.flags.ignore_permissions = True
+		communication.flags.ignore_mandatory = True
 		communication.save()
 
 	@frappe.whitelist()
@@ -119,7 +163,7 @@ class Issue(Document):
 				"comment_type": "Info",
 				"reference_doctype": "Issue",
 				"reference_name": replicated_issue.name,
-				"content": " - Split the Issue from <a href='/app/Form/Issue/{0}'>{1}</a>".format(
+				"content": " - Split the Issue from <a href='/app/Form/Issue/{}'>{}</a>".format(
 					self.name, frappe.bold(self.name)
 				),
 			}
@@ -173,7 +217,6 @@ def get_issue_list(doctype, txt, filters, limit_start, limit_page_length=20, ord
 
 @frappe.whitelist()
 def set_multiple_status(names, status):
-
 	for name in json.loads(names):
 		frappe.db.set_value("Issue", name, "status", status)
 
@@ -185,9 +228,7 @@ def set_status(name, status):
 
 def auto_close_tickets():
 	"""Auto-close replied support tickets after 7 days"""
-	auto_close_after_days = (
-		frappe.db.get_value("Support Settings", "Support Settings", "close_issue_after_days") or 7
-	)
+	auto_close_after_days = frappe.db.get_single_value("Support Settings", "close_issue_after_days") or 7
 
 	table = frappe.qb.DocType("Issue")
 	issues = (
@@ -255,9 +296,7 @@ def set_first_response_time(communication, method):
 	if communication.get("reference_doctype") == "Issue":
 		issue = get_parent_doc(communication)
 		if is_first_response(issue) and issue.service_level_agreement:
-			first_response_time = calculate_first_response_time(
-				issue, get_datetime(issue.first_responded_on)
-			)
+			first_response_time = calculate_first_response_time(issue, get_datetime(issue.first_responded_on))
 			issue.db_set("first_response_time", first_response_time)
 
 

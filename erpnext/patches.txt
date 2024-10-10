@@ -15,7 +15,6 @@ erpnext.patches.v10_0.rename_price_to_rate_in_pricing_rule
 erpnext.patches.v10_0.set_currency_in_pricing_rule
 erpnext.patches.v10_0.update_translatable_fields
 execute:frappe.delete_doc('DocType', 'Production Planning Tool', ignore_missing=True)
-erpnext.patches.v10_0.add_default_cash_flow_mappers
 erpnext.patches.v11_0.rename_duplicate_item_code_values
 erpnext.patches.v11_0.make_quality_inspection_template
 erpnext.patches.v11_0.merge_land_unit_with_location
@@ -58,7 +57,6 @@ execute:frappe.delete_doc_if_exists("Page", "production-analytics")
 erpnext.patches.v10_0.item_barcode_childtable_migrate # 16-02-2019
 erpnext.patches.v11_0.update_delivery_trip_status
 erpnext.patches.v11_0.rename_bom_wo_fields
-erpnext.patches.v12_0.set_default_homepage_type
 erpnext.patches.v11_0.renamed_from_to_fields_in_project
 erpnext.patches.v11_1.setup_guardian_role
 execute:frappe.delete_doc('DocType', 'Notification Control')
@@ -106,7 +104,6 @@ execute:frappe.reload_doc('desk', 'doctype', 'dashboard_chart_source')
 execute:frappe.reload_doc('desk', 'doctype', 'dashboard_chart')
 execute:frappe.reload_doc('desk', 'doctype', 'dashboard_chart_field')
 erpnext.patches.v12_0.remove_bank_remittance_custom_fields
-execute:frappe.delete_doc_if_exists("Report", "Loan Repayment")
 erpnext.patches.v12_0.move_credit_limit_to_customer_credit_limit
 erpnext.patches.v12_0.add_variant_of_in_item_attribute_table
 erpnext.patches.v12_0.rename_bank_account_field_in_journal_entry_account
@@ -146,7 +143,6 @@ execute:frappe.delete_doc_if_exists("Page", "appointment-analytic")
 execute:frappe.rename_doc("Desk Page", "Getting Started", "Home", force=True)
 erpnext.patches.v12_0.unset_customer_supplier_based_on_type_of_item_price
 erpnext.patches.v12_0.set_valid_till_date_in_supplier_quotation
-erpnext.patches.v13_0.update_old_loans
 erpnext.patches.v12_0.set_serial_no_status #2020-05-21
 erpnext.patches.v12_0.update_price_list_currency_in_bom
 execute:frappe.reload_doctype('Dashboard')
@@ -155,7 +151,6 @@ execute:frappe.delete_doc_if_exists('Dashboard', 'Accounts')
 erpnext.patches.v13_0.update_actual_start_and_end_date_in_wo
 erpnext.patches.v12_0.update_bom_in_so_mr
 execute:frappe.delete_doc("Report", "Department Analytics")
-execute:frappe.rename_doc("Desk Page", "Loan Management", "Loan", force=True)
 erpnext.patches.v12_0.update_uom_conversion_factor
 erpnext.patches.v13_0.replace_pos_page_with_point_of_sale_page
 erpnext.patches.v13_0.delete_old_purchase_reports
@@ -188,7 +183,6 @@ erpnext.patches.v13_0.update_member_email_address
 erpnext.patches.v13_0.update_pos_closing_entry_in_merge_log
 erpnext.patches.v13_0.add_po_to_global_search
 erpnext.patches.v13_0.update_returned_qty_in_pr_dn
-execute:frappe.rename_doc("Workspace", "Loan", "Loan Management", ignore_if_exists=True, force=True)
 erpnext.patches.v13_0.create_uae_pos_invoice_fields
 erpnext.patches.v13_0.update_project_template_tasks
 erpnext.patches.v13_0.convert_qi_parameter_to_link_field
@@ -205,7 +199,6 @@ erpnext.patches.v12_0.add_document_type_field_for_italy_einvoicing
 erpnext.patches.v13_0.update_shipment_status
 erpnext.patches.v13_0.remove_attribute_field_from_item_variant_setting
 erpnext.patches.v13_0.set_pos_closing_as_failed
-execute:frappe.rename_doc("Workspace", "Loan Management", "Loans", force=True)
 erpnext.patches.v13_0.update_timesheet_changes
 erpnext.patches.v13_0.add_doctype_to_sla #14-06-2021
 erpnext.patches.v13_0.bill_for_rejected_quantity_in_purchase_invoice
@@ -229,9 +222,6 @@ execute:frappe.reload_doc("erpnext_integrations", "doctype", "Product Tax Catego
 erpnext.patches.v13_0.set_operation_time_based_on_operating_cost
 erpnext.patches.v13_0.create_gst_payment_entry_fields #27-11-2021
 erpnext.patches.v13_0.fix_invoice_statuses
-erpnext.patches.v13_0.create_website_items #30-09-2021
-erpnext.patches.v13_0.populate_e_commerce_settings
-erpnext.patches.v13_0.make_homepage_products_website_items
 erpnext.patches.v13_0.replace_supplier_item_group_with_party_specific_item
 erpnext.patches.v13_0.update_dates_in_tax_withholding_category
 erpnext.patches.v14_0.update_opportunity_currency_fields
@@ -248,30 +238,33 @@ erpnext.patches.v12_0.update_production_plan_status
 erpnext.patches.v13_0.healthcare_deprecation_warning
 erpnext.patches.v13_0.item_naming_series_not_mandatory
 erpnext.patches.v13_0.update_category_in_ltds_certificate
-erpnext.patches.v13_0.fetch_thumbnail_in_website_items
 erpnext.patches.v13_0.update_maintenance_schedule_field_in_visit
-erpnext.patches.v13_0.create_ksa_vat_custom_fields # 07-01-2022
 erpnext.patches.v14_0.migrate_crm_settings
-erpnext.patches.v13_0.rename_ksa_qr_field
 erpnext.patches.v13_0.wipe_serial_no_field_for_0_qty
-erpnext.patches.v13_0.disable_ksa_print_format_for_others # 16-12-2021
 erpnext.patches.v13_0.agriculture_deprecation_warning
 erpnext.patches.v13_0.hospitality_deprecation_warning
 erpnext.patches.v13_0.update_asset_quantity_field
 erpnext.patches.v13_0.delete_bank_reconciliation_detail
 erpnext.patches.v13_0.enable_provisional_accounting
 erpnext.patches.v13_0.non_profit_deprecation_warning
-erpnext.patches.v13_0.enable_ksa_vat_docs #1
 erpnext.patches.v13_0.show_india_localisation_deprecation_warning
 erpnext.patches.v13_0.show_hr_payroll_deprecation_warning
 erpnext.patches.v13_0.reset_corrupt_defaults
 erpnext.patches.v13_0.create_accounting_dimensions_for_asset_repair
 erpnext.patches.v15_0.delete_taxjar_doctypes
-erpnext.patches.v15_0.create_asset_depreciation_schedules_from_assets
+erpnext.patches.v15_0.delete_ecommerce_doctypes
 erpnext.patches.v14_0.update_reference_due_date_in_journal_entry
+erpnext.patches.v15_0.saudi_depreciation_warning
+erpnext.patches.v15_0.delete_saudi_doctypes
+erpnext.patches.v14_0.show_loan_management_deprecation_warning
+erpnext.patches.v14_0.clear_reconciliation_values_from_singles
+execute:frappe.rename_doc("Report", "TDS Payable Monthly", "Tax Withholding Details", force=True)
+erpnext.patches.v14_0.update_proprietorship_to_individual
 
 [post_model_sync]
+erpnext.patches.v15_0.create_asset_depreciation_schedules_from_assets
 execute:frappe.delete_doc_if_exists('Workspace', 'ERPNext Integrations Settings')
+erpnext.patches.v14_0.update_posting_datetime_and_dropped_indexes #22-02-2024
 erpnext.patches.v14_0.rename_ongoing_status_in_sla_documents
 erpnext.patches.v14_0.delete_shopify_doctypes
 erpnext.patches.v14_0.delete_healthcare_doctypes
@@ -283,21 +276,15 @@ erpnext.patches.v14_0.delete_datev_doctypes
 erpnext.patches.v14_0.rearrange_company_fields
 erpnext.patches.v13_0.update_sane_transfer_against
 erpnext.patches.v14_0.migrate_cost_center_allocations
-erpnext.patches.v13_0.convert_to_website_item_in_item_card_group_template
-erpnext.patches.v13_0.shopping_cart_to_ecommerce
-erpnext.patches.v13_0.update_disbursement_account
 erpnext.patches.v13_0.update_reserved_qty_closed_wo
 erpnext.patches.v13_0.update_exchange_rate_settings
 erpnext.patches.v14_0.delete_amazon_mws_doctype
 erpnext.patches.v13_0.set_work_order_qty_in_so_from_mr
-erpnext.patches.v13_0.update_accounts_in_loan_docs
 erpnext.patches.v13_0.item_reposting_for_incorrect_sl_and_gl
 erpnext.patches.v14_0.update_batch_valuation_flag
 erpnext.patches.v14_0.delete_non_profit_doctypes
-erpnext.patches.v13_0.add_cost_center_in_loans
 erpnext.patches.v13_0.set_return_against_in_pos_invoice_references
 erpnext.patches.v13_0.remove_unknown_links_to_prod_plan_items # 24-03-2022
-erpnext.patches.v13_0.copy_custom_field_filters_to_website_item
 erpnext.patches.v13_0.change_default_item_manufacturer_fieldtype
 erpnext.patches.v13_0.requeue_recoverable_reposts
 erpnext.patches.v14_0.discount_accounting_separation
@@ -306,7 +293,6 @@ erpnext.patches.v13_0.set_per_billed_in_return_delivery_note
 execute:frappe.delete_doc("DocType", "Naming Series")
 erpnext.patches.v13_0.job_card_status_on_hold
 erpnext.patches.v14_0.copy_is_subcontracted_value_to_is_old_subcontracting_flow
-erpnext.patches.v14_0.migrate_gl_to_payment_ledger
 erpnext.patches.v14_0.crm_ux_cleanup
 erpnext.patches.v14_0.migrate_existing_lead_notes_as_per_the_new_format
 erpnext.patches.v14_0.remove_india_localisation # 14-07-2022
@@ -315,13 +301,86 @@ erpnext.patches.v14_0.remove_hr_and_payroll_modules # 20-07-2022
 erpnext.patches.v14_0.fix_crm_no_of_employees
 erpnext.patches.v14_0.create_accounting_dimensions_in_subcontracting_doctypes
 erpnext.patches.v14_0.fix_subcontracting_receipt_gl_entries
-erpnext.patches.v14_0.migrate_remarks_from_gl_to_payment_ledger
-erpnext.patches.v13_0.update_schedule_type_in_loans
 erpnext.patches.v13_0.drop_unused_sle_index_parts
 erpnext.patches.v14_0.create_accounting_dimensions_for_asset_capitalization
 erpnext.patches.v14_0.update_partial_tds_fields
 erpnext.patches.v14_0.create_incoterms_and_migrate_shipment
-erpnext.patches.v14_0.setup_clear_repost_logs
 erpnext.patches.v14_0.create_accounting_dimensions_for_payment_request
 erpnext.patches.v14_0.update_entry_type_for_journal_entry
 erpnext.patches.v14_0.change_autoname_for_tax_withheld_vouchers
+erpnext.patches.v14_0.set_pick_list_status
+erpnext.patches.v13_0.update_docs_link
+erpnext.patches.v15_0.update_asset_value_for_manual_depr_entries
+erpnext.patches.v15_0.update_gpa_and_ndb_for_assdeprsch
+erpnext.patches.v14_0.create_accounting_dimensions_for_closing_balance
+erpnext.patches.v14_0.update_closing_balances #14-07-2023
+execute:frappe.db.set_single_value("Accounts Settings", "merge_similar_account_heads", 0)
+erpnext.patches.v14_0.update_reference_type_in_journal_entry_accounts
+erpnext.patches.v14_0.update_subscription_details
+execute:frappe.delete_doc("Report", "Tax Detail", force=True)
+erpnext.patches.v15_0.enable_all_leads
+erpnext.patches.v14_0.update_company_in_ldc
+erpnext.patches.v14_0.set_packed_qty_in_draft_delivery_notes
+execute:frappe.delete_doc('DocType', 'Cash Flow Mapping Template Details', ignore_missing=True)
+execute:frappe.delete_doc('DocType', 'Cash Flow Mapping', ignore_missing=True)
+execute:frappe.delete_doc('DocType', 'Cash Flow Mapper', ignore_missing=True)
+execute:frappe.delete_doc('DocType', 'Cash Flow Mapping Template', ignore_missing=True)
+execute:frappe.delete_doc('DocType', 'Cash Flow Mapping Accounts', ignore_missing=True)
+erpnext.patches.v14_0.cleanup_workspaces
+erpnext.patches.v15_0.remove_loan_management_module #2023-07-03
+erpnext.patches.v14_0.set_report_in_process_SOA
+erpnext.buying.doctype.supplier.patches.migrate_supplier_portal_users
+execute:frappe.defaults.clear_default("fiscal_year")
+erpnext.patches.v15_0.remove_exotel_integration
+erpnext.patches.v14_0.single_to_multi_dunning
+execute:frappe.db.set_single_value('Selling Settings', 'allow_negative_rates_for_items', 0)
+erpnext.patches.v15_0.correct_asset_value_if_je_with_workflow
+erpnext.patches.v15_0.delete_woocommerce_settings_doctype
+erpnext.patches.v14_0.migrate_deferred_accounts_to_item_defaults
+erpnext.patches.v14_0.update_invoicing_period_in_subscription
+execute:frappe.delete_doc("Page", "welcome-to-erpnext")
+erpnext.patches.v15_0.migrate_payment_request_status
+erpnext.patches.v15_0.delete_payment_gateway_doctypes
+erpnext.patches.v14_0.create_accounting_dimensions_in_sales_order_item
+erpnext.patches.v15_0.update_sre_from_voucher_details
+erpnext.patches.v14_0.rename_over_order_allowance_field
+erpnext.patches.v14_0.migrate_delivery_stop_lock_field
+erpnext.patches.v14_0.add_default_for_repost_settings
+erpnext.patches.v15_0.rename_daily_depreciation_to_depreciation_amount_based_on_num_days_in_month
+erpnext.patches.v15_0.rename_depreciation_amount_based_on_num_days_in_month_to_daily_prorata_based
+erpnext.patches.v15_0.set_reserved_stock_in_bin
+erpnext.patches.v14_0.create_accounting_dimensions_in_supplier_quotation
+erpnext.patches.v14_0.update_zero_asset_quantity_field
+execute:frappe.db.set_single_value("Buying Settings", "project_update_frequency", "Each Transaction")
+execute:frappe.db.set_default("date_format", frappe.db.get_single_value("System Settings", "date_format"))
+erpnext.patches.v14_0.update_total_asset_cost_field
+erpnext.patches.v15_0.create_advance_payment_status
+erpnext.patches.v15_0.allow_on_submit_dimensions_for_repostable_doctypes
+erpnext.patches.v14_0.create_accounting_dimensions_in_reconciliation_tool
+erpnext.patches.v14_0.update_flag_for_return_invoices #2024-03-22
+erpnext.patches.v15_0.create_accounting_dimensions_in_payment_request
+erpnext.patches.v14_0.update_pos_return_ledger_entries #2024-08-16
+# below migration patch should always run last
+erpnext.patches.v14_0.migrate_gl_to_payment_ledger
+erpnext.stock.doctype.delivery_note.patches.drop_unused_return_against_index # 2023-12-20
+erpnext.patches.v14_0.set_maintain_stock_for_bom_item
+erpnext.patches.v15_0.delete_orphaned_asset_movement_item_records
+erpnext.patches.v15_0.fix_debit_credit_in_transaction_currency
+erpnext.patches.v15_0.rename_purchase_receipt_amount_to_purchase_amount
+erpnext.patches.v14_0.enable_set_priority_for_pricing_rules #1
+erpnext.patches.v15_0.rename_number_of_depreciations_booked_to_opening_booked_depreciations
+erpnext.patches.v15_0.add_default_operations
+erpnext.patches.v15_0.enable_old_serial_batch_fields
+erpnext.patches.v15_0.update_warehouse_field_in_asset_repair_consumed_item_doctype
+erpnext.patches.v15_0.update_asset_repair_field_in_stock_entry
+erpnext.patches.v15_0.update_total_number_of_booked_depreciations
+erpnext.patches.v15_0.do_not_use_batchwise_valuation
+erpnext.patches.v15_0.update_invoice_remarks
+erpnext.patches.v14_0.update_reports_with_range
+erpnext.patches.v15_0.drop_index_posting_datetime_from_sle
+erpnext.patches.v15_0.add_disassembly_order_stock_entry_type #1
+erpnext.patches.v15_0.set_standard_stock_entry_type
+erpnext.patches.v15_0.set_difference_amount_in_asset_value_adjustment
+erpnext.patches.v15_0.link_purchase_item_to_asset_doc
+erpnext.patches.v15_0.migrate_to_utm_analytics
+erpnext.patches.v14_0.update_currency_exchange_settings_for_frankfurter

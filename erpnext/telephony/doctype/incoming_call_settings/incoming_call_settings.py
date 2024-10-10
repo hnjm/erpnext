@@ -3,7 +3,6 @@
 
 
 from datetime import datetime
-from typing import Tuple
 
 import frappe
 from frappe import _
@@ -11,6 +10,25 @@ from frappe.model.document import Document
 
 
 class IncomingCallSettings(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		from erpnext.telephony.doctype.incoming_call_handling_schedule.incoming_call_handling_schedule import (
+			IncomingCallHandlingSchedule,
+		)
+
+		agent_busy_message: DF.Data | None
+		agent_unavailable_message: DF.Data | None
+		call_handling_schedule: DF.Table[IncomingCallHandlingSchedule]
+		call_routing: DF.Literal["Sequential", "Simultaneous"]
+		greeting_message: DF.Data | None
+	# end: auto-generated types
+
 	def validate(self):
 		"""List of validations
 		* Make sure that to time slot is ahead of from time slot in call schedule
@@ -54,7 +72,7 @@ class IncomingCallSettings(Document):
 					frappe.throw(_("Please fix overlapping time slots for {0}.").format(day))
 
 	@staticmethod
-	def check_timeslots_overlap(ts1: Tuple[int, int], ts2: Tuple[int, int]) -> bool:
+	def check_timeslots_overlap(ts1: tuple[int, int], ts2: tuple[int, int]) -> bool:
 		if (ts1[0] < ts2[0] and ts1[1] <= ts2[0]) or (ts1[0] >= ts2[1] and ts1[1] > ts2[1]):
 			return False
 		return True

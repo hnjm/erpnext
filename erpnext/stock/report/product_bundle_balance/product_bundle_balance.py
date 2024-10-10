@@ -213,18 +213,19 @@ def get_stock_ledger_entries(filters, items):
 
 	query = (
 		frappe.qb.from_(sle)
-		.force_index("posting_sort_index")
 		.left_join(sle2)
 		.on(
 			(sle.item_code == sle2.item_code)
 			& (sle.warehouse == sle2.warehouse)
-			& (sle.posting_date < sle2.posting_date)
-			& (sle.posting_time < sle2.posting_time)
+			& (sle.posting_datetime < sle2.posting_datetime)
 			& (sle.name < sle2.name)
 		)
 		.select(sle.item_code, sle.warehouse, sle.qty_after_transaction, sle.company)
 		.where((sle2.name.isnull()) & (sle.docstatus < 2) & (sle.item_code.isin(items)))
 	)
+
+	if filters.get("company"):
+		query = query.where(sle.company == filters.get("company"))
 
 	if date := filters.get("date"):
 		query = query.where(sle.posting_date <= date)
@@ -239,7 +240,7 @@ def get_stock_ledger_entries(filters, items):
 		if warehouse_details:
 			wh = frappe.qb.DocType("Warehouse")
 			query = query.where(
-				ExistsCriterion(
+				sle.warehouse.isin(
 					frappe.qb.from_(wh)
 					.select(wh.name)
 					.where((wh.lft >= warehouse_details.lft) & (wh.rgt <= warehouse_details.rgt))

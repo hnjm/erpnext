@@ -1,7 +1,6 @@
 # Copyright (c) 2013, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
-from typing import Dict, List, Tuple
 
 import frappe
 from frappe import _
@@ -9,12 +8,12 @@ from frappe.query_builder.functions import Sum
 
 Filters = frappe._dict
 Row = frappe._dict
-Data = List[Row]
-Columns = List[Dict[str, str]]
-QueryArgs = Dict[str, str]
+Data = list[Row]
+Columns = list[dict[str, str]]
+QueryArgs = dict[str, str]
 
 
-def execute(filters: Filters) -> Tuple[Columns, Data]:
+def execute(filters: Filters) -> tuple[Columns, Data]:
 	filters = frappe._dict(filters or {})
 	columns = get_columns()
 	data = get_data(filters)
@@ -33,10 +32,9 @@ def get_data(filters: Filters) -> Data:
 			wo.name,
 			wo.status,
 			wo.production_item,
-			wo.qty,
 			wo.produced_qty,
 			wo.process_loss_qty,
-			(wo.produced_qty - wo.process_loss_qty).as_("actual_produced_qty"),
+			wo.qty.as_("qty_to_manufacture"),
 			Sum(se.total_incoming_value).as_("total_fg_value"),
 			Sum(se.total_outgoing_value).as_("total_rm_value"),
 		)
@@ -44,6 +42,7 @@ def get_data(filters: Filters) -> Data:
 			(wo.process_loss_qty > 0)
 			& (wo.company == filters.company)
 			& (se.docstatus == 1)
+			& (se.purpose == "Manufacture")
 			& (se.posting_date.between(filters.from_date, filters.to_date))
 		)
 		.groupby(se.work_order)
@@ -80,20 +79,35 @@ def get_columns() -> Columns:
 		},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": "100"},
 		{
+			"label": _("Qty To Manufacture"),
+			"fieldname": "qty_to_manufacture",
+			"fieldtype": "Float",
+			"width": "150",
+		},
+		{
 			"label": _("Manufactured Qty"),
 			"fieldname": "produced_qty",
 			"fieldtype": "Float",
 			"width": "150",
 		},
-		{"label": _("Loss Qty"), "fieldname": "process_loss_qty", "fieldtype": "Float", "width": "150"},
 		{
-			"label": _("Actual Manufactured Qty"),
-			"fieldname": "actual_produced_qty",
+			"label": _("Process Loss Qty"),
+			"fieldname": "process_loss_qty",
 			"fieldtype": "Float",
 			"width": "150",
 		},
-		{"label": _("Loss Value"), "fieldname": "total_pl_value", "fieldtype": "Float", "width": "150"},
-		{"label": _("FG Value"), "fieldname": "total_fg_value", "fieldtype": "Float", "width": "150"},
+		{
+			"label": _("Process Loss Value"),
+			"fieldname": "total_pl_value",
+			"fieldtype": "Float",
+			"width": "150",
+		},
+		{
+			"label": _("Finished Goods Value"),
+			"fieldname": "total_fg_value",
+			"fieldtype": "Float",
+			"width": "150",
+		},
 		{
 			"label": _("Raw Material Value"),
 			"fieldname": "total_rm_value",
@@ -105,5 +119,5 @@ def get_columns() -> Columns:
 
 def update_data_with_total_pl_value(data: Data) -> None:
 	for row in data:
-		value_per_unit_fg = row["total_fg_value"] / row["actual_produced_qty"]
+		value_per_unit_fg = row["total_fg_value"] / row["qty_to_manufacture"]
 		row["total_pl_value"] = row["process_loss_qty"] * value_per_unit_fg

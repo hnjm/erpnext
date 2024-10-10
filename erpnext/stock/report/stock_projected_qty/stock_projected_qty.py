@@ -76,6 +76,7 @@ def execute(filters=None):
 				bin.ordered_qty,
 				bin.reserved_qty,
 				bin.reserved_qty_for_production,
+				bin.reserved_qty_for_production_plan,
 				bin.reserved_qty_for_sub_contract,
 				reserved_qty_for_pos,
 				bin.projected_qty,
@@ -174,6 +175,13 @@ def get_columns():
 			"convertible": "qty",
 		},
 		{
+			"label": _("Reserved for Production Plan"),
+			"fieldname": "reserved_qty_for_production_plan",
+			"fieldtype": "Float",
+			"width": 100,
+			"convertible": "qty",
+		},
+		{
 			"label": _("Reserved for Sub Contracting"),
 			"fieldname": "reserved_qty_for_sub_contract",
 			"fieldtype": "Float",
@@ -232,6 +240,7 @@ def get_bin_list(filters):
 			bin.reserved_qty,
 			bin.reserved_qty_for_production,
 			bin.reserved_qty_for_sub_contract,
+			bin.reserved_qty_for_production_plan,
 			bin.projected_qty,
 		)
 		.orderby(bin.item_code, bin.warehouse)
@@ -241,9 +250,7 @@ def get_bin_list(filters):
 		query = query.where(bin.item_code == filters.item_code)
 
 	if filters.warehouse:
-		warehouse_details = frappe.db.get_value(
-			"Warehouse", filters.warehouse, ["lft", "rgt"], as_dict=1
-		)
+		warehouse_details = frappe.db.get_value("Warehouse", filters.warehouse, ["lft", "rgt"], as_dict=1)
 
 		if warehouse_details:
 			wh = frappe.qb.DocType("Warehouse")
@@ -277,7 +284,9 @@ def get_item_map(item_code, include_uom):
 			(item.is_stock_item == 1)
 			& (item.disabled == 0)
 			& (
-				(item.end_of_life > today()) | (item.end_of_life.isnull()) | (item.end_of_life == "0000-00-00")
+				(item.end_of_life > today())
+				| (item.end_of_life.isnull())
+				| (item.end_of_life == "0000-00-00")
 			)
 			& (ExistsCriterion(frappe.qb.from_(bin).select(bin.name).where(bin.item_code == item.name)))
 		)

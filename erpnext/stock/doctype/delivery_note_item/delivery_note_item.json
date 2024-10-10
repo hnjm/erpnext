@@ -40,6 +40,7 @@
   "column_break_19",
   "discount_percentage",
   "discount_amount",
+  "distributed_discount_amount",
   "base_rate_with_margin",
   "section_break_1",
   "rate",
@@ -70,6 +71,7 @@
   "target_warehouse",
   "quality_inspection",
   "col_break4",
+  "allow_zero_valuation_rate",
   "against_sales_order",
   "so_detail",
   "against_sales_invoice",
@@ -77,15 +79,24 @@
   "dn_detail",
   "pick_list_item",
   "section_break_40",
-  "batch_no",
+  "pick_serial_and_batch",
+  "serial_and_batch_bundle",
+  "use_serial_batch_fields",
+  "column_break_eaoe",
+  "section_break_qyjv",
   "serial_no",
+  "column_break_rxvc",
+  "batch_no",
+  "available_qty_section",
   "actual_batch_qty",
   "actual_qty",
   "installed_qty",
   "item_tax_rate",
+  "column_break_atna",
+  "packed_qty",
+  "received_qty",
   "accounting_details_section",
   "expense_account",
-  "allow_zero_valuation_rate",
   "column_break_71",
   "internal_transfer_section",
   "material_request",
@@ -158,10 +169,10 @@
    "oldfieldname": "description",
    "oldfieldtype": "Small Text",
    "print_width": "300px",
-   "reqd": 1,
    "width": "300px"
   },
   {
+   "fetch_from": "item_code.image",
    "fieldname": "image",
    "fieldtype": "Attach",
    "hidden": 1,
@@ -264,7 +275,7 @@
   },
   {
    "collapsible": 1,
-   "collapsible_depends_on": "eval: doc.margin_type || doc.discount_amount",
+   "collapsible_depends_on": "eval: doc.margin_type || doc.discount_amount || doc.distributed_discount_amount",
    "fieldname": "discount_and_margin",
    "fieldtype": "Section Break",
    "label": "Discount and Margin"
@@ -502,17 +513,8 @@
   },
   {
    "fieldname": "section_break_40",
-   "fieldtype": "Section Break"
-  },
-  {
-   "fieldname": "batch_no",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Batch No",
-   "oldfieldname": "batch_no",
-   "oldfieldtype": "Link",
-   "options": "Batch",
-   "print_hide": 1
+   "fieldtype": "Section Break",
+   "label": "Serial and Batch No"
   },
   {
    "allow_on_submit": 1,
@@ -538,15 +540,6 @@
    "print_width": "150px",
    "read_only": 1,
    "width": "150px"
-  },
-  {
-   "fieldname": "serial_no",
-   "fieldtype": "Text",
-   "in_list_view": 1,
-   "label": "Serial No",
-   "no_copy": 1,
-   "oldfieldname": "serial_no",
-   "oldfieldtype": "Text"
   },
   {
    "fieldname": "item_group",
@@ -627,7 +620,8 @@
    "no_copy": 1,
    "options": "Sales Order",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "against_sales_invoice",
@@ -636,7 +630,8 @@
    "no_copy": 1,
    "options": "Sales Invoice",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "so_detail",
@@ -659,7 +654,8 @@
    "label": "Against Sales Invoice Item",
    "no_copy": 1,
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "installed_qty",
@@ -734,7 +730,8 @@
    "label": "Against Delivery Note Item",
    "no_copy": 1,
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "stock_qty_sec_break",
@@ -800,7 +797,8 @@
    "label": "Purchase Order",
    "options": "Purchase Order",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_82",
@@ -831,20 +829,105 @@
    "fieldname": "material_request_item",
    "fieldtype": "Data",
    "label": "Material Request Item"
+  },
+  {
+   "fieldname": "column_break_atna",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval: parent.is_internal_customer",
+   "fieldname": "received_qty",
+   "fieldtype": "Float",
+   "label": "Received Qty",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval: doc.packed_qty",
+   "fieldname": "packed_qty",
+   "fieldtype": "Float",
+   "label": "Packed Qty",
+   "no_copy": 1,
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.use_serial_batch_fields === 0 || doc.docstatus === 1",
+   "fieldname": "serial_and_batch_bundle",
+   "fieldtype": "Link",
+   "label": "Serial and Batch Bundle",
+   "no_copy": 1,
+   "options": "Serial and Batch Bundle",
+   "print_hide": 1,
+   "search_index": 1
+  },
+  {
+   "depends_on": "eval:doc.use_serial_batch_fields === 0 || doc.docstatus === 1",
+   "fieldname": "pick_serial_and_batch",
+   "fieldtype": "Button",
+   "label": "Pick Serial / Batch No"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "available_qty_section",
+   "fieldtype": "Section Break",
+   "label": "Available Qty"
+  },
+  {
+   "fieldname": "column_break_eaoe",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.use_serial_batch_fields === 1",
+   "fieldname": "serial_no",
+   "fieldtype": "Text",
+   "label": "Serial No"
+  },
+  {
+   "depends_on": "eval:doc.use_serial_batch_fields === 1",
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "label": "Batch No",
+   "options": "Batch",
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "use_serial_batch_fields",
+   "fieldtype": "Check",
+   "label": "Use Serial No / Batch Fields"
+  },
+  {
+   "depends_on": "eval:doc.use_serial_batch_fields === 1",
+   "fieldname": "section_break_qyjv",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_rxvc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "distributed_discount_amount",
+   "fieldtype": "Currency",
+   "label": "Distributed Discount Amount",
+   "options": "currency"
   }
  ],
  "idx": 1,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2022-11-09 12:17:50.850142",
+ "modified": "2024-06-02 06:18:38.491763",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Delivery Note Item",
  "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": []
 }
