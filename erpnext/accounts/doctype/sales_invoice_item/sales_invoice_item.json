@@ -813,7 +813,8 @@
    "fieldname": "project",
    "fieldtype": "Link",
    "label": "Project",
-   "options": "Project"
+   "options": "Project",
+   "search_index": 1
   },
   {
    "depends_on": "eval:parent.update_stock == 1",
@@ -934,7 +935,7 @@
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2024-06-02 06:14:40.009020",
+ "modified": "2024-10-28 15:06:40.980995",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Sales Invoice Item",

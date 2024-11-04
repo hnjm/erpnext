@@ -6,7 +6,6 @@ from typing import Literal
 
 import frappe
 from frappe.tests import IntegrationTestCase, UnitTestCase
-from frappe.tests.utils import make_test_records
 from frappe.utils import random_string
 from frappe.utils.data import add_to_date, now, today
 
@@ -25,6 +24,8 @@ from erpnext.manufacturing.doctype.work_order.work_order import WorkOrder
 from erpnext.manufacturing.doctype.workstation.test_workstation import make_workstation
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 
+EXTRA_TEST_RECORD_DEPENDENCIES = ["UOM"]
+
 
 class UnitTestJobCard(UnitTestCase):
 	"""
@@ -37,10 +38,18 @@ class UnitTestJobCard(UnitTestCase):
 
 class TestJobCard(IntegrationTestCase):
 	def setUp(self):
-		make_bom_for_jc_tests()
+		self.make_bom_for_jc_tests()
 		self.transfer_material_against: Literal["Work Order", "Job Card"] = "Work Order"
 		self.source_warehouse = None
 		self._work_order = None
+
+	def make_bom_for_jc_tests(self):
+		bom = frappe.copy_doc(self.globalTestRecords["BOM"][2])
+		bom.set_rate_of_sub_assembly_item_based_on_bom = 0
+		bom.rm_cost_as_per = "Valuation Rate"
+		bom.items[0].uom = "_Test UOM 1"
+		bom.items[0].conversion_factor = 5
+		bom.insert()
 
 	@property
 	def work_order(self) -> WorkOrder:
@@ -493,8 +502,6 @@ class TestJobCard(IntegrationTestCase):
 			{"operation": "Test Operation B1", "workstation": "Test Workstation A", "time_in_mins": 20},
 		]
 
-		make_test_records("UOM")
-
 		warehouse = create_warehouse("Test Warehouse 123 for Job Card")
 
 		setup_operations(operations)
@@ -669,13 +676,3 @@ def make_wo_with_transfer_against_jc():
 	work_order.submit()
 
 	return work_order
-
-
-def make_bom_for_jc_tests():
-	test_records = frappe.get_test_records("BOM")
-	bom = frappe.copy_doc(test_records[2])
-	bom.set_rate_of_sub_assembly_item_based_on_bom = 0
-	bom.rm_cost_as_per = "Valuation Rate"
-	bom.items[0].uom = "_Test UOM 1"
-	bom.items[0].conversion_factor = 5
-	bom.insert()

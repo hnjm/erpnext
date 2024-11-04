@@ -28,6 +28,7 @@ class TestPricingRule(IntegrationTestCase):
 	def setUp(self):
 		delete_existing_pricing_rules()
 		setup_pricing_rule_data()
+		self.enterClassContext(self.change_settings("Selling Settings", validate_selling_price=0))
 
 	def tearDown(self):
 		delete_existing_pricing_rules()
@@ -1140,6 +1141,12 @@ class TestPricingRule(IntegrationTestCase):
 		self.assertEqual(so.items[1].item_code, "_Test Item")
 		self.assertEqual(so.items[1].qty, 3)
 
+		so = make_sales_order(item_code="_Test Item", qty=5, do_not_submit=1)
+		so.items[0].qty = 1
+		del so.items[-1]
+		so.save()
+		self.assertEqual(len(so.items), 1)
+
 	def test_apply_multiple_pricing_rules_for_discount_percentage_and_amount(self):
 		frappe.delete_doc_if_exists("Pricing Rule", "_Test Pricing Rule 1")
 		frappe.delete_doc_if_exists("Pricing Rule", "_Test Pricing Rule 2")
@@ -1387,7 +1394,7 @@ class TestPricingRule(IntegrationTestCase):
 		pi.cancel()
 
 
-test_dependencies = ["UTM Campaign"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["UTM Campaign"]
 
 
 def make_pricing_rule(**args):

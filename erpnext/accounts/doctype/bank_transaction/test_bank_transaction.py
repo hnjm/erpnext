@@ -18,7 +18,7 @@ from erpnext.accounts.doctype.purchase_invoice.test_purchase_invoice import make
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.tests.utils import if_lending_app_installed
 
-test_dependencies = ["Item", "Cost Center"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Item", "Cost Center"]
 
 
 class UnitTestBankTransaction(UnitTestCase):
@@ -32,14 +32,6 @@ class UnitTestBankTransaction(UnitTestCase):
 
 class TestBankTransaction(IntegrationTestCase):
 	def setUp(self):
-		for dt in [
-			"Bank Transaction",
-			"Payment Entry",
-			"Payment Entry Reference",
-			"POS Profile",
-		]:
-			frappe.db.delete(dt)
-		clear_loan_transactions()
 		make_pos_profile()
 
 		# generate and use a uniq hash identifier for 'Bank Account' and it's linked GL 'Account' to avoid validation error
@@ -229,11 +221,6 @@ class TestBankTransaction(IntegrationTestCase):
 
 		linked_payments = get_linked_payments(bank_transaction.name, ["loan_repayment", "exact_match"])
 		self.assertEqual(linked_payments[0]["name"], repayment_entry.name)
-
-
-@if_lending_app_installed
-def clear_loan_transactions():
-	frappe.db.delete("Loan Repayment")
 
 
 def create_bank_account(

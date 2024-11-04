@@ -1136,12 +1136,14 @@
    "label": "Payment Terms"
   },
   {
+   "depends_on": "eval:(!doc.is_paid && !doc.is_return)",
    "fieldname": "payment_terms_template",
    "fieldtype": "Link",
    "label": "Payment Terms Template",
    "options": "Payment Terms Template"
   },
   {
+   "depends_on": "eval:(!doc.is_paid && !doc.is_return)",
    "fieldname": "payment_schedule",
    "fieldtype": "Table",
    "label": "Payment Schedule",
@@ -1639,7 +1641,7 @@
  "idx": 204,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-09-18 12:24:44.826539",
+ "modified": "2024-10-25 18:13:01.944477",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Purchase Invoice",

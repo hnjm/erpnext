@@ -5,7 +5,7 @@ import unittest
 import frappe
 from frappe.tests import IntegrationTestCase
 
-test_ignore = ["Leave Block List"]
+IGNORE_TEST_RECORD_DEPENDENCIES = ["Leave Block List"]
 
 
 class TestDepartment(IntegrationTestCase):
@@ -26,6 +26,3 @@ def create_department(department_name, parent_department=None):
 	).insert()
 
 	return doc
-
-
-test_records = frappe.get_test_records("Department")

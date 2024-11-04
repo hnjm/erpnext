@@ -12,12 +12,13 @@ from erpnext.accounts.report.sales_payment_summary.sales_payment_summary import 
 	get_mode_of_payments,
 )
 
-test_dependencies = ["Sales Invoice"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Sales Invoice"]
 
 
 class TestSalesPaymentSummary(IntegrationTestCase):
 	@classmethod
-	def setUpClass(self):
+	def setUpClass(cls):
+		super().setUpClass()
 		create_records()
 		pes = frappe.get_all("Payment Entry")
 		jes = frappe.get_all("Journal Entry")

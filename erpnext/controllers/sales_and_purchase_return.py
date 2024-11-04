@@ -79,6 +79,9 @@ def validate_returned_items(doc):
 	if doc.doctype in ["Purchase Invoice", "Purchase Receipt", "Subcontracting Receipt"]:
 		select_fields += ",rejected_qty, received_qty"
 
+	if doc.doctype in ["Purchase Receipt", "Purchase Invoice"]:
+		select_fields += ",name"
+
 	for d in frappe.db.sql(
 		f"""select {select_fields} from `tab{doc.doctype} Item` where parent = %s""",
 		doc.return_against,
@@ -104,15 +107,24 @@ def validate_returned_items(doc):
 
 	items_returned = False
 	for d in doc.get("items"):
+		key = d.item_code
+		raise_exception = False
+		if doc.doctype in ["Purchase Receipt", "Purchase Invoice"]:
+			field = frappe.scrub(doc.doctype) + "_item"
+			if d.get(field):
+				key = (d.item_code, d.get(field))
+				raise_exception = True
+
 		if d.item_code and (flt(d.qty) < 0 or flt(d.get("received_qty")) < 0):
-			if d.item_code not in valid_items:
-				frappe.throw(
+			if key not in valid_items:
+				frappe.msgprint(
 					_("Row # {0}: Returned Item {1} does not exist in {2} {3}").format(
 						d.idx, d.item_code, doc.doctype, doc.return_against
-					)
+					),
+					raise_exception=raise_exception,
 				)
 			else:
-				ref = valid_items.get(d.item_code, frappe._dict())
+				ref = valid_items.get(key, frappe._dict())
 				validate_quantity(doc, d, ref, valid_items, already_returned_items)
 
 				if (
@@ -193,8 +205,12 @@ def validate_quantity(doc, args, ref, valid_items, already_returned_items):
 def get_ref_item_dict(valid_items, ref_item_row):
 	from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos
 
+	key = ref_item_row.item_code
+	if ref_item_row.get("name"):
+		key = (ref_item_row.item_code, ref_item_row.name)
+
 	valid_items.setdefault(
-		ref_item_row.item_code,
+		key,
 		frappe._dict(
 			{
 				"qty": 0,
@@ -208,7 +224,7 @@ def get_ref_item_dict(valid_items, ref_item_row):
 			}
 		),
 	)
-	item_dict = valid_items[ref_item_row.item_code]
+	item_dict = valid_items[key]
 	item_dict["qty"] += ref_item_row.qty
 	item_dict["stock_qty"] += ref_item_row.get("stock_qty", 0)
 	if ref_item_row.get("rate", 0) > item_dict["rate"]:
@@ -584,6 +600,10 @@ def make_return_doc(doctype: str, source_name: str, target_doc=None, return_agai
 			if default_warehouse_for_sales_return:
 				target_doc.warehouse = default_warehouse_for_sales_return
 
+		if not source_doc.use_serial_batch_fields and source_doc.serial_and_batch_bundle:
+			target_doc.serial_no = None
+			target_doc.batch_no = None
+
 		if (
 			(source_doc.serial_no or source_doc.batch_no)
 			and not source_doc.serial_and_batch_bundle
@@ -886,6 +906,7 @@ def get_serial_batches_based_on_bundle(field, _bundle_ids):
 			"`tabSerial and Batch Entry`.`serial_no`",
 			"`tabSerial and Batch Entry`.`batch_no`",
 			"`tabSerial and Batch Entry`.`qty`",
+			"`tabSerial and Batch Entry`.`incoming_rate`",
 			"`tabSerial and Batch Bundle`.`voucher_detail_no`",
 			"`tabSerial and Batch Bundle`.`voucher_type`",
 			"`tabSerial and Batch Bundle`.`voucher_no`",
@@ -907,15 +928,23 @@ def get_serial_batches_based_on_bundle(field, _bundle_ids):
 
 		if key not in available_dict:
 			available_dict[key] = frappe._dict(
-				{"qty": 0.0, "serial_nos": defaultdict(float), "batches": defaultdict(float)}
+				{
+					"qty": 0.0,
+					"serial_nos": defaultdict(float),
+					"batches": defaultdict(float),
+					"serial_nos_valuation": defaultdict(float),
+					"batches_valuation": defaultdict(float),
+				}
 			)
 
 		available_dict[key]["qty"] += row.qty
 
 		if row.serial_no:
 			available_dict[key]["serial_nos"][row.serial_no] += row.qty
+			available_dict[key]["serial_nos_valuation"][row.serial_no] = row.incoming_rate
 		elif row.batch_no:
 			available_dict[key]["batches"][row.batch_no] += row.qty
+			available_dict[key]["batches_valuation"][row.batch_no] = row.incoming_rate
 
 	return available_dict
 
@@ -951,12 +980,13 @@ def get_serial_and_batch_bundle(field, doctype, reference_ids, is_rejected=False
 			)
 		)
 	else:
-		fields = [
-			"serial_and_batch_bundle",
-		]
+		fields = ["serial_and_batch_bundle"]
 
 		if is_rejected:
-			fields.extend(["rejected_serial_and_batch_bundle", "return_qty_from_rejected_warehouse"])
+			fields.append("rejected_serial_and_batch_bundle")
+
+			if doctype == "Purchase Receipt Item":
+				fields.append("return_qty_from_rejected_warehouse")
 
 		del filters["rejected_serial_and_batch_bundle"]
 		data = frappe.get_all(
@@ -990,7 +1020,14 @@ def filter_serial_batches(parent_doc, data, row, warehouse_field=None, qty_field
 	warehouse = row.get(warehouse_field)
 	qty = abs(row.get(qty_field))
 
-	filterd_serial_batch = frappe._dict({"serial_nos": [], "batches": defaultdict(float)})
+	filterd_serial_batch = frappe._dict(
+		{
+			"serial_nos": [],
+			"batches": defaultdict(float),
+			"serial_nos_valuation": data.get("serial_nos_valuation"),
+			"batches_valuation": data.get("batches_valuation"),
+		}
+	)
 
 	if data.serial_nos:
 		available_serial_nos = []
@@ -1000,7 +1037,7 @@ def filter_serial_batches(parent_doc, data, row, warehouse_field=None, qty_field
 
 		if available_serial_nos:
 			if parent_doc.doctype in ["Purchase Invoice", "Purchase Reecipt"]:
-				available_serial_nos = get_available_serial_nos(available_serial_nos)
+				available_serial_nos = get_available_serial_nos(available_serial_nos, warehouse)
 
 			if len(available_serial_nos) > qty:
 				filterd_serial_batch["serial_nos"] = sorted(available_serial_nos[0 : cint(qty)])
@@ -1085,6 +1122,8 @@ def make_serial_batch_bundle_for_return(data, child_doc, parent_doc, warehouse_f
 			"warehouse": warehouse,
 			"serial_nos": data.get("serial_nos"),
 			"batches": data.get("batches"),
+			"serial_nos_valuation": data.get("serial_nos_valuation"),
+			"batches_valuation": data.get("batches_valuation"),
 			"posting_date": parent_doc.posting_date,
 			"posting_time": parent_doc.posting_time,
 			"voucher_type": parent_doc.doctype,

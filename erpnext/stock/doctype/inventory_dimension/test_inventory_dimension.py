@@ -16,6 +16,7 @@ from erpnext.stock.doctype.inventory_dimension.inventory_dimension import (
 from erpnext.stock.doctype.item.test_item import create_item
 from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
+from erpnext.stock.doctype.stock_ledger_entry.stock_ledger_entry import InventoryDimensionNegativeStockError
 from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
 
 
@@ -435,39 +436,49 @@ class TestInventoryDimension(IntegrationTestCase):
 
 		warehouse = create_warehouse("Negative Stock Warehouse")
 
+		# Try issuing 10 qty, more than available stock against inventory dimension
 		doc = make_stock_entry(item_code=item_code, source=warehouse, qty=10, do_not_submit=True)
 		doc.items[0].inv_site = "Site 1"
-		self.assertRaises(frappe.ValidationError, doc.submit)
+		self.assertRaises(InventoryDimensionNegativeStockError, doc.submit)
+
+		# cancel the stock entry
 		doc.reload()
 		if doc.docstatus == 1:
 			doc.cancel()
 
+		# Receive 10 qty against inventory dimension
 		doc = make_stock_entry(item_code=item_code, target=warehouse, qty=10, do_not_submit=True)
-
 		doc.items[0].to_inv_site = "Site 1"
 		doc.submit()
 
+		# check inventory dimension value in stock ledger entry
 		site_name = frappe.get_all(
 			"Stock Ledger Entry", filters={"voucher_no": doc.name, "is_cancelled": 0}, fields=["inv_site"]
 		)[0].inv_site
 
 		self.assertEqual(site_name, "Site 1")
 
+		# Receive another 100 qty without inventory dimension
+		doc = make_stock_entry(item_code=item_code, target=warehouse, qty=100)
+
+		# Try issuing 100 qty, more than available stock against inventory dimension
+		# Note: total available qty for the item is 110, but against inventory dimension, only 10 qty is available
 		doc = make_stock_entry(item_code=item_code, source=warehouse, qty=100, do_not_submit=True)
-
 		doc.items[0].inv_site = "Site 1"
-		self.assertRaises(frappe.ValidationError, doc.submit)
+		self.assertRaises(InventoryDimensionNegativeStockError, doc.submit)
 
+		# disable validate_negative_stock for inventory dimension
 		inv_dimension.reload()
 		inv_dimension.db_set("validate_negative_stock", 0)
 		frappe.local.inventory_dimensions = {}
 
+		# Try issuing 100 qty, more than available stock against inventory dimension
 		doc = make_stock_entry(item_code=item_code, source=warehouse, qty=100, do_not_submit=True)
-
 		doc.items[0].inv_site = "Site 1"
 		doc.submit()
 		self.assertEqual(doc.docstatus, 1)
 
+		# check inventory dimension value in stock ledger entry
 		site_name = frappe.get_all(
 			"Stock Ledger Entry", filters={"voucher_no": doc.name, "is_cancelled": 0}, fields=["inv_site"]
 		)[0].inv_site

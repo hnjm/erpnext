@@ -585,7 +585,7 @@ class PurchaseOrder(BuyingController):
 	def update_receiving_percentage(self):
 		total_qty, received_qty = 0.0, 0.0
 		for item in self.items:
-			received_qty += item.received_qty
+			received_qty += min(item.received_qty, item.qty)
 			total_qty += item.qty
 		if total_qty:
 			self.db_set("per_received", flt(received_qty / total_qty) * 100, update_modified=False)

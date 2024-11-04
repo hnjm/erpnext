@@ -176,16 +176,31 @@ class WorkOrder(Document):
 		self.validate_operation_time()
 		self.status = self.get_status()
 		self.validate_workstation_type()
+		self.reset_use_multi_level_bom()
 
 		validate_uom_is_integer(self, "stock_uom", ["qty", "produced_qty"])
 
 		self.set_required_items(reset_only_qty=len(self.get("required_items")))
 
+	def reset_use_multi_level_bom(self):
+		if self.is_new():
+			return
+
+		before_save_obj = self.get_doc_before_save()
+		if before_save_obj.use_multi_level_bom != self.use_multi_level_bom:
+			self.get_items_and_operations_from_bom()
+
 	def validate_workstation_type(self):
+		if not self.docstatus.is_submitted():
+			return
+
 		for row in self.operations:
 			if not row.workstation and not row.workstation_type:
-				msg = f"Row {row.idx}: Workstation or Workstation Type is mandatory for an operation {row.operation}"
-				frappe.throw(_(msg))
+				frappe.throw(
+					_("Row {0}: Workstation or Workstation Type is mandatory for an operation {1}").format(
+						row.idx, row.operation
+					)
+				)
 
 	def validate_sales_order(self):
 		if self.sales_order:

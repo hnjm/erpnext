@@ -63,6 +63,21 @@ class StockController(AccountsController):
 		self.set_rate_of_stock_uom()
 		self.validate_internal_transfer()
 		self.validate_putaway_capacity()
+		self.reset_conversion_factor()
+
+	def reset_conversion_factor(self):
+		for row in self.get("items"):
+			if row.uom != row.stock_uom:
+				continue
+
+			if row.conversion_factor != 1.0:
+				row.conversion_factor = 1.0
+				frappe.msgprint(
+					_(
+						"Conversion factor for item {0} has been reset to 1.0 as the uom {1} is same as stock uom {2}."
+					).format(bold(row.item_code), bold(row.uom), bold(row.stock_uom)),
+					alert=True,
+				)
 
 	def validate_items_exist(self):
 		if not self.get("items"):
@@ -318,6 +333,11 @@ class StockController(AccountsController):
 						"serial_no": "",
 					}
 				)
+
+				if self.doctype in ["Sales Invoice", "Delivery Note"]:
+					row.db_set(
+						"incoming_rate", frappe.db.get_value("Serial and Batch Bundle", bundle, "avg_rate")
+					)
 
 	def get_reference_ids(self, table_name, qty_field=None, bundle_field=None) -> tuple[str, list[str]]:
 		field = {

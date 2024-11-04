@@ -21,7 +21,7 @@ from erpnext.stock.doctype.stock_reconciliation.stock_reconciliation import (
 	EmptyStockReconciliationItemsError,
 )
 
-test_dependencies = ["Item", "Sales Invoice", "Stock Entry", "Batch"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Item", "Sales Invoice", "Stock Entry", "Batch"]
 
 
 class UnitTestPickList(UnitTestCase):
@@ -790,7 +790,7 @@ class TestPickList(IntegrationTestCase):
 		self.assertEqual(so.per_delivered, 100)
 
 	def test_picklist_with_partial_bundles(self):
-		# from test_records.json
+		# from self.globalTestRecords
 		warehouse = "_Test Warehouse - _TC"
 
 		quantities = [5, 2]

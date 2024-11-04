@@ -17,7 +17,7 @@ from erpnext.accounts.utils import get_fiscal_year
 from erpnext.buying.doctype.purchase_order.test_purchase_order import create_purchase_order
 from erpnext.stock.doctype.item.test_item import create_item
 
-test_dependencies = ["Item"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Item"]
 
 
 class UnitTestPaymentReconciliation(UnitTestCase):
@@ -1995,13 +1995,15 @@ def make_period_closing_voucher(company, cost_center, posting_date=None, submit=
 		parent_account=parent_account,
 		doctype="Account",
 	)
+	fy = get_fiscal_year(posting_date, company=company)
 	pcv = frappe.get_doc(
 		{
 			"doctype": "Period Closing Voucher",
 			"transaction_date": posting_date or today(),
-			"posting_date": posting_date or today(),
+			"period_start_date": fy[1],
+			"period_end_date": fy[2],
 			"company": company,
-			"fiscal_year": get_fiscal_year(posting_date or today(), company=company)[0],
+			"fiscal_year": fy[0],
 			"cost_center": cost_center,
 			"closing_account_head": surplus_account,
 			"remarks": "test",

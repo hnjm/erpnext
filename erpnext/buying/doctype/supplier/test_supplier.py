@@ -3,14 +3,13 @@
 
 
 import frappe
-from frappe.tests.utils import make_test_records
 
 from erpnext.accounts.party import get_due_date
 from erpnext.controllers.website_list_for_contact import get_customers_suppliers
 from erpnext.exceptions import PartyDisabled
 
-test_dependencies = ["Payment Term", "Payment Terms Template"]
-test_records = frappe.get_test_records("Supplier")
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Payment Term", "Payment Terms Template"]
+
 
 from frappe.tests import IntegrationTestCase, UnitTestCase
 
@@ -105,8 +104,6 @@ class TestSupplier(IntegrationTestCase):
 		self.assertEqual(due_date, "2017-01-22")
 
 	def test_supplier_disabled(self):
-		make_test_records("Item")
-
 		frappe.db.set_value("Supplier", "_Test Supplier", "disabled", 1)
 
 		from erpnext.buying.doctype.purchase_order.test_purchase_order import create_purchase_order

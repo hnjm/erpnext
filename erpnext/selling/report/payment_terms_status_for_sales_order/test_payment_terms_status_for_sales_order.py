@@ -11,19 +11,18 @@ from erpnext.selling.report.payment_terms_status_for_sales_order.payment_terms_s
 )
 from erpnext.stock.doctype.item.test_item import create_item
 
-test_dependencies = ["Sales Order", "Item", "Sales Invoice", "Payment Terms Template", "Customer"]
+EXTRA_TEST_RECORD_DEPENDENCIES = [
+	"Sales Order",
+	"Item",
+	"Sales Invoice",
+	"Payment Terms Template",
+	"Customer",
+]
 
 
 class TestPaymentTermsStatusForSalesOrder(IntegrationTestCase):
-	def setUp(self):
-		self.cleanup_old_entries()
-
 	def tearDown(self):
 		frappe.db.rollback()
-
-	def cleanup_old_entries(self):
-		frappe.db.delete("Sales Invoice", filters={"company": "_Test Company"})
-		frappe.db.delete("Sales Order", filters={"company": "_Test Company"})
 
 	def create_payment_terms_template(self):
 		# create template for 50-50 payments

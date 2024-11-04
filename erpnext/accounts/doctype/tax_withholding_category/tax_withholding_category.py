@@ -514,7 +514,7 @@ def get_tds_amount(ldc, parties, inv, tax_details, vouchers):
 		payment_entry_filters.pop("apply_tax_withholding_amount", None)
 		payment_entry_filters.pop("tax_withholding_category", None)
 
-	supp_credit_amt = frappe.db.get_value("Purchase Invoice", invoice_filters, field) or 0.0
+	supp_inv_credit_amt = frappe.db.get_value("Purchase Invoice", invoice_filters, field) or 0.0
 
 	supp_jv_credit_amt = (
 		frappe.db.get_value(
@@ -538,7 +538,7 @@ def get_tds_amount(ldc, parties, inv, tax_details, vouchers):
 		group_by="payment_type",
 	)
 
-	supp_credit_amt += supp_jv_credit_amt
+	supp_credit_amt = supp_jv_credit_amt
 	supp_credit_amt += inv.tax_withholding_net_total
 
 	for type in payment_entry_amounts:
@@ -556,18 +556,18 @@ def get_tds_amount(ldc, parties, inv, tax_details, vouchers):
 		tax_withholding_net_total = inv.tax_withholding_net_total
 
 	if (threshold and tax_withholding_net_total >= threshold) or (
-		cumulative_threshold and supp_credit_amt >= cumulative_threshold
+		cumulative_threshold and (supp_credit_amt + supp_inv_credit_amt) >= cumulative_threshold
 	):
+		# Get net total again as TDS is calculated on net total
+		# Grand is used to just check for threshold breach
+		net_total = (
+			frappe.db.get_value("Purchase Invoice", invoice_filters, "sum(tax_withholding_net_total)") or 0.0
+		)
+		supp_credit_amt += net_total
+
 		if (cumulative_threshold and supp_credit_amt >= cumulative_threshold) and cint(
 			tax_details.tax_on_excess_amount
 		):
-			# Get net total again as TDS is calculated on net total
-			# Grand is used to just check for threshold breach
-			net_total = (
-				frappe.db.get_value("Purchase Invoice", invoice_filters, "sum(tax_withholding_net_total)")
-				or 0.0
-			)
-			net_total += inv.tax_withholding_net_total
 			supp_credit_amt = net_total - cumulative_threshold
 
 		if ldc and is_valid_certificate(ldc, inv.get("posting_date") or inv.get("transaction_date"), 0):
@@ -609,8 +609,6 @@ def get_tcs_amount(parties, inv, tax_details, vouchers, adv_vouchers):
 	conditions.append(ple.party.isin(parties))
 	conditions.append(ple.voucher_no == ple.against_voucher_no)
 	conditions.append(ple.company == inv.company)
-
-	qb.from_(ple).select(Abs(Sum(ple.amount))).where(Criterion.all(conditions)).run(as_list=1)
 
 	advance_amt = (
 		qb.from_(ple).select(Abs(Sum(ple.amount))).where(Criterion.all(conditions)).run()[0][0] or 0.0
