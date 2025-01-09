@@ -72,7 +72,7 @@ frappe.ui.form.on("Job Card", {
 		let has_items = frm.doc.items && frm.doc.items.length;
 		frm.trigger("make_fields_read_only");
 
-		if (!frm.is_new() && frm.doc.__onload.work_order_closed) {
+		if (!frm.is_new() && frm.doc.__onload?.work_order_closed) {
 			frm.disable_save();
 			return;
 		}

@@ -48,6 +48,7 @@
   "shipping_address",
   "company_address",
   "company_address_display",
+  "company_contact_person",
   "currency_and_price_list",
   "currency",
   "conversion_rate",
@@ -1549,10 +1550,10 @@
   },
   {
    "fieldname": "utm_medium",
-   "print_hide": 1,
    "fieldtype": "Link",
    "label": "Medium",
-   "options": "UTM Medium"
+   "options": "UTM Medium",
+   "print_hide": 1
   },
   {
    "fieldname": "utm_campaign",
@@ -1571,12 +1572,19 @@
    "oldfieldtype": "Select",
    "options": "UTM Source",
    "print_hide": 1
+  },
+  {
+   "fieldname": "company_contact_person",
+   "fieldtype": "Link",
+   "label": "Company Contact Person",
+   "options": "Contact",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
  "is_submittable": 1,
  "links": [],
- "modified": "2024-06-28 10:55:34.941200",
+ "modified": "2024-11-26 13:10:50.309570",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Invoice",

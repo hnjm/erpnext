@@ -117,6 +117,10 @@ frappe.ui.form.on("Stock Entry", {
 					filters["is_inward"] = 1;
 				}
 
+				if (["Material Receipt", "Material Transfer", "Material Issue"].includes(doc.purpose)) {
+					filters["include_expired_batches"] = 1;
+				}
+
 				return {
 					query: "erpnext.controllers.queries.get_batch_no",
 					filters: filters,
@@ -367,6 +371,7 @@ frappe.ui.form.on("Stock Entry", {
 				function () {
 					frappe.call({
 						method: "erpnext.stock.doctype.stock_entry.stock_entry.get_expired_batch_items",
+						freeze: true,
 						callback: function (r) {
 							if (!r.exc && r.message) {
 								frm.set_value("items", []);

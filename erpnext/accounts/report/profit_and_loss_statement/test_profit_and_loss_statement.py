@@ -2,6 +2,7 @@
 # MIT License. See license.txt
 
 import frappe
+from frappe.desk.query_report import export_query
 from frappe.tests import IntegrationTestCase
 from frappe.utils import getdate, today
 
@@ -90,3 +91,21 @@ class TestProfitAndLossStatement(AccountsTestMixin, IntegrationTestCase):
 				with self.subTest(current_period_key=current_period_key):
 					self.assertEqual(acc[current_period_key], 150)
 					self.assertEqual(acc["total"], 150)
+
+	def test_p_and_l_export(self):
+		self.create_sales_invoice(qty=1, rate=150)
+
+		filters = self.get_report_filters()
+		frappe.local.form_dict = frappe._dict(
+			{
+				"report_name": "Profit and Loss Statement",
+				"file_format_type": "CSV",
+				"filters": filters,
+				"visible_idx": [0, 1, 2, 3, 4, 5, 6],
+			}
+		)
+		export_query()
+		contents = frappe.response["filecontent"].decode()
+		sales_account = frappe.db.get_value("Company", self.company, "default_income_account")
+
+		self.assertIn(sales_account, contents)

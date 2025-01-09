@@ -14,7 +14,7 @@ from frappe.utils import nowdate, today, unique
 from pypika import Order
 
 import erpnext
-from erpnext.stock.get_item_details import _get_item_tax_template
+from erpnext.stock.get_item_details import ItemDetailsCtx, _get_item_tax_template
 
 
 # searches for active employees
@@ -276,10 +276,14 @@ def get_project_name(doctype, txt, searchfield, start, page_len, filters):
 	qb_filter_or_conditions = []
 	ifelse = CustomFunction("IF", ["condition", "then", "else"])
 
-	if filters and filters.get("customer"):
-		qb_filter_and_conditions.append(
-			(proj.customer == filters.get("customer")) | proj.customer.isnull() | proj.customer == ""
-		)
+	if filters:
+		if filters.get("customer"):
+			qb_filter_and_conditions.append(
+				(proj.customer == filters.get("customer")) | proj.customer.isnull() | proj.customer == ""
+			)
+
+		if filters.get("company"):
+			qb_filter_and_conditions.append(proj.company == filters.get("company"))
 
 	qb_filter_and_conditions.append(proj.status.notin(["Completed", "Cancelled"]))
 
@@ -420,7 +424,6 @@ def get_batches_from_stock_ledger_entries(searchfields, txt, filters, start=0, p
 			stock_ledger_entry.batch_no,
 			Sum(stock_ledger_entry.actual_qty).as_("qty"),
 		)
-		.where((batch_table.expiry_date >= expiry_date) | (batch_table.expiry_date.isnull()))
 		.where(stock_ledger_entry.is_cancelled == 0)
 		.where(
 			(stock_ledger_entry.item_code == filters.get("item_code"))
@@ -432,6 +435,9 @@ def get_batches_from_stock_ledger_entries(searchfields, txt, filters, start=0, p
 		.offset(start)
 		.limit(page_len)
 	)
+
+	if not filters.get("include_expired_batches"):
+		query = query.where((batch_table.expiry_date >= expiry_date) | (batch_table.expiry_date.isnull()))
 
 	query = query.select(
 		Concat("MFG-", batch_table.manufacturing_date).as_("manufacturing_date"),
@@ -471,7 +477,6 @@ def get_batches_from_serial_and_batch_bundle(searchfields, txt, filters, start=0
 			bundle.batch_no,
 			Sum(bundle.qty).as_("qty"),
 		)
-		.where((batch_table.expiry_date >= expiry_date) | (batch_table.expiry_date.isnull()))
 		.where(stock_ledger_entry.is_cancelled == 0)
 		.where(
 			(stock_ledger_entry.item_code == filters.get("item_code"))
@@ -483,6 +488,11 @@ def get_batches_from_serial_and_batch_bundle(searchfields, txt, filters, start=0
 		.offset(start)
 		.limit(page_len)
 	)
+
+	if not filters.get("include_expired_batches"):
+		bundle_query = bundle_query.where(
+			(batch_table.expiry_date >= expiry_date) | (batch_table.expiry_date.isnull())
+		)
 
 	bundle_query = bundle_query.select(
 		Concat("MFG-", batch_table.manufacturing_date),
@@ -807,14 +817,16 @@ def get_tax_template(doctype, txt, searchfield, start, page_len, filters):
 		valid_from = filters.get("valid_from")
 		valid_from = valid_from[1] if isinstance(valid_from, list) else valid_from
 
-		args = {
-			"item_code": filters.get("item_code"),
-			"posting_date": valid_from,
-			"tax_category": filters.get("tax_category"),
-			"company": company,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"item_code": filters.get("item_code"),
+				"posting_date": valid_from,
+				"tax_category": filters.get("tax_category"),
+				"company": company,
+			}
+		)
 
-		taxes = _get_item_tax_template(args, taxes, for_validate=True)
+		taxes = _get_item_tax_template(ctx, taxes, for_validate=True)
 		return [(d,) for d in set(taxes)]
 
 

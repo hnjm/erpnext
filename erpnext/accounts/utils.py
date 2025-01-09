@@ -113,7 +113,7 @@ def get_fiscal_years(
 	# No match for restricting selectors
 	if raise_on_missing:
 		error_msg = _("""{0} {1} is not in any active Fiscal Year""").format(
-			label, formatdate(transaction_date)
+			_(label), formatdate(transaction_date)
 		)
 		if company:
 			error_msg = _("""{0} for {1}""").format(error_msg, frappe.bold(company))
@@ -649,6 +649,16 @@ def update_reference_in_journal_entry(d, journal_entry, do_not_save=False):
 	)
 	if jv_detail.get("reference_type") in advance_payment_doctypes:
 		update_advance_paid.append((jv_detail.reference_type, jv_detail.reference_name))
+
+	rev_dr_or_cr = (
+		"debit_in_account_currency"
+		if d["dr_or_cr"] == "credit_in_account_currency"
+		else "credit_in_account_currency"
+	)
+	if jv_detail.get(rev_dr_or_cr):
+		d["dr_or_cr"] = rev_dr_or_cr
+		d["allocated_amount"] = d["allocated_amount"] * -1
+		d["unadjusted_amount"] = d["unadjusted_amount"] * -1
 
 	if flt(d["unadjusted_amount"]) - flt(d["allocated_amount"]) != 0:
 		# adjust the unreconciled balance
@@ -1366,6 +1376,14 @@ def parse_naming_series_variable(doc, variable):
 			date = getdate()
 			company = None
 		return get_fiscal_year(date=date, company=company)[0]
+
+	elif variable == "ABBR":
+		if doc:
+			company = doc.get("company") or frappe.db.get_default("company")
+		else:
+			company = frappe.db.get_default("company")
+
+		return frappe.db.get_value("Company", company, "abbr") if company else ""
 
 
 @frappe.whitelist()

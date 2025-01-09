@@ -135,8 +135,12 @@ status_map = {
 			"eval:self.status != 'Stopped' and self.per_received > 0 and self.per_received < 100 and self.docstatus == 1 and self.material_request_type == 'Purchase'",
 		],
 		[
+			"Partially Received",
+			"eval:self.status != 'Stopped' and self.per_ordered < 100 and self.per_ordered > 0 and self.docstatus == 1 and self.material_request_type == 'Material Transfer'",
+		],
+		[
 			"Partially Ordered",
-			"eval:self.status != 'Stopped' and self.per_ordered < 100 and self.per_ordered > 0 and self.docstatus == 1",
+			"eval:self.status != 'Stopped' and self.per_ordered < 100 and self.per_ordered > 0 and self.docstatus == 1 and self.material_request_type != 'Material Transfer'",
 		],
 		[
 			"Manufactured",
@@ -420,6 +424,13 @@ class StatusUpdater(Document):
 		for d in self.get_all_children():
 			if d.doctype != args["source_dt"]:
 				continue
+
+			if (
+				d.get("material_request")
+				and frappe.db.get_value("Material Request", d.material_request, "material_request_type")
+				== "Subcontracting"
+			):
+				args.update({"source_field": "fg_item_qty"})
 
 			self._update_modified(args, update_modified)
 

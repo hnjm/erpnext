@@ -44,6 +44,14 @@ frappe.ui.form.on("Material Request", {
 		});
 	},
 
+	schedule_date(frm) {
+		if (frm.doc.schedule_date) {
+			frm.doc.items.forEach((d) => {
+				frappe.model.set_value(d.doctype, d.name, "schedule_date", frm.doc.schedule_date);
+			});
+		}
+	},
+
 	onload: function (frm) {
 		// add item, if previous view was item
 		erpnext.utils.add_item(frm);
@@ -107,6 +115,20 @@ frappe.ui.form.on("Material Request", {
 
 			if (flt(frm.doc.per_received, precision) < 100) {
 				frm.add_custom_button(__("Stop"), () => frm.events.update_status(frm, "Stopped"));
+
+				if (frm.doc.material_request_type === "Purchase") {
+					frm.add_custom_button(
+						__("Purchase Order"),
+						() => frm.events.make_purchase_order(frm),
+						__("Create")
+					);
+				} else if (frm.doc.material_request_type === "Subcontracting") {
+					frm.add_custom_button(
+						__("Subcontracted Purchase Order"),
+						() => frm.events.make_purchase_order(frm),
+						__("Create")
+					);
+				}
 			}
 
 			if (flt(frm.doc.per_ordered, precision) < 100) {
@@ -145,14 +167,6 @@ frappe.ui.form.on("Material Request", {
 					frm.add_custom_button(
 						__("Material Receipt"),
 						() => frm.events.make_stock_entry(frm),
-						__("Create")
-					);
-				}
-
-				if (frm.doc.material_request_type === "Purchase") {
-					frm.add_custom_button(
-						__("Purchase Order"),
-						() => frm.events.make_purchase_order(frm),
 						__("Create")
 					);
 				}
@@ -236,7 +250,7 @@ frappe.ui.form.on("Material Request", {
 		frappe.call({
 			method: "erpnext.stock.get_item_details.get_item_details",
 			args: {
-				args: {
+				ctx: {
 					item_code: item.item_code,
 					from_warehouse: item.from_warehouse,
 					warehouse: item.warehouse,
@@ -259,17 +273,20 @@ frappe.ui.form.on("Material Request", {
 			},
 			callback: function (r) {
 				const d = item;
-				const allow_to_change_fields = [
+				let allow_to_change_fields = [
 					"actual_qty",
 					"projected_qty",
 					"min_order_qty",
 					"item_name",
-					"description",
 					"stock_uom",
 					"uom",
 					"conversion_factor",
 					"stock_qty",
 				];
+
+				if (overwrite_warehouse) {
+					allow_to_change_fields.push("description");
+				}
 
 				if (!r.exc) {
 					$.each(r.message, function (key, value) {
@@ -319,7 +336,7 @@ frappe.ui.form.on("Material Request", {
 					default: 1,
 				},
 			],
-			primary_action_label: "Get Items",
+			primary_action_label: __("Get Items"),
 			primary_action(values) {
 				if (!values) return;
 				values["company"] = frm.doc.company;

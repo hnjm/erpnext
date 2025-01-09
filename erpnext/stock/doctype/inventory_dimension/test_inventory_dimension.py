@@ -278,20 +278,46 @@ class TestInventoryDimension(IntegrationTestCase):
 		item_code = "Test Inventory Dimension Item"
 		create_item(item_code)
 		warehouse = create_warehouse("Store Warehouse")
+		rj_warehouse = create_warehouse("RJ Warehouse")
+
+		if not frappe.db.exists("Store", "Rejected Store"):
+			frappe.get_doc({"doctype": "Store", "store_name": "Rejected Store"}).insert(
+				ignore_permissions=True
+			)
 
 		# Purchase Receipt -> Inward in Store 1
 		pr_doc = make_purchase_receipt(
-			item_code=item_code, warehouse=warehouse, qty=10, rate=100, do_not_submit=True
+			item_code=item_code,
+			warehouse=warehouse,
+			qty=10,
+			rejected_qty=5,
+			rate=100,
+			rejected_warehouse=rj_warehouse,
+			do_not_submit=True,
 		)
 
 		pr_doc.items[0].store = "Store 1"
+		pr_doc.items[0].rejected_store = "Rejected Store"
 		pr_doc.save()
 		pr_doc.submit()
 
-		entries = get_voucher_sl_entries(pr_doc.name, ["warehouse", "store", "incoming_rate"])
+		entries = frappe.get_all(
+			"Stock Ledger Entry",
+			filters={"voucher_no": pr_doc.name, "warehouse": warehouse},
+			fields=["store"],
+			order_by="creation",
+		)
 
-		self.assertEqual(entries[0].warehouse, warehouse)
 		self.assertEqual(entries[0].store, "Store 1")
+
+		entries = frappe.get_all(
+			"Stock Ledger Entry",
+			filters={"voucher_no": pr_doc.name, "warehouse": rj_warehouse},
+			fields=["store"],
+			order_by="creation",
+		)
+
+		self.assertEqual(entries[0].store, "Rejected Store")
 
 		# Stock Entry -> Transfer from Store 1 to Store 2
 		se_doc = make_stock_entry(

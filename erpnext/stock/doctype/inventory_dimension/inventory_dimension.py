@@ -107,6 +107,7 @@ class InventoryDimension(Document):
 					self.source_fieldname,
 					f"to_{self.source_fieldname}",
 					f"from_{self.source_fieldname}",
+					f"rejected_{self.source_fieldname}",
 				],
 			)
 		}
@@ -171,12 +172,12 @@ class InventoryDimension(Document):
 		if label_start_with:
 			label = f"{label_start_with} {self.dimension_name}"
 
-		return [
+		dimension_fields = [
 			dict(
 				fieldname="inventory_dimension",
 				fieldtype="Section Break",
 				insert_after=self.get_insert_after_fieldname(doctype),
-				label="Inventory Dimension",
+				label=_("Inventory Dimension"),
 				collapsible=1,
 			),
 			dict(
@@ -184,12 +185,28 @@ class InventoryDimension(Document):
 				fieldtype="Link",
 				insert_after="inventory_dimension",
 				options=self.reference_document,
-				label=label,
+				label=_(label),
 				search_index=1,
 				reqd=self.reqd,
 				mandatory_depends_on=self.mandatory_depends_on,
 			),
 		]
+
+		if doctype in ["Purchase Invoice Item", "Purchase Receipt Item"]:
+			dimension_fields.append(
+				dict(
+					fieldname="rejected_" + self.source_fieldname,
+					fieldtype="Link",
+					insert_after=self.source_fieldname,
+					options=self.reference_document,
+					label=_("Rejected " + self.dimension_name),
+					search_index=1,
+					reqd=self.reqd,
+					mandatory_depends_on=self.mandatory_depends_on,
+				)
+			)
+
+		return dimension_fields
 
 	def add_custom_fields(self):
 		custom_fields = {}
@@ -197,33 +214,43 @@ class InventoryDimension(Document):
 		dimension_fields = []
 		if self.apply_to_all_doctypes:
 			for doctype in get_inventory_documents():
-				if field_exists(doctype[0], self.source_fieldname):
-					continue
-
 				dimension_fields = self.get_dimension_fields(doctype[0])
 				self.add_transfer_field(doctype[0], dimension_fields)
 				custom_fields.setdefault(doctype[0], dimension_fields)
-		elif not field_exists(self.document_type, self.source_fieldname):
+		else:
 			dimension_fields = self.get_dimension_fields()
 
 			self.add_transfer_field(self.document_type, dimension_fields)
 			custom_fields.setdefault(self.document_type, dimension_fields)
 
-		if (
-			dimension_fields
-			and not frappe.db.get_value(
-				"Custom Field", {"dt": "Stock Ledger Entry", "fieldname": self.target_fieldname}
-			)
-			and not field_exists("Stock Ledger Entry", self.target_fieldname)
-		):
-			dimension_field = dimension_fields[1]
-			dimension_field["mandatory_depends_on"] = ""
-			dimension_field["reqd"] = 0
-			dimension_field["fieldname"] = self.target_fieldname
-			custom_fields["Stock Ledger Entry"] = dimension_field
+		for dt in ["Stock Ledger Entry", "Stock Closing Balance"]:
+			if (
+				dimension_fields
+				and not frappe.db.get_value("Custom Field", {"dt": dt, "fieldname": self.target_fieldname})
+				and not field_exists(dt, self.target_fieldname)
+			):
+				dimension_field = dimension_fields[1]
+				dimension_field["mandatory_depends_on"] = ""
+				dimension_field["reqd"] = 0
+				dimension_field["fieldname"] = self.target_fieldname
+				custom_fields[dt] = dimension_field
+
+		filter_custom_fields = {}
+		ignore_doctypes = ["Serial and Batch Bundle", "Serial and Batch Entry", "Pick List Item"]
 
 		if custom_fields:
-			create_custom_fields(custom_fields)
+			for doctype, fields in custom_fields.items():
+				if doctype in ignore_doctypes:
+					continue
+
+				if isinstance(fields, dict):
+					fields = [fields]
+
+				for field in fields:
+					if not field_exists(doctype, field["fieldname"]):
+						filter_custom_fields.setdefault(doctype, []).append(field)
+
+		create_custom_fields(filter_custom_fields)
 
 	def add_transfer_field(self, doctype, dimension_fields):
 		if doctype not in [
@@ -367,8 +394,10 @@ def get_inventory_dimensions():
 				"distinct target_fieldname as fieldname",
 				"reference_document as doctype",
 				"validate_negative_stock",
+				"name as dimension_name",
 			],
 			filters={"disabled": 0},
+			order_by="creation",
 		)
 
 		frappe.local.inventory_dimensions = dimensions

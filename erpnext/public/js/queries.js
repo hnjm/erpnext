@@ -56,6 +56,17 @@ $.extend(erpnext.queries, {
 		}
 	},
 
+	company_contact_query: function (doc) {
+		if (!doc.company) {
+			frappe.throw(__("Please set {0}", [__(frappe.meta.get_label(doc.doctype, "company", doc.name))]));
+		}
+
+		return {
+			query: "frappe.contacts.doctype.contact.contact.contact_query",
+			filters: { link_doctype: "Company", link_name: doc.company },
+		};
+	},
+
 	address_query: function (doc) {
 		if (frappe.dynamic_link) {
 			if (!doc[frappe.dynamic_link.fieldname]) {
@@ -77,16 +88,23 @@ $.extend(erpnext.queries, {
 	},
 
 	company_address_query: function (doc) {
+		if (!doc.company) {
+			frappe.throw(__("Please set {0}", [__(frappe.meta.get_label(doc.doctype, "company", doc.name))]));
+		}
+
 		return {
 			query: "frappe.contacts.doctype.address.address.address_query",
-			filters: { is_your_company_address: 1, link_doctype: "Company", link_name: doc.company || "" },
+			filters: { link_doctype: "Company", link_name: doc.company },
 		};
 	},
 
 	dispatch_address_query: function (doc) {
+		var filters = { link_doctype: "Company", link_name: doc.company || "" };
+		var is_drop_ship = doc.items.some((item) => item.delivered_by_supplier);
+		if (is_drop_ship) filters = {};
 		return {
 			query: "frappe.contacts.doctype.address.address.address_query",
-			filters: { link_doctype: "Company", link_name: doc.company || "" },
+			filters: filters,
 		};
 	},
 

@@ -7,7 +7,7 @@ from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.tests.utils import make_test_records_for_doctype
 
 from erpnext.stock.doctype.item_price.item_price import ItemPriceDuplicateItem
-from erpnext.stock.get_item_details import get_price_list_rate_for, process_args
+from erpnext.stock.get_item_details import ItemDetailsCtx, get_price_list_rate_for
 
 
 class UnitTestItemPrice(UnitTestCase):
@@ -80,85 +80,97 @@ class TestItemPrice(IntegrationTestCase):
 		# Check correct price at this quantity
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][2])
 
-		args = {
-			"price_list": doc.price_list,
-			"customer": doc.customer,
-			"uom": "_Test UOM",
-			"transaction_date": "2017-04-18",
-			"qty": 10,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"customer": doc.customer,
+				"uom": "_Test UOM",
+				"transaction_date": "2017-04-18",
+				"qty": 10,
+			}
+		)
 
-		price = get_price_list_rate_for(process_args(args), doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, 20.0)
 
 	def test_price_with_no_qty(self):
 		# Check correct price when no quantity
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][2])
-		args = {
-			"price_list": doc.price_list,
-			"customer": doc.customer,
-			"uom": "_Test UOM",
-			"transaction_date": "2017-04-18",
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"customer": doc.customer,
+				"uom": "_Test UOM",
+				"transaction_date": "2017-04-18",
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, None)
 
 	def test_prices_at_date(self):
 		# Check correct price at first date
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][2])
 
-		args = {
-			"price_list": doc.price_list,
-			"customer": "_Test Customer",
-			"uom": "_Test UOM",
-			"transaction_date": "2017-04-18",
-			"qty": 7,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"customer": "_Test Customer",
+				"uom": "_Test UOM",
+				"transaction_date": "2017-04-18",
+				"qty": 7,
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, 20)
 
 	def test_prices_at_invalid_date(self):
 		# Check correct price at invalid date
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][3])
 
-		args = {
-			"price_list": doc.price_list,
-			"qty": 7,
-			"uom": "_Test UOM",
-			"transaction_date": "01-15-2019",
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"qty": 7,
+				"uom": "_Test UOM",
+				"transaction_date": "01-15-2019",
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, None)
 
 	def test_prices_outside_of_date(self):
 		# Check correct price when outside of the date
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][4])
 
-		args = {
-			"price_list": doc.price_list,
-			"customer": "_Test Customer",
-			"uom": "_Test UOM",
-			"transaction_date": "2017-04-25",
-			"qty": 7,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"customer": "_Test Customer",
+				"uom": "_Test UOM",
+				"transaction_date": "2017-04-25",
+				"qty": 7,
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, None)
 
 	def test_lowest_price_when_no_date_provided(self):
 		# Check lowest price when no date provided
 		doc = frappe.copy_doc(self.globalTestRecords["Item Price"][1])
 
-		args = {
-			"price_list": doc.price_list,
-			"uom": "_Test UOM",
-			"qty": 7,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"uom": "_Test UOM",
+				"qty": 7,
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		self.assertEqual(price, 10)
 
 	def test_invalid_item(self):
@@ -182,14 +194,16 @@ class TestItemPrice(IntegrationTestCase):
 		doc.price_list_rate = 21
 		doc.insert()
 
-		args = {
-			"price_list": doc.price_list,
-			"uom": "_Test UOM",
-			"transaction_date": "2017-04-18",
-			"qty": 7,
-		}
+		ctx = ItemDetailsCtx(
+			{
+				"price_list": doc.price_list,
+				"uom": "_Test UOM",
+				"transaction_date": "2017-04-18",
+				"qty": 7,
+			}
+		)
 
-		price = get_price_list_rate_for(args, doc.item_code)
+		price = get_price_list_rate_for(ctx, doc.item_code)
 		frappe.db.rollback()
 
 		self.assertEqual(price, 21)

@@ -29,6 +29,12 @@ from erpnext.accounts.utils import get_fiscal_year
 from erpnext.exceptions import InvalidAccountCurrency, PartyDisabled, PartyFrozen
 from erpnext.utilities.regional import temporary_flag
 
+try:
+	from frappe.contacts.doctype.address.address import render_address as _render_address
+except ImportError:
+	# Older frappe versions where this function is not available
+	from frappe.contacts.doctype.address.address import get_address_display as _render_address
+
 PURCHASE_TRANSACTION_TYPES = {
 	"Supplier Quotation",
 	"Purchase Order",
@@ -615,34 +621,41 @@ def get_due_date_from_template(template_name, posting_date, bill_date):
 	return due_date
 
 
-def validate_due_date(posting_date, due_date, bill_date=None, template_name=None):
+def validate_due_date(posting_date, due_date, bill_date=None, template_name=None, doctype=None):
 	if getdate(due_date) < getdate(posting_date):
-		frappe.throw(_("Due Date cannot be before Posting / Supplier Invoice Date"))
+		doctype_date = "Date"
+		if doctype == "Purchase Invoice":
+			doctype_date = "Supplier Invoice Date"
+
+		if doctype == "Sales Invoice":
+			doctype_date = "Posting Date"
+
+		frappe.throw(_("Due Date cannot be before {0}").format(doctype_date))
 	else:
-		if not template_name:
-			return
+		validate_due_date_with_template(posting_date, due_date, bill_date, template_name)
 
-		default_due_date = get_due_date_from_template(template_name, posting_date, bill_date).strftime(
-			"%Y-%m-%d"
+
+def validate_due_date_with_template(posting_date, due_date, bill_date, template_name):
+	if not template_name:
+		return
+
+	default_due_date = format(get_due_date_from_template(template_name, posting_date, bill_date))
+
+	if not default_due_date:
+		return
+
+	if default_due_date != posting_date and getdate(due_date) > getdate(default_due_date):
+		is_credit_controller = (
+			frappe.db.get_single_value("Accounts Settings", "credit_controller") in frappe.get_roles()
 		)
-
-		if not default_due_date:
-			return
-
-		if default_due_date != posting_date and getdate(due_date) > getdate(default_due_date):
-			is_credit_controller = (
-				frappe.db.get_single_value("Accounts Settings", "credit_controller") in frappe.get_roles()
+		if is_credit_controller:
+			msgprint(
+				_("Note: Due Date exceeds allowed customer credit days by {0} day(s)").format(
+					date_diff(due_date, default_due_date)
+				)
 			)
-			if is_credit_controller:
-				msgprint(
-					_("Note: Due / Reference Date exceeds allowed customer credit days by {0} day(s)").format(
-						date_diff(due_date, default_due_date)
-					)
-				)
-			else:
-				frappe.throw(
-					_("Due / Reference Date cannot be after {0}").format(formatdate(default_due_date))
-				)
+		else:
+			frappe.throw(_("Due Date cannot be after {0}").format(formatdate(default_due_date)))
 
 
 @frappe.whitelist()
@@ -675,7 +688,7 @@ def set_taxes(
 ):
 	from erpnext.accounts.doctype.tax_rule.tax_rule import get_party_details, get_tax_template
 
-	args = {party_type.lower(): party, "company": company}
+	args = {frappe.scrub(party_type): party, "company": company}
 
 	if tax_category:
 		args["tax_category"] = tax_category
@@ -695,10 +708,10 @@ def set_taxes(
 	else:
 		args.update(get_party_details(party, party_type))
 
-	if party_type in ("Customer", "Lead", "Prospect"):
+	if party_type in ("Customer", "Lead", "Prospect", "CRM Deal"):
 		args.update({"tax_type": "Sales"})
 
-		if party_type in ["Lead", "Prospect"]:
+		if party_type in ["Lead", "Prospect", "CRM Deal"]:
 			args["customer"] = None
 			del args[frappe.scrub(party_type)]
 	else:
@@ -756,6 +769,20 @@ def validate_party_frozen_disabled(party_type, party_name):
 		elif party_type == "Employee":
 			if frappe.db.get_value("Employee", party_name, "status") != "Active":
 				frappe.msgprint(_("{0} {1} is not active").format(party_type, party_name), alert=True)
+
+
+def validate_account_party_type(self):
+	if self.is_cancelled:
+		return
+
+	if self.party_type and self.party:
+		account_type = frappe.get_cached_value("Account", self.account, "account_type")
+		if account_type and (account_type not in ["Receivable", "Payable"]):
+			frappe.throw(
+				_(
+					"Party Type and Party can only be set for Receivable / Payable account<br><br>" "{0}"
+				).format(self.account)
+			)
 
 
 def get_dashboard_info(party_type, party, loyalty_program=None):
@@ -987,10 +1014,4 @@ def add_party_account(party_type, party, company, account):
 
 
 def render_address(address, check_permissions=True):
-	try:
-		from frappe.contacts.doctype.address.address import render_address as _render
-	except ImportError:
-		# Older frappe versions where this function is not available
-		from frappe.contacts.doctype.address.address import get_address_display as _render
-
-	return frappe.call(_render, address, check_permissions=check_permissions)
+	return frappe.call(_render_address, address, check_permissions=check_permissions)

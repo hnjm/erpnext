@@ -161,8 +161,9 @@
   "dispatch_address",
   "company_address_section",
   "company_address",
-  "company_addr_col_break",
   "company_address_display",
+  "company_addr_col_break",
+  "company_contact_person",
   "terms_tab",
   "payment_schedule_section",
   "ignore_default_payment_terms_template",
@@ -2203,6 +2204,13 @@
    "oldfieldtype": "Select",
    "options": "UTM Source",
    "print_hide": 1
+  },
+  {
+   "fieldname": "company_contact_person",
+   "fieldtype": "Link",
+   "label": "Company Contact Person",
+   "options": "Contact",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
@@ -2215,7 +2223,7 @@
    "link_fieldname": "consolidated_invoice"
   }
  ],
- "modified": "2024-07-18 15:30:39.428519",
+ "modified": "2024-11-26 12:34:09.110690",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Sales Invoice",

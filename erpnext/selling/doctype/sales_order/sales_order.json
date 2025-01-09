@@ -113,8 +113,9 @@
   "dispatch_address",
   "col_break46",
   "company_address",
-  "column_break_92",
   "company_address_display",
+  "column_break_92",
+  "company_contact_person",
   "payment_schedule_section",
   "payment_terms_section",
   "payment_terms_template",
@@ -1644,16 +1645,16 @@
   },
   {
    "fieldname": "utm_medium",
-   "print_hide": 1,
    "fieldtype": "Link",
    "label": "Medium",
-   "options": "UTM Medium"
+   "options": "UTM Medium",
+   "print_hide": 1
   },
   {
    "fieldname": "utm_content",
-   "print_hide": 1,
    "fieldtype": "Data",
-   "label": "Content"
+   "label": "Content",
+   "print_hide": 1
   },
   {
    "fieldname": "utm_source",
@@ -1676,13 +1677,20 @@
    "oldfieldtype": "Link",
    "options": "UTM Campaign",
    "print_hide": 1
+  },
+  {
+   "fieldname": "company_contact_person",
+   "fieldtype": "Link",
+   "label": "Company Contact Person",
+   "options": "Contact",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
  "idx": 105,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-06-28 10:36:23.824623",
+ "modified": "2024-11-26 12:42:06.872527",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Sales Order",

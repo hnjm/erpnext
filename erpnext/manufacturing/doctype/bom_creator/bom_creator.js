@@ -98,8 +98,6 @@ frappe.ui.form.on("BOM Creator", {
 			],
 			primary_action_label: __("Create"),
 			primary_action: (values) => {
-				frm.events.validate_dialog_values(frm, values);
-
 				values.doctype = frm.doc.doctype;
 				frappe.db.insert(values).then((doc) => {
 					frappe.set_route("Form", doc.doctype, doc.name);
@@ -109,18 +107,6 @@ frappe.ui.form.on("BOM Creator", {
 
 		dialog.fields_dict.item_code.get_query = "erpnext.controllers.queries.item_query";
 		dialog.show();
-	},
-
-	validate_dialog_values(frm, values) {
-		if (values.track_semi_finished_goods) {
-			if (values.final_operation_time <= 0) {
-				frappe.throw(__("Operation Time must be greater than 0"));
-			}
-
-			if (!values.workstation && !values.workstation_type) {
-				frappe.throw(__("Either Workstation or Workstation Type is mandatory"));
-			}
-		}
 	},
 
 	set_queries(frm) {

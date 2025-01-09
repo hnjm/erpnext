@@ -20,7 +20,7 @@ from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle 
 	get_batch_from_bundle,
 )
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
-from erpnext.stock.get_item_details import get_item_details
+from erpnext.stock.get_item_details import ItemDetailsCtx, get_item_details
 from erpnext.stock.serial_batch_bundle import SerialBatchCreation
 
 
@@ -436,7 +436,7 @@ class TestBatch(IntegrationTestCase):
 		company = "_Test Company with perpetual inventory"
 		currency = frappe.get_cached_value("Company", company, "default_currency")
 
-		args = frappe._dict(
+		ctx = ItemDetailsCtx(
 			{
 				"item_code": "_Test Batch Price Item",
 				"company": company,
@@ -452,18 +452,18 @@ class TestBatch(IntegrationTestCase):
 		)
 
 		# test price for batch1
-		args.update({"batch_no": batch1})
-		details = get_item_details(args)
+		ctx.update({"batch_no": batch1})
+		details = get_item_details(ctx)
 		self.assertEqual(details.get("price_list_rate"), 200)
 
 		# test price for batch2
-		args.update({"batch_no": batch2})
-		details = get_item_details(args)
+		ctx.update({"batch_no": batch2})
+		details = get_item_details(ctx)
 		self.assertEqual(details.get("price_list_rate"), 300)
 
 		# test price for batch3
-		args.update({"batch_no": batch3})
-		details = get_item_details(args)
+		ctx.update({"batch_no": batch3})
+		details = get_item_details(ctx)
 		self.assertEqual(details.get("price_list_rate"), 400)
 
 	def test_basic_batch_wise_valuation(self, batch_qty=100):

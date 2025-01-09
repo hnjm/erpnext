@@ -86,7 +86,13 @@ def simple_to_detailed(templates):
 
 def from_detailed_data(company_name, data):
 	"""Create Taxes and Charges Templates from detailed data."""
-	coa_name = frappe.db.get_value("Company", company_name, "chart_of_accounts")
+	charts_company_name = company_name
+	if (
+		frappe.db.get_value("Company", company_name, "create_chart_of_accounts_based_on")
+		== "Existing Company"
+	):
+		charts_company_name = frappe.db.get_value("Company", company_name, "existing_company")
+	coa_name = frappe.db.get_value("Company", charts_company_name, "chart_of_accounts")
 	coa_data = data.get("chart_of_accounts", {})
 	tax_templates = coa_data.get(coa_name) or coa_data.get("*", {})
 	tax_categories = data.get("tax_categories")
@@ -286,7 +292,7 @@ def get_or_create_tax_group(company_name, root_type):
 
 	tax_group_account.flags.ignore_links = True
 	tax_group_account.flags.ignore_validate = True
-	tax_group_account.insert(ignore_permissions=True)
+	tax_group_account.insert(ignore_permissions=True, ignore_if_duplicate=True)
 
 	tax_group_name = tax_group_account.name
 

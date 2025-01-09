@@ -2,6 +2,7 @@
 # License: GNU General Public License v3. See license.txt
 
 
+import copy
 import functools
 import math
 import re
@@ -526,9 +527,15 @@ def get_accounting_entries(
 		account_filter_query = get_account_filter_query(root_lft, root_rgt, root_type, gl_entry)
 		query = query.where(ExistsCriterion(account_filter_query))
 
-	entries = query.run(as_dict=True)
+	from frappe.desk.reportview import build_match_conditions
 
-	return entries
+	query, params = query.walk()
+	match_conditions = build_match_conditions(doctype)
+
+	if match_conditions:
+		query += "and" + match_conditions
+
+	return frappe.db.sql(query, params, as_dict=True)
 
 
 def get_account_filter_query(root_lft, root_rgt, root_type, gl_entry):
@@ -619,7 +626,7 @@ def get_cost_centers_with_children(cost_centers):
 def get_columns(periodicity, period_list, accumulated_values=1, company=None, cash_flow=False):
 	columns = [
 		{
-			"fieldname": "stub",
+			"fieldname": "account",
 			"label": _("Account") if not cash_flow else _("Section"),
 			"fieldtype": "Link",
 			"options": "Account",
@@ -668,3 +675,67 @@ def get_filtered_list_for_consolidated_report(filters, period_list):
 			filtered_summary_list.append(period)
 
 	return filtered_summary_list
+
+
+def compute_growth_view_data(data, columns):
+	data_copy = copy.deepcopy(data)
+
+	for row_idx in range(len(data_copy)):
+		for column_idx in range(1, len(columns)):
+			previous_period_key = columns[column_idx - 1].get("key")
+			current_period_key = columns[column_idx].get("key")
+			current_period_value = data_copy[row_idx].get(current_period_key)
+			previous_period_value = data_copy[row_idx].get(previous_period_key)
+			annual_growth = 0
+
+			if current_period_value is None:
+				data[row_idx][current_period_key] = None
+				continue
+
+			if previous_period_value == 0 and current_period_value > 0:
+				annual_growth = 1
+
+			elif previous_period_value > 0:
+				annual_growth = (current_period_value - previous_period_value) / previous_period_value
+
+			growth_percent = round(annual_growth * 100, 2)
+
+			data[row_idx][current_period_key] = growth_percent
+
+
+def compute_margin_view_data(data, columns, accumulated_values):
+	if not columns:
+		return
+
+	if not accumulated_values:
+		columns.append({"key": "total"})
+
+	data_copy = copy.deepcopy(data)
+
+	base_row = None
+	for row in data_copy:
+		if row.get("account_name") == _("Income"):
+			base_row = row
+			break
+
+	if not base_row:
+		return
+
+	for row_idx in range(len(data_copy)):
+		# Taking the total income from each column (for all the financial years) as the base (100%)
+		row = data_copy[row_idx]
+		if not row:
+			continue
+
+		for column in columns:
+			curr_period = column.get("key")
+			base_value = base_row[curr_period]
+			curr_value = row[curr_period]
+
+			if curr_value is None or base_value <= 0:
+				data[row_idx][curr_period] = None
+				continue
+
+			margin_percent = round((curr_value / base_value) * 100, 2)
+
+			data[row_idx][curr_period] = margin_percent

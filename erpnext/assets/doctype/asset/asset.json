@@ -8,29 +8,20 @@
  "document_type": "Document",
  "engine": "InnoDB",
  "field_order": [
-  "company",
+  "naming_series",
   "item_code",
   "item_name",
+  "asset_name",
+  "asset_category",
+  "location",
+  "image",
+  "column_break_3",
+  "status",
+  "company",
   "asset_owner",
   "asset_owner_company",
   "is_existing_asset",
   "is_composite_asset",
-  "supplier",
-  "customer",
-  "image",
-  "journal_entry_for_scrap",
-  "column_break_3",
-  "naming_series",
-  "asset_name",
-  "asset_category",
-  "location",
-  "split_from",
-  "custodian",
-  "department",
-  "disposal_date",
-  "accounting_dimensions_section",
-  "cost_center",
-  "dimension_col_break",
   "purchase_details_section",
   "purchase_receipt",
   "purchase_receipt_item",
@@ -40,10 +31,12 @@
   "available_for_use_date",
   "column_break_23",
   "gross_purchase_amount",
+  "purchase_amount",
   "asset_quantity",
   "additional_asset_cost",
   "total_asset_cost",
-  "section_break_23",
+  "disposal_date",
+  "depreciation_tab",
   "calculate_depreciation",
   "column_break_33",
   "opening_accumulated_depreciation",
@@ -60,7 +53,7 @@
   "next_depreciation_date",
   "depreciation_schedule_sb",
   "depreciation_schedule_view",
-  "insurance_details",
+  "insurance_details_tab",
   "policy_number",
   "insurer",
   "insured_value",
@@ -68,22 +61,29 @@
   "insurance_start_date",
   "insurance_end_date",
   "comprehensive_insurance",
-  "section_break_31",
-  "maintenance_required",
-  "other_details",
-  "status",
-  "booked_fixed_asset",
-  "column_break_51",
-  "purchase_amount",
+  "other_info_tab",
+  "accounting_dimensions_section",
+  "cost_center",
+  "section_break_jtou",
+  "custodian",
   "default_finance_book",
   "depr_entry_posting_status",
-  "amended_from"
+  "booked_fixed_asset",
+  "customer",
+  "supplier",
+  "column_break_51",
+  "department",
+  "split_from",
+  "journal_entry_for_scrap",
+  "amended_from",
+  "maintenance_required",
+  "connections_tab"
  ],
  "fields": [
   {
    "fieldname": "naming_series",
    "fieldtype": "Select",
-   "label": "Naming Series",
+   "label": "Series",
    "options": "ACC-ASS-.YYYY.-"
   },
   {
@@ -124,6 +124,7 @@
    "read_only": 1
   },
   {
+   "default": "Company",
    "fieldname": "asset_owner",
    "fieldtype": "Select",
    "label": "Asset Owner",
@@ -258,17 +259,9 @@
    "options": "Company:company:default_currency"
   },
   {
-   "collapsible": 1,
-   "collapsible_depends_on": "eval:doc.calculate_depreciation || doc.is_existing_asset",
-   "fieldname": "section_break_23",
-   "fieldtype": "Section Break",
-   "label": "Depreciation"
-  },
-  {
    "columns": 10,
    "fieldname": "finance_books",
    "fieldtype": "Table",
-   "label": "Finance Books",
    "options": "Asset Finance Book"
   },
   {
@@ -311,12 +304,6 @@
    "no_copy": 1
   },
   {
-   "collapsible": 1,
-   "fieldname": "insurance_details",
-   "fieldtype": "Section Break",
-   "label": "Insurance details"
-  },
-  {
    "fieldname": "policy_number",
    "fieldtype": "Data",
    "label": "Policy number"
@@ -351,23 +338,11 @@
    "label": "Comprehensive Insurance"
   },
   {
-   "fieldname": "section_break_31",
-   "fieldtype": "Section Break",
-   "label": "Maintenance"
-  },
-  {
    "allow_on_submit": 1,
    "default": "0",
-   "description": "Check if Asset requires Preventive Maintenance or Calibration",
    "fieldname": "maintenance_required",
    "fieldtype": "Check",
    "label": "Maintenance Required"
-  },
-  {
-   "collapsible": 1,
-   "fieldname": "other_details",
-   "fieldtype": "Section Break",
-   "label": "Other Details"
   },
   {
    "allow_on_submit": 1,
@@ -378,13 +353,14 @@
    "in_standard_filter": 1,
    "label": "Status",
    "no_copy": 1,
-   "options": "Draft\nSubmitted\nPartially Depreciated\nFully Depreciated\nSold\nScrapped\nIn Maintenance\nOut of Order\nIssue\nReceipt\nCapitalized\nDecapitalized",
+   "options": "Draft\nSubmitted\nPartially Depreciated\nFully Depreciated\nSold\nScrapped\nIn Maintenance\nOut of Order\nIssue\nReceipt\nCapitalized\nWork In Progress",
    "read_only": 1
   },
   {
    "default": "0",
    "fieldname": "booked_fixed_asset",
    "fieldtype": "Check",
+   "hidden": 1,
    "label": "Booked Fixed Asset",
    "no_copy": 1,
    "read_only": 1
@@ -427,16 +403,6 @@
    "options": "Asset",
    "print_hide": 1,
    "read_only": 1
-  },
-  {
-   "collapsible": 1,
-   "fieldname": "accounting_dimensions_section",
-   "fieldtype": "Section Break",
-   "label": "Accounting Dimensions"
-  },
-  {
-   "fieldname": "dimension_col_break",
-   "fieldtype": "Column Break"
   },
   {
    "collapsible": 1,
@@ -552,6 +518,37 @@
    "hidden": 1,
    "label": "Purchase Invoice Item",
    "options": "Purchase Invoice Item"
+  },
+  {
+   "fieldname": "insurance_details_tab",
+   "fieldtype": "Tab Break",
+   "label": "Insurance"
+  },
+  {
+   "fieldname": "other_info_tab",
+   "fieldtype": "Tab Break",
+   "label": "Other Info"
+  },
+  {
+   "fieldname": "connections_tab",
+   "fieldtype": "Tab Break",
+   "label": "Connections",
+   "show_dashboard": 1
+  },
+  {
+   "fieldname": "depreciation_tab",
+   "fieldtype": "Tab Break",
+   "label": "Depreciation"
+  },
+  {
+   "fieldname": "accounting_dimensions_section",
+   "fieldtype": "Section Break",
+   "label": "Accounting Dimensions"
+  },
+  {
+   "fieldname": "section_break_jtou",
+   "fieldtype": "Section Break",
+   "label": "Additional Info"
   }
  ],
  "idx": 72,
@@ -595,7 +592,7 @@
    "link_fieldname": "target_asset"
   }
  ],
- "modified": "2024-08-26 23:28:29.095139",
+ "modified": "2024-12-26 14:23:20.968882",
  "modified_by": "Administrator",
  "module": "Assets",
  "name": "Asset",

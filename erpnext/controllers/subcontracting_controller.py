@@ -103,6 +103,29 @@ class SubcontractingController(StockController):
 						_("Row {0}: Item {1} must be a subcontracted item.").format(item.idx, item.item_name)
 					)
 
+				if (
+					self.doctype == "Subcontracting Order" and not item.sc_conversion_factor
+				):  # this condition will only be true if user has recently updated from develop branch
+					service_item_qty = frappe.get_value(
+						"Subcontracting Order Service Item",
+						filters={"purchase_order_item": item.purchase_order_item, "parent": self.name},
+						fieldname=["qty"],
+					)
+					item.sc_conversion_factor = service_item_qty / item.qty
+
+				if (
+					self.doctype not in "Subcontracting Receipt"
+					and item.qty
+					> flt(get_pending_sco_qty(self.purchase_order).get(item.purchase_order_item))
+					/ item.sc_conversion_factor
+				):
+					frappe.throw(
+						_(
+							"Row {0}: Item {1}'s quantity cannot be higher than the available quantity."
+						).format(item.idx, item.item_name)
+					)
+				item.amount = item.qty * item.rate
+
 				if item.bom:
 					is_active, bom_item = frappe.get_value("BOM", item.bom, ["is_active", "item"])
 
@@ -335,12 +358,18 @@ class SubcontractingController(StockController):
 
 			# Will be deprecated in v16
 			if row.serial_no and not consumed_bundles.serial_nos:
+				from erpnext.deprecation_dumpster import deprecation_warning
+
+				deprecation_warning("unknown", "v16", "No instructions.")
 				self.available_materials[key]["serial_no"] = list(
 					set(self.available_materials[key]["serial_no"]) - set(get_serial_nos(row.serial_no))
 				)
 
 			# Will be deprecated in v16
 			if row.batch_no and not consumed_bundles.batch_nos:
+				from erpnext.deprecation_dumpster import deprecation_warning
+
+				deprecation_warning("unknown", "v16", "No instructions.")
 				self.available_materials[key]["batch_no"][row.batch_no] -= row.consumed_qty
 
 	def get_available_materials(self):
@@ -1110,6 +1139,12 @@ def get_item_details(items):
 	return item_details
 
 
+def get_pending_sco_qty(po_name):
+	table = frappe.qb.DocType("Purchase Order Item")
+	query = frappe.qb.from_(table).select(table.name, table.qty, table.sco_qty).where(table.parent == po_name)
+	return {item.name: item.qty - item.sco_qty for item in query.run(as_dict=True)}
+
+
 @frappe.whitelist()
 def make_rm_stock_entry(
 	subcontract_order, rm_items=None, order_doctype="Subcontracting Order", target_doc=None
@@ -1228,6 +1263,7 @@ def add_items_in_ste(ste_doc, row, qty, rm_details, rm_detail_field="sco_rm_deta
 			"item_code": row.item_details["rm_item_code"],
 			"subcontracted_item": row.item_details["main_item_code"],
 			"serial_no": "\n".join(row.serial_no) if row.serial_no else "",
+			"use_serial_batch_fields": 1,
 		}
 	)
 
@@ -1268,10 +1304,13 @@ def make_return_stock_entry_for_subcontract(
 		if not value.qty:
 			continue
 
+		if item_details := value.get("item_details"):
+			item_details["serial_and_batch_bundle"] = None
+
 		if value.batch_no:
 			for batch_no, qty in value.batch_no.items():
 				if qty > 0:
-					add_items_in_ste(ste_doc, value, value.qty, rm_details, rm_detail_field, batch_no)
+					add_items_in_ste(ste_doc, value, qty, rm_details, rm_detail_field, batch_no)
 		else:
 			add_items_in_ste(ste_doc, value, value.qty, rm_details, rm_detail_field)
 

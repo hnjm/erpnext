@@ -210,10 +210,21 @@ erpnext.PointOfSale.ItemDetails = class {
 
 	make_auto_serial_selection_btn(item) {
 		if (item.has_serial_no || item.has_batch_no) {
-			const label = item.has_serial_no ? __("Select Serial No") : __("Select Batch No");
-			this.$form_container.append(
-				`<div class="btn btn-sm btn-secondary auto-fetch-btn">${label}</div>`
-			);
+			if (item.has_serial_no && item.has_batch_no) {
+				this.$form_container.append(
+					`<div class="btn btn-sm btn-secondary auto-fetch-btn" style="margin-top: 6px">${__(
+						"Select Serial No / Batch No"
+					)}</div>`
+				);
+			} else {
+				const classname = item.has_serial_no ? ".serial_no-control" : ".batch_no-control";
+				const label = item.has_serial_no ? __("Select Serial No") : __("Select Batch No");
+				this.$form_container
+					.find(classname)
+					.append(
+						`<div class="btn btn-sm btn-secondary auto-fetch-btn" style="margin-top: 6px">${label}</div>`
+					);
+			}
 			this.$form_container.find(".serial_no-control").find("textarea").css("height", "6rem");
 		}
 	}
@@ -272,7 +283,7 @@ erpnext.PointOfSale.ItemDetails = class {
 			};
 			this.warehouse_control.df.get_query = () => {
 				return {
-					filters: { company: this.events.get_frm().doc.company },
+					filters: { company: this.events.get_frm().doc.company, is_group: 0 },
 				};
 			};
 			this.warehouse_control.refresh();
@@ -315,8 +326,12 @@ erpnext.PointOfSale.ItemDetails = class {
 		frappe.model.on("POS Invoice Item", "*", (fieldname, value, item_row) => {
 			const field_control = this[`${fieldname}_control`];
 			const item_row_is_being_edited = this.compare_with_current_item(item_row);
-
-			if (item_row_is_being_edited && field_control && field_control.get_value() !== value) {
+			if (
+				item_row_is_being_edited &&
+				field_control &&
+				field_control.get_value() !== value &&
+				value == item_row[fieldname]
+			) {
 				field_control.set_value(value);
 				cur_pos.update_cart_html(item_row);
 			}

@@ -97,27 +97,27 @@ class RepostItemValuation(Document):
 				]
 			)
 
-		# Closing Stock Balance
+		# Stock Closing Balance
 		closing_stock = self.get_closing_stock_balance()
 		if closing_stock and closing_stock[0].name:
-			name = get_link_to_form("Closing Stock Balance", closing_stock[0].name)
-			to_date = frappe.format(closing_stock[0].to_date, "Date")
-			msg = f"Due to closing stock balance {name}, you cannot repost item valuation before {to_date}"
-			frappe.throw(_(msg))
+			name = get_link_to_form("Stock Closing Entry", closing_stock[0].name)
+			to_date = frappe.format(closing_stock[0].posting_date, "Date")
+			frappe.throw(
+				_("Due to stock closing entry {0}, you cannot repost item valuation before {1}").format(
+					name, to_date
+				)
+			)
 
 	def get_closing_stock_balance(self):
 		filters = {
 			"company": self.company,
-			"status": "Completed",
-			"docstatus": 1,
 			"to_date": (">=", self.posting_date),
+			"status": "Completed",
 		}
 
-		for field in ["warehouse", "item_code"]:
-			if self.get(field):
-				filters.update({field: ("in", ["", self.get(field)])})
-
-		return frappe.get_all("Closing Stock Balance", fields=["name", "to_date"], filters=filters)
+		return frappe.get_all(
+			"Stock Closing Entry", fields=["name", "to_date as posting_date"], filters=filters, limit=1
+		)
 
 	@staticmethod
 	def get_max_period_closing_date(company):
@@ -317,7 +317,7 @@ def remove_attached_file(docname):
 	if file_name := frappe.db.get_value(
 		"File", {"attached_to_name": docname, "attached_to_doctype": "Repost Item Valuation"}, "name"
 	):
-		frappe.delete_doc("File", file_name, ignore_permissions=True, delete_permanently=True)
+		frappe.delete_doc("File", file_name, ignore_permissions=True, delete_permanently=True, force=True)
 
 
 def repost_sl_entries(doc):

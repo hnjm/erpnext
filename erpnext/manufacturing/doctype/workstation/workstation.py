@@ -509,6 +509,7 @@ def update_job_card(job_card, method, **kwargs):
 	if kwargs.qty and isinstance(kwargs.qty, str):
 		kwargs.qty = flt(kwargs.qty)
 
+	print(method)
 	doc = frappe.get_doc("Job Card", job_card)
 	doc.run_method(method, **kwargs)
 

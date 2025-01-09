@@ -2,7 +2,7 @@
 # For license information, please see license.txt
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import frappe
 from frappe import _
@@ -1007,13 +1007,13 @@ def now_datetime(user):
 
 
 def convert_utc_to_user_timezone(utc_timestamp, user):
-	from pytz import UnknownTimeZoneError, timezone
+	from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 	user_tz = get_tz(user)
-	utcnow = timezone("UTC").localize(utc_timestamp)
+	utcnow = utc_timestamp.replace(tzinfo=timezone.utc)
 	try:
-		return utcnow.astimezone(timezone(user_tz))
-	except UnknownTimeZoneError:
+		return utcnow.astimezone(ZoneInfo(user_tz))
+	except ZoneInfoNotFoundError:
 		return utcnow
 
 

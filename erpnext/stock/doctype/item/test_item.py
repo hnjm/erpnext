@@ -26,7 +26,7 @@ from erpnext.stock.doctype.item.item import (
 	validate_is_stock_item,
 )
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
-from erpnext.stock.get_item_details import get_item_details
+from erpnext.stock.get_item_details import ItemDetailsCtx, get_item_details
 
 IGNORE_TEST_RECORD_DEPENDENCIES = ["BOM"]
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Warehouse", "Item Group", "Item Tax Template", "Brand", "Item Attribute"]
@@ -145,21 +145,23 @@ class TestItem(IntegrationTestCase):
 		currency = frappe.get_cached_value("Company", company, "default_currency")
 
 		details = get_item_details(
-			{
-				"item_code": "_Test Item",
-				"company": company,
-				"price_list": "_Test Price List",
-				"currency": currency,
-				"doctype": "Sales Order",
-				"conversion_rate": 1,
-				"price_list_currency": currency,
-				"plc_conversion_rate": 1,
-				"order_type": "Sales",
-				"customer": "_Test Customer",
-				"conversion_factor": 1,
-				"price_list_uom_dependant": 1,
-				"ignore_pricing_rule": 1,
-			}
+			ItemDetailsCtx(
+				{
+					"item_code": "_Test Item",
+					"company": company,
+					"price_list": "_Test Price List",
+					"currency": currency,
+					"doctype": "Sales Order",
+					"conversion_rate": 1,
+					"price_list_currency": currency,
+					"plc_conversion_rate": 1,
+					"order_type": "Sales",
+					"customer": "_Test Customer",
+					"conversion_factor": 1,
+					"price_list_uom_dependant": 1,
+					"ignore_pricing_rule": 1,
+				}
+			)
 		)
 
 		for key, value in to_check.items():
@@ -172,23 +174,27 @@ class TestItem(IntegrationTestCase):
 		create_fixed_asset_item()
 
 		details = get_item_details(
-			{
-				"item_code": "Macbook Pro",
-				"company": "_Test Company",
-				"currency": "INR",
-				"doctype": "Purchase Receipt",
-			}
+			ItemDetailsCtx(
+				{
+					"item_code": "Macbook Pro",
+					"company": "_Test Company",
+					"currency": "INR",
+					"doctype": "Purchase Receipt",
+				}
+			)
 		)
 		self.assertEqual(details.get("expense_account"), "_Test Fixed Asset - _TC")
 
 		frappe.db.set_value("Asset Category", "Computers", "enable_cwip_accounting", "1")
 		details = get_item_details(
-			{
-				"item_code": "Macbook Pro",
-				"company": "_Test Company",
-				"currency": "INR",
-				"doctype": "Purchase Receipt",
-			}
+			ItemDetailsCtx(
+				{
+					"item_code": "Macbook Pro",
+					"company": "_Test Company",
+					"currency": "INR",
+					"doctype": "Purchase Receipt",
+				}
+			)
 		)
 		self.assertEqual(details.get("expense_account"), "CWIP Account - _TC")
 
@@ -271,22 +277,24 @@ class TestItem(IntegrationTestCase):
 
 		for data in expected_item_tax_template:
 			details = get_item_details(
-				{
-					"item_code": data["item_code"],
-					"tax_category": data["tax_category"],
-					"company": "_Test Company",
-					"price_list": "_Test Price List",
-					"currency": "_Test Currency",
-					"doctype": "Sales Order",
-					"conversion_rate": 1,
-					"price_list_currency": "_Test Currency",
-					"plc_conversion_rate": 1,
-					"order_type": "Sales",
-					"customer": "_Test Customer",
-					"conversion_factor": 1,
-					"price_list_uom_dependant": 1,
-					"ignore_pricing_rule": 1,
-				}
+				ItemDetailsCtx(
+					{
+						"item_code": data["item_code"],
+						"tax_category": data["tax_category"],
+						"company": "_Test Company",
+						"price_list": "_Test Price List",
+						"currency": "_Test Currency",
+						"doctype": "Sales Order",
+						"conversion_rate": 1,
+						"price_list_currency": "_Test Currency",
+						"plc_conversion_rate": 1,
+						"order_type": "Sales",
+						"customer": "_Test Customer",
+						"conversion_factor": 1,
+						"price_list_uom_dependant": 1,
+						"ignore_pricing_rule": 1,
+					}
+				)
 			)
 
 			self.assertEqual(details.item_tax_template, data["item_tax_template"])
@@ -320,17 +328,19 @@ class TestItem(IntegrationTestCase):
 			"cost_center": "_Test Cost Center 2 - _TC",  # from item group
 		}
 		sales_item_details = get_item_details(
-			{
-				"item_code": "Test Item With Defaults",
-				"company": "_Test Company",
-				"price_list": "_Test Price List",
-				"currency": "_Test Currency",
-				"doctype": "Sales Invoice",
-				"conversion_rate": 1,
-				"price_list_currency": "_Test Currency",
-				"plc_conversion_rate": 1,
-				"customer": "_Test Customer",
-			}
+			ItemDetailsCtx(
+				{
+					"item_code": "Test Item With Defaults",
+					"company": "_Test Company",
+					"price_list": "_Test Price List",
+					"currency": "_Test Currency",
+					"doctype": "Sales Invoice",
+					"conversion_rate": 1,
+					"price_list_currency": "_Test Currency",
+					"plc_conversion_rate": 1,
+					"customer": "_Test Customer",
+				}
+			)
 		)
 		for key, value in sales_item_check.items():
 			self.assertEqual(value, sales_item_details.get(key))
@@ -343,17 +353,19 @@ class TestItem(IntegrationTestCase):
 			"cost_center": "_Test Write Off Cost Center - _TC",  # from item
 		}
 		purchase_item_details = get_item_details(
-			{
-				"item_code": "Test Item With Defaults",
-				"company": "_Test Company",
-				"price_list": "_Test Price List",
-				"currency": "_Test Currency",
-				"doctype": "Purchase Invoice",
-				"conversion_rate": 1,
-				"price_list_currency": "_Test Currency",
-				"plc_conversion_rate": 1,
-				"supplier": "_Test Supplier",
-			}
+			ItemDetailsCtx(
+				{
+					"item_code": "Test Item With Defaults",
+					"company": "_Test Company",
+					"price_list": "_Test Price List",
+					"currency": "_Test Currency",
+					"doctype": "Purchase Invoice",
+					"conversion_rate": 1,
+					"price_list_currency": "_Test Currency",
+					"plc_conversion_rate": 1,
+					"supplier": "_Test Supplier",
+				}
+			)
 		)
 		for key, value in purchase_item_check.items():
 			self.assertEqual(value, purchase_item_details.get(key))

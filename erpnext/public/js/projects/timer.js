@@ -89,7 +89,7 @@ erpnext.timesheet.control_timer = function (frm, dialog, row, timestamp = 0) {
 			let d = moment(row.from_time);
 			if (row.expected_hours) {
 				d.add(row.expected_hours, "hours");
-				row.to_time = d.format(frappe.defaultDatetimeFormat);
+				row.to_time = frappe.datetime.get_datetime_as_string(d);
 			}
 			frm.refresh_field("time_logs");
 			frm.save();
@@ -117,8 +117,7 @@ erpnext.timesheet.control_timer = function (frm, dialog, row, timestamp = 0) {
 		grid_row.doc.project = args.project;
 		grid_row.doc.task = args.task;
 		grid_row.doc.expected_hours = args.expected_hours;
-		grid_row.doc.hours = currentIncrement / 3600;
-		grid_row.doc.to_time = frappe.datetime.now_datetime();
+		grid_row.doc.to_time = frappe.datetime.get_datetime_as_string();
 		grid_row.refresh();
 		frm.dirty();
 		frm.save();

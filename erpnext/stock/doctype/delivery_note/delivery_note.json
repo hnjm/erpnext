@@ -108,8 +108,9 @@
   "dispatch_address",
   "company_address_section",
   "company_address",
-  "column_break_101",
   "company_address_display",
+  "column_break_101",
+  "company_contact_person",
   "terms_tab",
   "tc_name",
   "terms",
@@ -1394,16 +1395,16 @@
   },
   {
    "fieldname": "utm_medium",
-   "print_hide": 1,
    "fieldtype": "Link",
    "label": "Medium",
-   "options": "UTM Medium"
+   "options": "UTM Medium",
+   "print_hide": 1
   },
   {
    "fieldname": "utm_content",
-   "print_hide": 1,
    "fieldtype": "Data",
-   "label": "Content"
+   "label": "Content",
+   "print_hide": 1
   },
   {
    "fieldname": "utm_source",
@@ -1422,13 +1423,20 @@
    "oldfieldtype": "Link",
    "options": "UTM Campaign",
    "print_hide": 1
+  },
+  {
+   "fieldname": "company_contact_person",
+   "fieldtype": "Link",
+   "label": "Company Contact Person",
+   "options": "Contact",
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-truck",
  "idx": 146,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-05-23 14:18:20.679692",
+ "modified": "2024-11-26 12:44:28.258215",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Delivery Note",

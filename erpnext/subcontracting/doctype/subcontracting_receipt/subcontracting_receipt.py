@@ -786,10 +786,17 @@ def make_purchase_receipt(source_name, target_doc=None, save=False, submit=False
 				"postprocess": update_item,
 				"condition": lambda doc: doc.name in po_sr_item_dict,
 			},
-			"Purchase Taxes and Charges": {"doctype": "Purchase Taxes and Charges", "reset_value": True},
+			"Purchase Taxes and Charges": {
+				"doctype": "Purchase Taxes and Charges",
+				"reset_value": True,
+				"condition": lambda doc: not doc.is_tax_withholding_account,
+			},
 		},
 		postprocess=post_process,
 	)
+
+	if not target_doc.get("items"):
+		add_po_items_to_pr(source_doc, target_doc)
 
 	if (save or submit) and frappe.has_permission(target_doc.doctype, "create"):
 		target_doc.save()
@@ -810,3 +817,29 @@ def make_purchase_receipt(source_name, target_doc=None, save=False, submit=False
 			)
 
 	return target_doc
+
+
+def add_po_items_to_pr(scr_doc, target_doc):
+	fg_items = {(item.item_code, item.purchase_order): item.qty for item in scr_doc.items}
+
+	for (item_code, po_name), fg_qty in fg_items.items():
+		po_doc = frappe.get_doc("Purchase Order", po_name)
+		for item in po_doc.items:
+			if item.fg_item != item_code:
+				continue
+
+			qty = (item.stock_qty - item.received_qty) * fg_qty / item.fg_item_qty
+			if qty:
+				target_doc.append(
+					"items",
+					{
+						"item_code": item.item_code,
+						"item_name": item.item_name,
+						"description": item.description,
+						"qty": qty,
+						"rate": item.rate,
+						"warehouse": item.warehouse,
+						"purchase_order": item.parent,
+						"purchase_order_item": item.name,
+					},
+				)

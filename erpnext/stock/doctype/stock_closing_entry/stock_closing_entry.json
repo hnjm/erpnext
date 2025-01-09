@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "autoname": "naming_series:",
- "creation": "2023-05-17 09:58:42.086911",
+ "creation": "2024-12-07 14:07:01.356963",
  "default_view": "List",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -14,13 +14,6 @@
   "column_break_p0s0",
   "from_date",
   "to_date",
-  "filters_section",
-  "item_code",
-  "item_group",
-  "include_uom",
-  "column_break_rm5w",
-  "warehouse",
-  "warehouse_type",
   "amended_from"
  ],
  "fields": [
@@ -34,7 +27,8 @@
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
-   "options": "Company"
+   "options": "Company",
+   "search_index": 1
   },
   {
    "default": "Draft",
@@ -61,66 +55,29 @@
    "label": "To Date"
   },
   {
-   "collapsible": 1,
-   "fieldname": "filters_section",
-   "fieldtype": "Section Break",
-   "label": "Filters"
-  },
-  {
-   "fieldname": "item_code",
-   "fieldtype": "Link",
-   "label": "Item Code",
-   "options": "Item"
-  },
-  {
-   "fieldname": "item_group",
-   "fieldtype": "Link",
-   "label": "Item Group",
-   "options": "Item Group"
-  },
-  {
-   "fieldname": "column_break_rm5w",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "warehouse",
-   "fieldtype": "Link",
-   "label": "Warehouse",
-   "options": "Warehouse"
-  },
-  {
-   "fieldname": "warehouse_type",
-   "fieldtype": "Link",
-   "label": "Warehouse Type",
-   "options": "Warehouse Type"
-  },
-  {
    "fieldname": "amended_from",
    "fieldtype": "Link",
    "label": "Amended From",
    "no_copy": 1,
-   "options": "Closing Stock Balance",
+   "options": "Stock Closing Entry",
    "print_hide": 1,
-   "read_only": 1
-  },
-  {
-   "fieldname": "include_uom",
-   "fieldtype": "Link",
-   "label": "Include UOM",
-   "options": "UOM"
+   "read_only": 1,
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-03-27 13:06:44.967237",
+ "modified": "2024-12-20 13:48:46.618066",
  "modified_by": "Administrator",
  "module": "Stock",
- "name": "Closing Stock Balance",
+ "name": "Stock Closing Entry",
  "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
   {
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
@@ -130,6 +87,37 @@
    "report": 1,
    "role": "System Manager",
    "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "submit": 1,
    "write": 1
   }
  ],

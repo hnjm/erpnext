@@ -26,8 +26,11 @@ class SubcontractingOrderItem(Document):
 		include_exploded_items: DF.Check
 		item_code: DF.Link
 		item_name: DF.Data
+		job_card: DF.Link | None
 		manufacturer: DF.Link | None
 		manufacturer_part_no: DF.Data | None
+		material_request: DF.Link | None
+		material_request_item: DF.Data | None
 		page_break: DF.Check
 		parent: DF.Data
 		parentfield: DF.Data
@@ -39,6 +42,7 @@ class SubcontractingOrderItem(Document):
 		received_qty: DF.Float
 		returned_qty: DF.Float
 		rm_cost_per_qty: DF.Currency
+		sc_conversion_factor: DF.Float
 		schedule_date: DF.Date | None
 		service_cost_per_qty: DF.Currency
 		stock_uom: DF.Link

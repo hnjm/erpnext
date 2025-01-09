@@ -9,6 +9,7 @@ from frappe.utils import cint, flt, getdate
 from frappe.utils.data import nowtime
 
 import erpnext
+from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_dimensions
 from erpnext.accounts.doctype.budget.budget import validate_expense_against_budget
 from erpnext.accounts.party import get_party_details
 from erpnext.buying.utils import update_last_purchase_rate, validate_for_items
@@ -356,13 +357,13 @@ class BuyingController(SubcontractingController):
 		if not self.is_internal_transfer():
 			return
 
+		self.set_sales_incoming_rate_for_internal_transfer()
+
 		allow_at_arms_length_price = frappe.get_cached_value(
 			"Stock Settings", None, "allow_internal_transfer_at_arms_length_price"
 		)
 		if allow_at_arms_length_price:
 			return
-
-		self.set_sales_incoming_rate_for_internal_transfer()
 
 		for d in self.get("items"):
 			d.discount_percentage = 0.0
@@ -745,6 +746,7 @@ class BuyingController(SubcontractingController):
 		items_data = get_asset_item_details(asset_items)
 		messages = []
 		alert = False
+		accounting_dimensions = get_dimensions(with_cost_center_and_project=True)
 
 		for d in self.items:
 			if d.is_fixed_asset:
@@ -756,11 +758,11 @@ class BuyingController(SubcontractingController):
 					if item_data.get("asset_naming_series"):
 						created_assets = []
 						if item_data.get("is_grouped_asset"):
-							asset = self.make_asset(d, is_grouped_asset=True)
+							asset = self.make_asset(d, accounting_dimensions, is_grouped_asset=True)
 							created_assets.append(asset)
 						else:
 							for _qty in range(cint(d.qty)):
-								asset = self.make_asset(d)
+								asset = self.make_asset(d, accounting_dimensions)
 								created_assets.append(asset)
 
 						if len(created_assets) > 5:
@@ -799,7 +801,7 @@ class BuyingController(SubcontractingController):
 		for message in messages:
 			frappe.msgprint(message, title="Success", indicator="green", alert=alert)
 
-	def make_asset(self, row, is_grouped_asset=False):
+	def make_asset(self, row, accounting_dimensions, is_grouped_asset=False):
 		if not row.asset_location:
 			frappe.throw(_("Row {0}: Enter location for the asset item {1}").format(row.idx, row.item_code))
 
@@ -830,6 +832,13 @@ class BuyingController(SubcontractingController):
 				"purchase_invoice_item": row.name if self.doctype == "Purchase Invoice" else None,
 			}
 		)
+		for dimension in accounting_dimensions[0]:
+			asset.update(
+				{
+					dimension["fieldname"]: self.get(dimension["fieldname"])
+					or dimension.get("default_dimension")
+				}
+			)
 
 		asset.flags.ignore_validate = True
 		asset.flags.ignore_mandatory = True

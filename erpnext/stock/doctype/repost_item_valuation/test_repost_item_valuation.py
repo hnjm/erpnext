@@ -391,17 +391,18 @@ class TestRepostItemValuation(IntegrationTestCase, StockTestMixin):
 		self.assertTrue(frappe.db.exists("Repost Item Valuation", {"voucher_no": pr.name}))
 
 	def test_repost_item_valuation_for_closing_stock_balance(self):
-		from erpnext.stock.doctype.closing_stock_balance.closing_stock_balance import (
+		from erpnext.stock.doctype.stock_closing_entry.stock_closing_entry import (
 			prepare_closing_stock_balance,
 		)
 
-		doc = frappe.new_doc("Closing Stock Balance")
+		doc = frappe.new_doc("Stock Closing Entry")
 		doc.company = "_Test Company"
 		doc.from_date = today()
 		doc.to_date = today()
 		doc.submit()
 
 		prepare_closing_stock_balance(doc.name)
+
 		doc.load_from_db()
 		self.assertEqual(doc.docstatus, 1)
 		self.assertEqual(doc.status, "Completed")

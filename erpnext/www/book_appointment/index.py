@@ -1,8 +1,8 @@
 import datetime
 import json
+import zoneinfo
 
 import frappe
-import pytz
 from frappe import _
 from frappe.utils.data import get_system_timezone
 
@@ -38,9 +38,7 @@ def get_appointment_settings():
 
 @frappe.whitelist(allow_guest=True)
 def get_timezones():
-	import pytz
-
-	return pytz.all_timezones
+	return zoneinfo.available_timezones()
 
 
 @frappe.whitelist(allow_guest=True)
@@ -125,17 +123,17 @@ def filter_timeslots(date, timeslots):
 
 
 def convert_to_guest_timezone(guest_tz, datetimeobject):
-	guest_tz = pytz.timezone(guest_tz)
-	local_timezone = pytz.timezone(get_system_timezone())
+	guest_tz = zoneinfo.ZoneInfo(guest_tz)
+	local_timezone = zoneinfo.ZoneInfo(get_system_timezone())
 	datetimeobject = local_timezone.localize(datetimeobject)
 	datetimeobject = datetimeobject.astimezone(guest_tz)
 	return datetimeobject
 
 
 def convert_to_system_timezone(guest_tz, datetimeobject):
-	guest_tz = pytz.timezone(guest_tz)
+	guest_tz = zoneinfo.ZoneInfo.timezone(guest_tz)
 	datetimeobject = guest_tz.localize(datetimeobject)
-	system_tz = pytz.timezone(get_system_timezone())
+	system_tz = zoneinfo.ZoneInfo.timezone(get_system_timezone())
 	datetimeobject = datetimeobject.astimezone(system_tz)
 	return datetimeobject
 

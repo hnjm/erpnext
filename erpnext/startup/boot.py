@@ -16,6 +16,9 @@ def boot_session(bootinfo):
 
 		bootinfo.sysdefaults.territory = frappe.db.get_single_value("Selling Settings", "territory")
 		bootinfo.sysdefaults.customer_group = frappe.db.get_single_value("Selling Settings", "customer_group")
+		bootinfo.sysdefaults.use_server_side_reactivity = frappe.db.get_single_value(
+			"Selling Settings", "use_server_side_reactivity"
+		)
 		bootinfo.sysdefaults.allow_stale = cint(
 			frappe.db.get_single_value("Accounts Settings", "allow_stale")
 		)

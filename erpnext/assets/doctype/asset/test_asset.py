@@ -916,7 +916,7 @@ class TestDepreciationMethods(AssetSetup):
 			["2030-12-31", 28630.14, 28630.14],
 			["2031-12-31", 35684.93, 64315.07],
 			["2032-12-31", 17842.46, 82157.53],
-			["2033-06-06", 5342.46, 87499.99],
+			["2033-06-06", 5342.47, 87500.00],
 		]
 
 		schedules = [
@@ -1751,6 +1751,10 @@ def create_asset(**args):
 				"rate_of_depreciation": args.rate_of_depreciation or 0,
 			},
 		)
+
+	if asset.is_composite_asset:
+		asset.gross_purchase_amount = 0
+		asset.purchase_amount = 0
 
 	if not args.do_not_save:
 		try:

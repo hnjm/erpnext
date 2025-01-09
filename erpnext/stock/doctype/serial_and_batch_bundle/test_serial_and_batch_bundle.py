@@ -175,7 +175,7 @@ class TestSerialandBatchBundle(IntegrationTestCase):
 		for qty, valuation in {10: 100, 20: 200}.items():
 			stock_queue.append([qty, valuation])
 			qty_after_transaction += qty
-			balance_value += qty_after_transaction * valuation
+			balance_value += qty * valuation
 
 			doc = frappe.get_doc(
 				{
@@ -186,6 +186,7 @@ class TestSerialandBatchBundle(IntegrationTestCase):
 					"incoming_rate": valuation,
 					"qty_after_transaction": qty_after_transaction,
 					"stock_value_difference": valuation * qty,
+					"stock_value": balance_value,
 					"balance_value": balance_value,
 					"valuation_rate": balance_value / qty_after_transaction,
 					"actual_qty": qty,
@@ -195,6 +196,7 @@ class TestSerialandBatchBundle(IntegrationTestCase):
 				}
 			)
 
+			doc.set_posting_datetime()
 			doc.flags.ignore_permissions = True
 			doc.flags.ignore_mandatory = True
 			doc.flags.ignore_links = True
@@ -597,6 +599,7 @@ class TestSerialandBatchBundle(IntegrationTestCase):
 					"company": "_Test Company",
 				}
 			)
+			doc.set_posting_datetime()
 			doc.flags.ignore_permissions = True
 			doc.flags.ignore_mandatory = True
 			doc.flags.ignore_links = True

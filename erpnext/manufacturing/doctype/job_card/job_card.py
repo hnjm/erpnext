@@ -993,8 +993,9 @@ class JobCard(Document):
 		if doc.transfer_material_against == "Job Card" and not doc.skip_transfer:
 			min_qty = []
 			for d in doc.operations:
-				if d.completed_qty:
-					min_qty.append(d.completed_qty)
+				completed_qty = flt(d.completed_qty) + flt(d.process_loss_qty)
+				if completed_qty:
+					min_qty.append(completed_qty)
 				else:
 					min_qty = []
 					break
@@ -1157,6 +1158,9 @@ class JobCard(Document):
 		for employee in kwargs.employees:
 			kwargs.employee = employee.get("employee")
 			if kwargs.from_time and not kwargs.to_time:
+				if kwargs.qty:
+					kwargs.completed_qty = kwargs.qty
+
 				row = self.append("time_logs", kwargs)
 				row.db_update()
 				self.db_set("status", "Work In Progress")
@@ -1223,6 +1227,10 @@ class JobCard(Document):
 
 		if kwargs.auto_submit:
 			self.submit()
+
+			if not self.finished_good:
+				return
+
 			self.make_stock_entry_for_semi_fg_item(kwargs.auto_submit)
 			frappe.msgprint(
 				_("Job Card {0} has been completed").format(get_link_to_form("Job Card", self.name))
