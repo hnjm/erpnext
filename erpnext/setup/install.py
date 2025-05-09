@@ -8,13 +8,12 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.desk.page.setup_wizard.setup_wizard import add_all_roles_to
 from frappe.utils import cint
 
-from erpnext.setup.default_energy_point_rules import get_default_energy_point_rules
 from erpnext.setup.doctype.incoterm.incoterm import create_incoterms
 
 from .default_success_action import get_default_success_action
 
 default_mail_footer = """<div style="padding: 7px; text-align: right; color: #888"><small>Sent via
-	<a style="color: #888" href="http://erpnext.org">ERPNext</a></div>"""
+	<a style="color: #888" href="http://frappe.io/erpnext">ERPNext</a></div>"""
 
 
 def after_install():
@@ -26,7 +25,6 @@ def after_install():
 	create_marketgin_campagin_custom_fields()
 	add_all_roles_to("Administrator")
 	create_default_success_action()
-	create_default_energy_point_rules()
 	create_incoterms()
 	create_default_role_profiles()
 	add_company_to_session_defaults()
@@ -147,18 +145,6 @@ def create_default_success_action():
 			doc.insert(ignore_permissions=True)
 
 
-def create_default_energy_point_rules():
-	for rule in get_default_energy_point_rules():
-		# check if any rule for ref. doctype exists
-		rule_exists = frappe.db.exists(
-			"Energy Point Rule", {"reference_doctype": rule.get("reference_doctype")}
-		)
-		if rule_exists:
-			continue
-		doc = frappe.get_doc(rule)
-		doc.insert(ignore_permissions=True)
-
-
 def add_company_to_session_defaults():
 	settings = frappe.get_single("Session Default Settings")
 	settings.append("session_defaults", {"ref_doctype": "Company"})
@@ -189,7 +175,7 @@ def add_standard_navbar_items():
 		{
 			"item_label": "Frappe School",
 			"item_type": "Route",
-			"route": "https://frappe.school?utm_source=in_app",
+			"route": "https://frappe.io/school?utm_source=in_app",
 			"is_standard": 1,
 		},
 		{

@@ -112,8 +112,10 @@
   "contact_mobile",
   "contact_email",
   "section_break_98",
-  "shipping_address",
+  "dispatch_address",
+  "dispatch_address_display",
   "column_break_100",
+  "shipping_address",
   "shipping_address_display",
   "billing_address_section",
   "billing_address",
@@ -1198,7 +1200,7 @@
   {
    "fieldname": "section_break_98",
    "fieldtype": "Section Break",
-   "label": "Company Shipping Address"
+   "label": "Shipping Address"
   },
   {
    "fieldname": "billing_address_section",
@@ -1267,13 +1269,28 @@
    "no_copy": 1,
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "dispatch_address",
+   "fieldtype": "Link",
+   "label": "Dispatch Address Template",
+   "options": "Address",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "dispatch_address_display",
+   "fieldtype": "Text Editor",
+   "label": "Dispatch Address",
+   "print_hide": 1,
+   "read_only": 1
   }
  ],
+ "grid_page_length": 50,
  "icon": "fa fa-truck",
  "idx": 261,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-11-13 16:55:14.129055",
+ "modified": "2025-04-09 16:52:19.323878",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Purchase Receipt",
@@ -1334,6 +1351,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "search_fields": "status, posting_date, supplier",
  "show_name_in_global_search": 1,
  "sort_field": "creation",

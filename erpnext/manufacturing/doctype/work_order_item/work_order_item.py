@@ -34,6 +34,7 @@ class WorkOrderItem(Document):
 		returned_qty: DF.Float
 		source_warehouse: DF.Link | None
 		stock_uom: DF.Link | None
+		stock_reserved_qty: DF.Float
 		transferred_qty: DF.Float
 	# end: auto-generated types
 

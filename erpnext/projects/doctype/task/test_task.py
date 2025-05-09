@@ -7,9 +7,15 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, nowdate
 
 from erpnext.projects.doctype.task.task import CircularReferenceError
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestTask(IntegrationTestCase):
+class TestTask(ERPNextTestSuite):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		cls.make_projects()
+
 	def test_circular_reference(self):
 		task1 = create_task("_Test Task 1", add_days(nowdate(), -15), add_days(nowdate(), -10))
 		task2 = create_task("_Test Task 2", add_days(nowdate(), 11), add_days(nowdate(), 15), task1.name)

@@ -299,9 +299,12 @@ class StockBalanceReport:
 		elif entry.posting_date >= self.from_date and entry.posting_date <= self.to_date:
 			if flt(qty_diff, self.float_precision) >= 0:
 				qty_dict.in_qty += qty_diff
-				qty_dict.in_val += value_diff
 			else:
 				qty_dict.out_qty += abs(qty_diff)
+
+			if flt(value_diff, self.float_precision) >= 0:
+				qty_dict.in_val += value_diff
+			else:
 				qty_dict.out_val += abs(value_diff)
 
 		qty_dict.val_rate = entry.valuation_rate
@@ -417,16 +420,17 @@ class StockBalanceReport:
 			},
 		]
 
-		for dimension in get_inventory_dimensions():
-			columns.append(
-				{
-					"label": _(dimension.doctype),
-					"fieldname": dimension.fieldname,
-					"fieldtype": "Link",
-					"options": dimension.doctype,
-					"width": 110,
-				}
-			)
+		if self.filters.get("show_dimension_wise_stock"):
+			for dimension in get_inventory_dimensions():
+				columns.append(
+					{
+						"label": _(dimension.doctype),
+						"fieldname": dimension.fieldname,
+						"fieldtype": "Link",
+						"options": dimension.doctype,
+						"width": 110,
+					}
+				)
 
 		columns.extend(
 			[

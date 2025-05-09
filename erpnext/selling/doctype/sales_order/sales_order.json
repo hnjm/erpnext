@@ -11,7 +11,6 @@
  "field_order": [
   "customer_section",
   "column_break0",
-  "title",
   "naming_series",
   "customer",
   "customer_name",
@@ -25,6 +24,7 @@
   "po_date",
   "company",
   "skip_delivery_note",
+  "has_unit_price_items",
   "amended_from",
   "accounting_dimensions_section",
   "cost_center",
@@ -185,18 +185,6 @@
    "hide_seconds": 1,
    "oldfieldtype": "Column Break",
    "width": "50%"
-  },
-  {
-   "allow_on_submit": 1,
-   "default": "{customer_name}",
-   "fieldname": "title",
-   "fieldtype": "Data",
-   "hidden": 1,
-   "hide_days": 1,
-   "hide_seconds": 1,
-   "label": "Title",
-   "no_copy": 1,
-   "print_hide": 1
   },
   {
    "fieldname": "naming_series",
@@ -1155,7 +1143,8 @@
    "label": "Project",
    "oldfieldname": "project",
    "oldfieldtype": "Link",
-   "options": "Project"
+   "options": "Project",
+   "search_index": 1
   },
   {
    "fieldname": "party_account_currency",
@@ -1684,13 +1673,21 @@
    "label": "Company Contact Person",
    "options": "Contact",
    "print_hide": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "has_unit_price_items",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Has Unit Price Items",
+   "no_copy": 1
   }
  ],
  "icon": "fa fa-file-text",
  "idx": 105,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-11-26 12:42:06.872527",
+ "modified": "2025-03-03 16:49:00.676927",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Sales Order",
@@ -1759,6 +1756,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "search_fields": "status,transaction_date,customer,customer_name, territory,order_type,company",
  "show_name_in_global_search": 1,
  "sort_field": "creation",

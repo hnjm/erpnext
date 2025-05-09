@@ -242,7 +242,7 @@ frappe.ui.form.on("BOM", {
 						qty: data.qty || 0.0,
 						project: frm.doc.project,
 						variant_items: variant_items,
-						use_multi_level_bom: use_multi_level_bom,
+						use_multi_level_bom: frm.doc?.track_semi_finished_goods ? 0 : use_multi_level_bom,
 					},
 					freeze: true,
 					callback(r) {
@@ -331,12 +331,14 @@ frappe.ui.form.on("BOM", {
 				},
 			});
 
-			fields.push({
-				fieldtype: "Check",
-				label: __("Use Multi-Level BOM"),
-				fieldname: "use_multi_level_bom",
-				default: frm.doc?.__onload.use_multi_level_bom,
-			});
+			if (!frm.doc.track_semi_finished_goods) {
+				fields.push({
+					fieldtype: "Check",
+					label: __("Use Multi-Level BOM"),
+					fieldname: "use_multi_level_bom",
+					default: frm.doc?.__onload.use_multi_level_bom,
+				});
+			}
 		}
 
 		var has_template_rm = frm.doc.items.filter((d) => d.has_variants === 1) || [];

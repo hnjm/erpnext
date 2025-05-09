@@ -35,7 +35,7 @@ frappe.ui.form.on("Journal Entry", {
 						to_date: moment(frm.doc.modified).format("YYYY-MM-DD"),
 						company: frm.doc.company,
 						finance_book: frm.doc.finance_book,
-						group_by: "",
+						categorize_by: "",
 						show_cancelled_entries: frm.doc.docstatus === 2,
 					};
 					frappe.set_route("query-report", "General Ledger");
@@ -428,12 +428,6 @@ frappe.ui.form.on("Journal Entry Account", {
 					party: d.party,
 				},
 			});
-		}
-	},
-	cost_center: function (frm, dt, dn) {
-		// Don't reset for Gain/Loss type journals, as it will make Debit and Credit values '0'
-		if (frm.doc.voucher_type != "Exchange Gain Or Loss") {
-			erpnext.journal_entry.set_account_details(frm, dt, dn);
 		}
 	},
 

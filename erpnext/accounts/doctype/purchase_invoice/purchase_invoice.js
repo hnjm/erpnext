@@ -68,6 +68,14 @@ erpnext.accounts.PurchaseInvoice = class PurchaseInvoice extends erpnext.buying.
 		if (this.frm.doc.supplier && this.frm.doc.__islocal) {
 			this.frm.trigger("supplier");
 		}
+
+		this.frm.set_query("supplier", function () {
+			return {
+				filters: {
+					is_transporter: 0,
+				},
+			};
+		});
 	}
 
 	refresh(doc) {
@@ -336,6 +344,8 @@ erpnext.accounts.PurchaseInvoice = class PurchaseInvoice extends erpnext.buying.
 
 		if (this.frm.doc.__onload && this.frm.doc.__onload.load_after_mapping) return;
 
+		let payment_terms_template = this.frm.doc.payment_terms_template;
+
 		erpnext.utils.get_party_details(
 			this.frm,
 			"erpnext.accounts.party.get_party_details",
@@ -356,6 +366,12 @@ erpnext.accounts.PurchaseInvoice = class PurchaseInvoice extends erpnext.buying.
 				me.frm.doc.tax_withholding_category = me.frm.supplier_tds;
 				me.frm.set_df_property("apply_tds", "read_only", me.frm.supplier_tds ? 0 : 1);
 				me.frm.set_df_property("tax_withholding_category", "hidden", me.frm.supplier_tds ? 0 : 1);
+
+				// while duplicating, don't change payment terms
+				if (me.frm.doc.__run_link_triggers === false) {
+					me.frm.set_value("payment_terms_template", payment_terms_template);
+					me.frm.refresh_field("payment_terms_template");
+				}
 			}
 		);
 	}
@@ -370,6 +386,18 @@ erpnext.accounts.PurchaseInvoice = class PurchaseInvoice extends erpnext.buying.
 			me.frm.set_value("tax_withholding_category", me.frm.supplier_tds);
 			me.frm.set_df_property("tax_withholding_category", "hidden", 0);
 		}
+	}
+
+	tax_withholding_category(frm) {
+		var me = this;
+		let filtered_taxes = (me.frm.doc.taxes || []).filter((row) => !row.is_tax_withholding_account);
+		me.frm.clear_table("taxes");
+
+		filtered_taxes.forEach((row) => {
+			me.frm.add_child("taxes", row);
+		});
+
+		me.frm.refresh_field("taxes");
 	}
 
 	credit_to() {

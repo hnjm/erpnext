@@ -47,6 +47,7 @@ class RepostItemValuation(Document):
 		items_to_be_repost: DF.Code | None
 		posting_date: DF.Date
 		posting_time: DF.Time | None
+		recreate_stock_ledgers: DF.Check
 		reposting_data_file: DF.Attach | None
 		status: DF.Literal["Queued", "In Progress", "Completed", "Skipped", "Failed"]
 		total_reposting_count: DF.Int
@@ -74,6 +75,7 @@ class RepostItemValuation(Document):
 		self.reset_field_values()
 		self.set_company()
 		self.validate_accounts_freeze()
+		self.reset_recreate_stock_ledgers()
 
 	def validate_period_closing_voucher(self):
 		# Period Closing Voucher
@@ -107,6 +109,10 @@ class RepostItemValuation(Document):
 					name, to_date
 				)
 			)
+
+	def reset_recreate_stock_ledgers(self):
+		if self.recreate_stock_ledgers and self.based_on != "Transaction":
+			self.recreate_stock_ledgers = 0
 
 	def get_closing_stock_balance(self):
 		filters = {
@@ -245,6 +251,16 @@ class RepostItemValuation(Document):
 			filters,
 		)
 
+	def recreate_stock_ledger_entries(self):
+		"""Recreate Stock Ledger Entries for the transaction."""
+		if self.based_on == "Transaction" and self.recreate_stock_ledgers:
+			doc = frappe.get_doc(self.voucher_type, self.voucher_no)
+			doc.db_set("docstatus", 2)
+			doc.update_stock_ledger(allow_negative_stock=True)
+
+			doc.db_set("docstatus", 1)
+			doc.update_stock_ledger(allow_negative_stock=True)
+
 
 def on_doctype_update():
 	frappe.db.add_index("Repost Item Valuation", ["warehouse", "item_code"], "item_warehouse")
@@ -262,6 +278,9 @@ def repost(doc):
 		doc.set_status("In Progress")
 		if not frappe.flags.in_test:
 			frappe.db.commit()
+
+		if doc.recreate_stock_ledgers:
+			doc.recreate_stock_ledger_entries()
 
 		repost_sl_entries(doc)
 		repost_gl_entries(doc)
@@ -286,7 +305,7 @@ def repost(doc):
 
 		status = "Failed"
 		# If failed because of timeout, set status to In Progress
-		if traceback and "timeout" in traceback.lower():
+		if traceback and ("timeout" in traceback.lower() or "Deadlock found" in traceback):
 			status = "In Progress"
 
 		if traceback:
@@ -301,13 +320,14 @@ def repost(doc):
 			},
 		)
 
-		outgoing_email_account = frappe.get_cached_value(
-			"Email Account", {"default_outgoing": 1, "enable_outgoing": 1}, "name"
-		)
+		if status == "Failed":
+			outgoing_email_account = frappe.get_cached_value(
+				"Email Account", {"default_outgoing": 1, "enable_outgoing": 1}, "name"
+			)
 
-		if outgoing_email_account and not isinstance(e, RecoverableErrors):
-			notify_error_to_stock_managers(doc, message)
-			doc.set_status("Failed")
+			if outgoing_email_account and not isinstance(e, RecoverableErrors):
+				notify_error_to_stock_managers(doc, message)
+				doc.set_status("Failed")
 	finally:
 		if not frappe.flags.in_test:
 			frappe.db.commit()
@@ -481,4 +501,9 @@ def in_configured_timeslot(repost_settings=None, current_time=None):
 @frappe.whitelist()
 def execute_repost_item_valuation():
 	"""Execute repost item valuation via scheduler."""
-	frappe.get_doc("Scheduled Job Type", "repost_item_valuation.repost_entries").enqueue(force=True)
+	if name := frappe.db.get_value(
+		"Scheduled Job Type",
+		{"method": "erpnext.stock.doctype.repost_item_valuation.repost_item_valuation.repost_entries"},
+		"name",
+	):
+		frappe.get_doc("Scheduled Job Type", name).enqueue(force=True)

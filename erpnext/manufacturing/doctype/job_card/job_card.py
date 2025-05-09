@@ -129,6 +129,7 @@ class JobCard(Document):
 		time_required: DF.Float
 		total_completed_qty: DF.Float
 		total_time_in_mins: DF.Float
+		track_semi_finished_goods: DF.Check
 		transferred_qty: DF.Float
 		wip_warehouse: DF.Link | None
 		work_order: DF.Link
@@ -251,7 +252,7 @@ class JobCard(Document):
 
 				open_job_cards = []
 				if d.get("employee"):
-					open_job_cards = self.get_open_job_cards(d.get("employee"))
+					open_job_cards = self.get_open_job_cards(d.get("employee"), workstation=self.workstation)
 
 				data = self.get_overlap_for(d, open_job_cards=open_job_cards)
 				if data:
@@ -292,9 +293,13 @@ class JobCard(Document):
 				frappe.get_cached_value("Workstation", self.workstation, "production_capacity") or 1
 			)
 
-		if args.get("employee"):
-			# override capacity for employee
-			production_capacity = 1
+		if self.get_open_job_cards(args.get("employee")):
+			frappe.throw(
+				_(
+					"Employee {0} is currently working on another workstation. Please assign another employee."
+				).format(args.get("employee")),
+				OverlapError,
+			)
 
 		if not self.has_overlap(production_capacity, time_logs):
 			return {}
@@ -344,6 +349,9 @@ class JobCard(Document):
 		return overlap
 
 	def get_time_logs(self, args, doctype, open_job_cards=None):
+		if args.get("remaining_time_in_mins") and get_datetime(args.from_time) >= get_datetime(args.to_time):
+			args.to_time = add_to_date(args.from_time, minutes=args.get("remaining_time_in_mins"))
+
 		jc = frappe.qb.DocType("Job Card")
 		jctl = frappe.qb.DocType(doctype)
 
@@ -389,14 +397,16 @@ class JobCard(Document):
 			else:
 				query = query.where(jc.name.isin(open_job_cards))
 
-		if doctype != "Job Card Time Log":
-			query = query.where(jc.total_time_in_mins == 0)
+		if doctype == "Job Card Time Log":
+			query = query.where(jc.docstatus < 2)
+		else:
+			query = query.where((jc.docstatus == 0) & (jc.total_time_in_mins == 0))
 
 		time_logs = query.run(as_dict=True)
 
 		return time_logs
 
-	def get_open_job_cards(self, employee):
+	def get_open_job_cards(self, employee, workstation=None):
 		jc = frappe.qb.DocType("Job Card")
 		jctl = frappe.qb.DocType("Job Card Time Log")
 
@@ -407,12 +417,14 @@ class JobCard(Document):
 			.select(jc.name)
 			.where(
 				(jctl.parent == jc.name)
-				& (jc.workstation == self.workstation)
 				& (jctl.employee == employee)
 				& (jc.docstatus < 1)
 				& (jc.name != self.name)
 			)
 		)
+
+		if workstation:
+			query = query.where(jc.workstation == workstation)
 
 		jobs = query.run(as_dict=True)
 		return [job.get("name") for job in jobs] if jobs else []
@@ -447,7 +459,13 @@ class JobCard(Document):
 	def schedule_time_logs(self, row):
 		row.remaining_time_in_mins = row.time_in_mins
 		while row.remaining_time_in_mins > 0:
-			args = frappe._dict({"from_time": row.planned_start_time, "to_time": row.planned_end_time})
+			args = frappe._dict(
+				{
+					"from_time": row.planned_start_time,
+					"to_time": row.planned_end_time,
+					"remaining_time_in_mins": row.remaining_time_in_mins,
+				}
+			)
 
 			self.validate_overlap_for_workstation(args, row)
 			self.check_workstation_time(row)
@@ -659,7 +677,11 @@ class JobCard(Document):
 					)
 				)
 
-			if self.get("operation") == d.operation or self.operation_row_id == d.operation_row_id:
+			if (
+				self.get("operation") == d.operation
+				or self.operation_row_id == d.operation_row_id
+				or self.is_corrective_job_card
+			):
 				self.append(
 					"items",
 					{
@@ -702,7 +724,7 @@ class JobCard(Document):
 			)
 
 	def validate_job_card(self):
-		if self.finished_good:
+		if self.track_semi_finished_goods:
 			return
 
 		if self.work_order and frappe.get_cached_value("Work Order", self.work_order, "status") == "Stopped":
@@ -718,6 +740,12 @@ class JobCard(Document):
 					bold("Job Card"), get_link_to_form("Job Card", self.name)
 				)
 			)
+		else:
+			for row in self.time_logs:
+				if not row.from_time or not row.to_time:
+					frappe.throw(
+						_("Row #{0}: From Time and To Time fields are required").format(row.idx),
+					)
 
 		precision = self.precision("total_completed_qty")
 		total_completed_qty = flt(
@@ -773,7 +801,7 @@ class JobCard(Document):
 			)
 
 	def update_work_order(self):
-		if self.finished_good:
+		if self.track_semi_finished_goods:
 			return
 
 		if not self.work_order:
@@ -1016,14 +1044,16 @@ class JobCard(Document):
 		if self.docstatus == 0 and self.time_logs:
 			self.status = "Work In Progress"
 
-		if not self.finished_good and self.docstatus < 2:
+		if not self.track_semi_finished_goods and self.docstatus < 2:
 			if flt(self.for_quantity) <= flt(self.transferred_qty):
 				self.status = "Material Transferred"
 
 			if self.time_logs:
 				self.status = "Work In Progress"
 
-			if self.docstatus == 1 and (self.for_quantity <= self.total_completed_qty or not self.items):
+			if self.docstatus == 1 and (
+				self.for_quantity <= (self.total_completed_qty + self.process_loss_qty) or not self.items
+			):
 				self.status = "Completed"
 
 		if self.is_paused:
@@ -1164,6 +1194,14 @@ class JobCard(Document):
 				row = self.append("time_logs", kwargs)
 				row.db_update()
 				self.db_set("status", "Work In Progress")
+			elif not kwargs.from_time and not kwargs.to_time and kwargs.completed_qty:
+				update_status = True
+				for row in self.time_logs:
+					if row.employee != kwargs.employee:
+						continue
+
+					row.completed_qty = kwargs.completed_qty
+					row.db_update()
 			else:
 				update_status = True
 				for row in self.time_logs:
@@ -1223,6 +1261,13 @@ class JobCard(Document):
 
 		if kwargs.end_time:
 			self.add_time_logs(to_time=kwargs.end_time, completed_qty=kwargs.qty, employees=self.employee)
+
+			if kwargs.for_quantity:
+				self.for_quantity = kwargs.for_quantity
+
+			self.save()
+		else:
+			self.add_time_logs(completed_qty=kwargs.qty, employees=self.employee)
 			self.save()
 
 		if kwargs.auto_submit:
@@ -1400,8 +1445,18 @@ def make_stock_entry(source_name, target_doc=None):
 			target.qty = pending_rm_qty
 
 	def set_missing_values(source, target):
+		if source.finished_good and not source.target_warehouse:
+			frappe.throw(_("Please set the Target Warehouse in the Job Card"))
+
+		if not source.skip_material_transfer or source.backflush_from_wip_warehouse:
+			if not source.wip_warehouse:
+				frappe.throw(_("Please set the WIP Warehouse in the Job Card"))
+
 		target.purpose = "Material Transfer for Manufacture"
 		target.from_bom = 1
+
+		if source.semi_fg_bom:
+			target.bom_no = source.semi_fg_bom
 
 		# avoid negative 'For Quantity'
 		pending_fg_qty = flt(source.get("for_quantity", 0)) - flt(source.get("transferred_qty", 0))

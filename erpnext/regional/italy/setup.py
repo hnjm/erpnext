@@ -378,6 +378,7 @@ def make_custom_fields(update=True):
 			),
 		],
 		"Purchase Invoice Item": invoice_item_fields,
+		"POS Invoice Item": invoice_item_fields,
 		"Sales Order Item": invoice_item_fields,
 		"Delivery Note Item": invoice_item_fields,
 		"Sales Invoice Item": invoice_item_fields + customer_po_fields,

@@ -54,6 +54,12 @@ erpnext.buying = {
 							return erpnext.queries.company_address_query(this.frm.doc)
 					});
 				}
+
+				if(this.frm.get_field('dispatch_address')) {
+					this.frm.set_query("dispatch_address", () => {
+						return erpnext.queries.address_query(this.frm.doc);
+					});
+				}
 			}
 
 			setup_queries(doc, cdt, cdn) {
@@ -157,10 +163,17 @@ erpnext.buying = {
 				if(!frappe.meta.has_field(this.frm.doc.doctype, "billing_address")) return;
 
 				frappe.call({
-					method: "erpnext.setup.doctype.company.company.get_default_company_address",
-					args: { name: this.frm.doc.company, existing_address:this.frm.doc.billing_address },
+					method: "erpnext.setup.doctype.company.company.get_billing_shipping_address",
+					args: {
+						name: this.frm.doc.company,
+						billing_address:this.frm.doc.billing_address,
+						shipping_address: this.frm.doc.shipping_address
+					},
 					callback: (r) => {
-						this.frm.set_value("billing_address", r.message || "");
+						this.frm.set_value("billing_address", r.message.primary_address || "");
+
+						if(!frappe.meta.has_field(this.frm.doc.doctype, "shipping_address")) return;
+						this.frm.set_value("shipping_address", r.message.shipping_address || "");
 					},
 				});
 			}
@@ -187,7 +200,7 @@ erpnext.buying = {
 			}
 
 			qty(doc, cdt, cdn) {
-				if ((doc.doctype == "Purchase Receipt") || (doc.doctype == "Purchase Invoice" && (doc.update_stock || doc.is_return))) {
+				if ((doc.doctype == "Purchase Receipt") || (doc.doctype == "Purchase Invoice" && doc.update_stock)) {
 					this.calculate_received_qty(doc, cdt, cdn)
 				}
 				super.qty(doc, cdt, cdn);
@@ -286,6 +299,12 @@ erpnext.buying = {
 				var me = this;
 				erpnext.utils.get_address_display(this.frm, "shipping_address",
 					"shipping_address_display", true);
+			}
+
+			dispatch_address(){
+				var me = this;
+				erpnext.utils.get_address_display(this.frm, "dispatch_address",
+					"dispatch_address_display", true);
 			}
 
 			billing_address() {

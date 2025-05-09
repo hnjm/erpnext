@@ -8,7 +8,6 @@
  "engine": "InnoDB",
  "field_order": [
   "customer_section",
-  "title",
   "naming_series",
   "customer",
   "customer_name",
@@ -191,16 +190,6 @@
    "fieldname": "customer_section",
    "fieldtype": "Section Break",
    "options": "fa fa-user"
-  },
-  {
-   "allow_on_submit": 1,
-   "default": "{customer_name}",
-   "fieldname": "title",
-   "fieldtype": "Data",
-   "hidden": 1,
-   "label": "Title",
-   "no_copy": 1,
-   "print_hide": 1
   },
   {
    "bold": 1,
@@ -1584,7 +1573,7 @@
  "icon": "fa fa-file-text",
  "is_submittable": 1,
  "links": [],
- "modified": "2024-11-26 13:10:50.309570",
+ "modified": "2025-01-06 15:03:19.957277",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Invoice",
@@ -1635,7 +1624,6 @@
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "customer",
- "title_field": "title",
- "track_changes": 1,
- "track_seen": 1
+ "title_field": "customer_name",
+ "track_changes": 1
 }

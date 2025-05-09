@@ -42,6 +42,7 @@ class RequestforQuotation(BuyingController):
 		billing_address_display: DF.TextEditor | None
 		company: DF.Link
 		email_template: DF.Link | None
+		has_unit_price_items: DF.Check
 		incoterm: DF.Link | None
 		items: DF.Table[RequestforQuotationItem]
 		letter_head: DF.Link | None
@@ -61,6 +62,10 @@ class RequestforQuotation(BuyingController):
 		vendor: DF.Link | None
 	# end: auto-generated types
 
+	def before_validate(self):
+		self.set_has_unit_price_items()
+		self.flags.allow_zero_qty = self.has_unit_price_items
+
 	def validate(self):
 		self.validate_duplicate_supplier()
 		self.validate_supplier_list()
@@ -72,6 +77,17 @@ class RequestforQuotation(BuyingController):
 		if self.docstatus < 1:
 			# after amend and save, status still shows as cancelled, until submit
 			self.db_set("status", "Draft")
+
+	def set_has_unit_price_items(self):
+		"""
+		If permitted in settings and any item has 0 qty, the RFQ has unit price items.
+		"""
+		if not frappe.db.get_single_value("Buying Settings", "allow_zero_qty_in_request_for_quotation"):
+			return
+
+		self.has_unit_price_items = any(
+			not row.qty for row in self.get("items") if (row.item_code and not row.qty)
+		)
 
 	def validate_duplicate_supplier(self):
 		supplier_list = [d.supplier for d in self.suppliers]
@@ -395,7 +411,11 @@ def make_supplier_quotation_from_rfq(source_name, target_doc=None, for_supplier=
 			},
 			"Request for Quotation Item": {
 				"doctype": "Supplier Quotation Item",
-				"field_map": {"name": "request_for_quotation_item", "parent": "request_for_quotation"},
+				"field_map": {
+					"name": "request_for_quotation_item",
+					"parent": "request_for_quotation",
+					"project_name": "project",
+				},
 			},
 		},
 		target_doc,
@@ -436,11 +456,10 @@ def create_supplier_quotation(doc):
 
 def add_items(sq_doc, supplier, items):
 	for data in items:
-		if data.get("qty") > 0:
-			if isinstance(data, dict):
-				data = frappe._dict(data)
+		if isinstance(data, dict):
+			data = frappe._dict(data)
 
-			create_rfq_items(sq_doc, supplier, data)
+		create_rfq_items(sq_doc, supplier, data)
 
 
 def create_rfq_items(sq_doc, supplier, data):

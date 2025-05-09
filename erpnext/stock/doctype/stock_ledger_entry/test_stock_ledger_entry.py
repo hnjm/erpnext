@@ -456,6 +456,45 @@ class TestStockLedgerEntry(IntegrationTestCase, StockTestMixin):
 			frappe.set_user("Administrator")
 			user.remove_roles("Stock Manager")
 
+	def test_batchwise_item_valuation_fifo(self):
+		item, warehouses, batches = setup_item_valuation_test(valuation_method="FIFO")
+
+		# Incoming Entries for Stock Value check
+		pr_entry_list = [
+			(item, warehouses[0], batches[0], 1, 100),
+			(item, warehouses[0], batches[1], 1, 50),
+			(item, warehouses[0], batches[0], 1, 150),
+			(item, warehouses[0], batches[1], 1, 100),
+		]
+		prs = create_purchase_receipt_entries_for_batchwise_item_valuation_test(pr_entry_list)
+		sle_details = fetch_sle_details_for_doc_list(prs, ["stock_value"])
+		sv_list = [d["stock_value"] for d in sle_details]
+		expected_sv = [100, 150, 300, 400]
+		self.assertEqual(expected_sv, sv_list, "Incorrect 'Stock Value' values")
+
+		# Outgoing Entries for Stock Value Difference check
+		dn_entry_list = [
+			(item, warehouses[0], batches[1], 1, 200),
+			(item, warehouses[0], batches[0], 1, 200),
+			(item, warehouses[0], batches[1], 1, 200),
+			(item, warehouses[0], batches[0], 1, 200),
+		]
+
+		frappe.flags.use_serial_and_batch_fields = True
+		dns = create_delivery_note_entries_for_batchwise_item_valuation_test(dn_entry_list)
+		sle_details = fetch_sle_details_for_doc_list(dns, ["stock_value_difference"])
+		svd_list = [-1 * d["stock_value_difference"] for d in sle_details]
+		expected_incoming_rates = expected_abs_svd = [75.0, 125.0, 75.0, 125.0]
+
+		self.assertEqual(expected_abs_svd, svd_list, "Incorrect 'Stock Value Difference' values")
+		for dn, _incoming_rate in zip(dns, expected_incoming_rates, strict=False):
+			self.assertTrue(
+				dn.items[0].incoming_rate in expected_abs_svd,
+				"Incorrect 'Incoming Rate' values fetched for DN items",
+			)
+
+		frappe.flags.use_serial_and_batch_fields = False
+
 	def test_batchwise_item_valuation_moving_average(self):
 		item, warehouses, batches = setup_item_valuation_test(valuation_method="Moving Average")
 
@@ -1275,7 +1314,7 @@ class TestStockLedgerEntry(IntegrationTestCase, StockTestMixin):
 		# To deliver 100 qty we fall short of 11.0073 qty (11.007 with precision 3)
 		# Stock up with 11.007 (balance in db becomes 99.9997, on UI it will show as 100)
 		make_stock_entry(item_code=item_code, target=warehouse, qty=11.007, rate=100)
-		self.assertEqual(get_stock_balance(item_code, warehouse), 99.9997)
+		self.assertEqual(get_stock_balance(item_code, warehouse), 100.0)
 
 		# See if delivery note goes through
 		# Negative qty error should not be raised as 99.9997 is 100 with precision 3 (system precision)

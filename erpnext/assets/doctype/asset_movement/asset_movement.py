@@ -152,6 +152,9 @@ class AssetMovement(Document):
 				""",
 				args,
 			)
+
+			self.validate_movement_cancellation(d, latest_movement_entry)
+
 			if latest_movement_entry:
 				current_location = latest_movement_entry[0][0]
 				current_employee = latest_movement_entry[0][1]
@@ -179,3 +182,12 @@ class AssetMovement(Document):
 					d.asset,
 					_("Asset issued to Employee {0}").format(get_link_to_form("Employee", current_employee)),
 				)
+
+	def validate_movement_cancellation(self, row, latest_movement_entry):
+		asset_doc = frappe.get_doc("Asset", row.asset)
+		if not latest_movement_entry and asset_doc.docstatus == 1:
+			frappe.throw(
+				_(
+					"Asset {0} has only one movement record. Please create another movement before deleting this one to maintain asset tracking."
+				).format(row.asset)
+			)

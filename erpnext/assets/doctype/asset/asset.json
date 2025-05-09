@@ -87,6 +87,7 @@
    "options": "ACC-ASS-.YYYY.-"
   },
   {
+   "allow_on_submit": 1,
    "depends_on": "item_code",
    "fetch_from": "item_code.item_name",
    "fetch_if_empty": 1,
@@ -226,10 +227,9 @@
   {
    "fieldname": "gross_purchase_amount",
    "fieldtype": "Currency",
-   "label": "Gross Purchase Amount",
+   "label": "Net Purchase Amount",
    "mandatory_depends_on": "eval:(!doc.is_composite_asset || doc.docstatus==1)",
-   "options": "Company:company:default_currency",
-   "read_only_depends_on": "eval:!doc.is_existing_asset"
+   "options": "Company:company:default_currency"
   },
   {
    "fieldname": "available_for_use_date",
@@ -436,8 +436,7 @@
    "default": "1",
    "fieldname": "asset_quantity",
    "fieldtype": "Int",
-   "label": "Asset Quantity",
-   "read_only_depends_on": "eval:!doc.is_existing_asset && !doc.is_composite_asset"
+   "label": "Asset Quantity"
   },
   {
    "fieldname": "depr_entry_posting_status",
@@ -479,6 +478,7 @@
    "fieldname": "total_asset_cost",
    "fieldtype": "Currency",
    "label": "Total Asset Cost",
+   "no_copy": 1,
    "options": "Company:company:default_currency",
    "read_only": 1
   },
@@ -487,6 +487,7 @@
    "fieldname": "additional_asset_cost",
    "fieldtype": "Currency",
    "label": "Additional Asset Cost",
+   "no_copy": 1,
    "options": "Company:company:default_currency",
    "read_only": 1
   },
@@ -507,17 +508,15 @@
   },
   {
    "fieldname": "purchase_receipt_item",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
    "hidden": 1,
-   "label": "Purchase Receipt Item",
-   "options": "Purchase Receipt Item"
+   "label": "Purchase Receipt Item"
   },
   {
    "fieldname": "purchase_invoice_item",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
    "hidden": 1,
-   "label": "Purchase Invoice Item",
-   "options": "Purchase Invoice Item"
+   "label": "Purchase Invoice Item"
   },
   {
    "fieldname": "insurance_details_tab",
@@ -592,7 +591,7 @@
    "link_fieldname": "target_asset"
   }
  ],
- "modified": "2024-12-26 14:23:20.968882",
+ "modified": "2025-04-24 15:31:47.373274",
  "modified_by": "Administrator",
  "module": "Assets",
  "name": "Asset",
@@ -630,6 +629,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "show_name_in_global_search": 1,
  "sort_field": "modified",
  "sort_order": "DESC",

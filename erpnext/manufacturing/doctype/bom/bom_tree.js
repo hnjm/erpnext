@@ -63,7 +63,7 @@ frappe.treeview_settings["BOM"] = {
 		if (node.is_root && node.data.value != "BOM") {
 			frappe.model.with_doc("BOM", node.data.value, function () {
 				var bom = frappe.model.get_doc("BOM", node.data.value);
-				node.data.image = escape(bom.image) || "";
+				node.data.image = bom.image || "";
 				node.data.description = bom.description || "";
 				node.data.item_code = bom.item || "";
 			});

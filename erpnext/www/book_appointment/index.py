@@ -125,15 +125,15 @@ def filter_timeslots(date, timeslots):
 def convert_to_guest_timezone(guest_tz, datetimeobject):
 	guest_tz = zoneinfo.ZoneInfo(guest_tz)
 	local_timezone = zoneinfo.ZoneInfo(get_system_timezone())
-	datetimeobject = local_timezone.localize(datetimeobject)
+	datetimeobject = datetimeobject.replace(tzinfo=local_timezone)
 	datetimeobject = datetimeobject.astimezone(guest_tz)
 	return datetimeobject
 
 
 def convert_to_system_timezone(guest_tz, datetimeobject):
-	guest_tz = zoneinfo.ZoneInfo.timezone(guest_tz)
-	datetimeobject = guest_tz.localize(datetimeobject)
-	system_tz = zoneinfo.ZoneInfo.timezone(get_system_timezone())
+	guest_tz = zoneinfo.ZoneInfo(guest_tz)
+	datetimeobject = datetimeobject.replace(tzinfo=guest_tz)
+	system_tz = zoneinfo.ZoneInfo(get_system_timezone())
 	datetimeobject = datetimeobject.astimezone(system_tz)
 	return datetimeobject
 

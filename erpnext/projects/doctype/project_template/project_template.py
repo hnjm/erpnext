@@ -21,6 +21,7 @@ class ProjectTemplate(Document):
 			ProjectTemplateTask,
 		)
 
+		disabled: DF.Check
 		project_type: DF.Link | None
 		tasks: DF.Table[ProjectTemplateTask]
 	# end: auto-generated types

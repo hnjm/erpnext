@@ -29,12 +29,11 @@ class ManufacturingSettings(Document):
 		get_rm_cost_from_consumption_entry: DF.Check
 		job_card_excess_transfer: DF.Check
 		make_serial_no_batch_from_work_order: DF.Check
-		manufacture_sub_assembly_in_operation: DF.Check
 		material_consumption: DF.Check
 		mins_between_operations: DF.Int
 		overproduction_percentage_for_sales_order: DF.Percent
 		overproduction_percentage_for_work_order: DF.Percent
-		set_op_cost_and_scrape_from_sub_assemblies: DF.Check
+		set_op_cost_and_scrap_from_sub_assemblies: DF.Check
 		update_bom_costs_automatically: DF.Check
 		validate_components_quantities_per_bom: DF.Check
 	# end: auto-generated types

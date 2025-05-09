@@ -10,6 +10,7 @@ from frappe.custom.doctype.property_setter.property_setter import make_property_
 from frappe.model.document import Document
 from frappe.utils import cint
 
+from erpnext.accounts.utils import sync_auto_reconcile_config
 from erpnext.stock.utils import check_pending_reposting
 
 
@@ -27,6 +28,7 @@ class AccountsSettings(Document):
 		allow_multi_currency_invoices_against_single_party_account: DF.Check
 		allow_stale: DF.Check
 		auto_reconcile_payments: DF.Check
+		auto_reconciliation_job_trigger: DF.Int
 		automatically_fetch_payment_terms: DF.Check
 		automatically_process_deferred_accounting_entry: DF.Check
 		book_asset_depreciation_entry_automatically: DF.Check
@@ -43,14 +45,18 @@ class AccountsSettings(Document):
 		enable_fuzzy_matching: DF.Check
 		enable_immutable_ledger: DF.Check
 		enable_party_matching: DF.Check
+		exchange_gain_loss_posting_date: DF.Literal["Invoice", "Payment", "Reconciliation Date"]
 		frozen_accounts_modifier: DF.Link | None
 		general_ledger_remarks_length: DF.Int
 		ignore_account_closing_balance: DF.Check
+		ignore_is_opening_check_for_reporting: DF.Check
 		make_payment_via_journal_entry: DF.Check
 		merge_similar_account_heads: DF.Check
 		over_billing_allowance: DF.Currency
 		post_change_gl_entries: DF.Check
+		receivable_payable_fetch_method: DF.Literal["Buffered Cursor", "UnBuffered Cursor"]
 		receivable_payable_remarks_length: DF.Int
+		reconciliation_queue_size: DF.Int
 		role_allowed_to_over_bill: DF.Link | None
 		round_row_wise_tax: DF.Check
 		show_balance_in_coa: DF.Check
@@ -61,6 +67,7 @@ class AccountsSettings(Document):
 		submit_journal_entries: DF.Check
 		unlink_advance_payment_on_cancelation_of_order: DF.Check
 		unlink_payment_on_cancellation_of_invoice: DF.Check
+		use_sales_invoice_in_pos: DF.Check
 	# end: auto-generated types
 
 	def validate(self):
@@ -87,8 +94,13 @@ class AccountsSettings(Document):
 		if old_doc.acc_frozen_upto != self.acc_frozen_upto:
 			self.validate_pending_reposts()
 
+		if old_doc.use_sales_invoice_in_pos != self.use_sales_invoice_in_pos:
+			self.validate_invoice_mode_switch_in_pos()
+
 		if clear_cache:
 			frappe.clear_cache()
+
+		self.validate_and_sync_auto_reconcile_config()
 
 	def validate_stale_days(self):
 		if not self.allow_stale and cint(self.stale_days) <= 0:
@@ -114,3 +126,29 @@ class AccountsSettings(Document):
 	def validate_pending_reposts(self):
 		if self.acc_frozen_upto:
 			check_pending_reposting(self.acc_frozen_upto)
+
+	def validate_and_sync_auto_reconcile_config(self):
+		if self.has_value_changed("auto_reconciliation_job_trigger"):
+			if (
+				cint(self.auto_reconciliation_job_trigger) > 0
+				and cint(self.auto_reconciliation_job_trigger) < 60
+			):
+				sync_auto_reconcile_config(self.auto_reconciliation_job_trigger)
+			else:
+				frappe.throw(_("Cron Interval should be between 1 and 59 Min"))
+
+		if self.has_value_changed("reconciliation_queue_size"):
+			if cint(self.reconciliation_queue_size) < 5 or cint(self.reconciliation_queue_size) > 100:
+				frappe.throw(_("Queue Size should be between 5 and 100"))
+
+	def validate_invoice_mode_switch_in_pos(self):
+		pos_opening_entries_count = frappe.db.count(
+			"POS Opening Entry", filters={"docstatus": 1, "status": "Open"}
+		)
+		if pos_opening_entries_count:
+			frappe.throw(
+				_("{0} can be enabled/disabled after all the POS Opening Entries are closed.").format(
+					frappe.bold(_("Use Sales Invoice"))
+				),
+				title=_("Switch Invoice Mode Error"),
+			)

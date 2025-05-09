@@ -71,26 +71,21 @@
 		</div>
 		<div style="text-align:center; font-size:13px;">
 			<b>
-				{% if(filters.party_type) { %}
-					[ {%= filters.party_type %} ]<br>
-				{% } %}
-				{%= frappe.datetime.str_to_user(filters.from_date) %}
-				{%= __("to") %}
-				{%= frappe.datetime.str_to_user(filters.to_date) %}<br><br>
+				{%= __("{0} to {1}", [frappe.datetime.str_to_user(filters.from_date), frappe.datetime.str_to_user(filters.to_date)]) %}<br><br>
 			</b>
 		</div>
 	</div>
 	<table style="width:100%; font-size: 11px">
 		<thead>
 			<tr class="title-letter-spacing" style="text-align: center; font-weight:bold">
-				<td style="border: 1.5px solid black; width: 7em">DATE</td>
-				<td style="border: 1.5px solid black">PARTICULARS</td>
+				<td style="border: 1.5px solid black; width: 7em">{%= __("Date").toLocaleUpperCase() %}</td>
+				<td style="border: 1.5px solid black">{%= __("Particulars").toLocaleUpperCase() %}</td>
 				{% if(filters.show_remarks) { %}
-						<td style="border: 1.5px solid black">REMARKS</td>
+						<td style="border: 1.5px solid black">{%= __("Remarks").toLocaleUpperCase() %}</td>
 				{% } %}
-				<td style="border: 1.5px solid black; width: 9em">DEBIT</td>
-				<td style="border: 1.5px solid black; width: 9em">CREDIT</td>
-				<td style="border: 1.5px solid black; width: 10.2em">BALANCE</td>
+				<td style="border: 1.5px solid black; width: 9em">{%= __("Debit").toLocaleUpperCase() %}</td>
+				<td style="border: 1.5px solid black; width: 9em">{%= __("Credit").toLocaleUpperCase() %}</td>
+				<td style="border: 1.5px solid black; width: 10.2em">{%= __("Balance").toLocaleUpperCase() %}</td>
 			</tr>
 		</thead>
 		<tbody>
@@ -134,10 +129,10 @@
 						</td>
 						<td style="text-align: left; border-right: 1px dotted black"><b>
 							{% if(i == l-2) { %}
-								{%= "Total" %}
+								{%= __("Total") %}
 							{% } else { %}
 								{% if(i == l-1) { %}
-									{%= "Closing [Opening + Total] " %}
+									{%= __("Closing [Opening + Total] ") %}
 								{% } else { %}
 									{%= frappe.format(data[i].account, {fieldtype: "Link"}) || "&nbsp;" %}
 								{% } %}
@@ -176,5 +171,5 @@
 			{% endfor%}
 		</tbody>
 	</table>
-	<p class="text-right text-muted">Printed On {%= frappe.datetime.str_to_user(frappe.datetime.get_datetime_as_string()) %}</p>
+	<p class="text-right text-muted">{%= __("Printed on {0}", [frappe.datetime.str_to_user(frappe.datetime.get_datetime_as_string())]) %}</p>
 </div>

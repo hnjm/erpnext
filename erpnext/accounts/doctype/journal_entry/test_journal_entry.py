@@ -154,10 +154,9 @@ class TestJournalEntry(IntegrationTestCase):
 				"credit_in_account_currency": 0 if diff > 0 else abs(diff),
 			},
 		)
-		jv.insert()
 
 		if account_bal == stock_bal:
-			self.assertRaises(StockAccountInvalidTransaction, jv.submit)
+			self.assertRaises(StockAccountInvalidTransaction, jv.save)
 			frappe.db.rollback()
 		else:
 			jv.submit()
@@ -584,7 +583,7 @@ class TestJournalEntry(IntegrationTestCase):
 			order_by="account",
 		)
 		expected = [
-			{"account": "_Test Bank - _TC", "transaction_exchange_rate": 1.0},
+			{"account": "_Test Bank - _TC", "transaction_exchange_rate": 85.0},
 			{"account": "_Test Receivable USD - _TC", "transaction_exchange_rate": 85.0},
 		]
 		self.assertEqual(expected, actual)
@@ -600,13 +599,14 @@ def make_journal_entry(
 	save=True,
 	submit=False,
 	project=None,
+	company=None,
 ):
 	if not cost_center:
 		cost_center = "_Test Cost Center - _TC"
 
 	jv = frappe.new_doc("Journal Entry")
 	jv.posting_date = posting_date or nowdate()
-	jv.company = "_Test Company"
+	jv.company = company or "_Test Company"
 	jv.user_remark = "test"
 	jv.multi_currency = 1
 	jv.set(

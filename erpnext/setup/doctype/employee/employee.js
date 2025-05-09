@@ -30,6 +30,11 @@ frappe.ui.form.on("Employee", {
 			};
 		});
 	},
+
+	refresh: function (frm) {
+		frm.fields_dict.date_of_birth.datepicker.update({ maxDate: new Date() });
+	},
+
 	prefered_contact_email: function (frm) {
 		frm.events.update_contact(frm);
 	},

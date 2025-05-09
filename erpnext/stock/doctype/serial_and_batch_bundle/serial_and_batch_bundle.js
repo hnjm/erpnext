@@ -6,6 +6,10 @@ frappe.ui.form.on("Serial and Batch Bundle", {
 		frm.trigger("set_queries");
 	},
 
+	before_submit(frm) {
+		frappe.throw(__("The user cannot submit the Serial and Batch Bundle manually"));
+	},
+
 	refresh(frm) {
 		frm.trigger("toggle_fields");
 		frm.trigger("prepare_serial_batch_prompt");
@@ -130,6 +134,13 @@ frappe.ui.form.on("Serial and Batch Bundle", {
 	},
 
 	toggle_fields(frm) {
+		let show_naming_series_field =
+			frappe.user_defaults.set_serial_and_batch_bundle_naming_based_on_naming_series;
+		frm.toggle_display("naming_series", cint(show_naming_series_field));
+		frm.toggle_reqd("naming_series", cint(show_naming_series_field));
+
+		frm.toggle_display("naming_series", frm.doc.__islocal ? true : false);
+
 		if (frm.doc.has_serial_no) {
 			frm.doc.entries.forEach((row) => {
 				if (Math.abs(row.qty) !== 1) {

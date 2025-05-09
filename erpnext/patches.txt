@@ -107,7 +107,6 @@ erpnext.patches.v12_0.remove_bank_remittance_custom_fields
 erpnext.patches.v12_0.move_credit_limit_to_customer_credit_limit
 erpnext.patches.v12_0.add_variant_of_in_item_attribute_table
 erpnext.patches.v12_0.rename_bank_account_field_in_journal_entry_account
-erpnext.patches.v12_0.create_default_energy_point_rules
 erpnext.patches.v12_0.set_produced_qty_field_in_sales_order_for_work_order
 erpnext.patches.v12_0.set_cwip_and_delete_asset_settings
 erpnext.patches.v12_0.set_expense_account_in_landed_cost_voucher_taxes
@@ -260,6 +259,7 @@ erpnext.patches.v14_0.show_loan_management_deprecation_warning
 erpnext.patches.v14_0.clear_reconciliation_values_from_singles
 execute:frappe.rename_doc("Report", "TDS Payable Monthly", "Tax Withholding Details", force=True)
 erpnext.patches.v14_0.update_proprietorship_to_individual
+erpnext.patches.v15_0.rename_subcontracting_fields
 
 [post_model_sync]
 erpnext.patches.v15_0.create_asset_depreciation_schedules_from_assets
@@ -314,7 +314,7 @@ erpnext.patches.v15_0.update_asset_value_for_manual_depr_entries
 erpnext.patches.v15_0.update_gpa_and_ndb_for_assdeprsch
 erpnext.patches.v14_0.create_accounting_dimensions_for_closing_balance
 erpnext.patches.v14_0.set_period_start_end_date_in_pcv
-erpnext.patches.v14_0.update_closing_balances #08-11-2024
+erpnext.patches.v14_0.update_closing_balances #20-12-2024
 execute:frappe.db.set_single_value("Accounts Settings", "merge_similar_account_heads", 0)
 erpnext.patches.v14_0.update_reference_type_in_journal_entry_accounts
 erpnext.patches.v14_0.update_subscription_details
@@ -395,3 +395,19 @@ erpnext.patches.v15_0.enable_allow_existing_serial_no
 erpnext.patches.v15_0.update_cc_in_process_statement_of_accounts
 erpnext.patches.v15_0.refactor_closing_stock_balance #5
 erpnext.patches.v15_0.update_asset_status_to_work_in_progress
+erpnext.patches.v15_0.rename_manufacturing_settings_field
+erpnext.patches.v15_0.migrate_checkbox_to_select_for_reconciliation_effect
+erpnext.patches.v15_0.sync_auto_reconcile_config
+execute:frappe.db.set_single_value("Accounts Settings", "exchange_gain_loss_posting_date", "Payment")
+erpnext.patches.v14_0.disable_add_row_in_gross_profit
+erpnext.patches.v14_0.update_posting_datetime
+erpnext.patches.v15_0.rename_field_from_rate_difference_to_amount_difference
+erpnext.patches.v15_0.recalculate_amount_difference_field #2025-03-18
+erpnext.patches.v15_0.rename_sla_fields #2025-03-12
+erpnext.stock.doctype.stock_ledger_entry.patches.ensure_sle_indexes
+erpnext.patches.v15_0.update_query_report
+erpnext.patches.v15_0.set_purchase_receipt_row_item_to_capitalization_stock_item
+erpnext.patches.v15_0.update_payment_schedule_fields_in_invoices
+erpnext.patches.v15_0.rename_group_by_to_categorize_by
+execute:frappe.db.set_single_value("Accounts Settings", "receivable_payable_fetch_method", "Buffered Cursor")
+erpnext.patches.v14_0.set_update_price_list_based_on

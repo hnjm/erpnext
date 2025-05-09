@@ -89,6 +89,7 @@ frappe.query_reports["Accounts Payable"] = {
 			fieldname: "party",
 			label: __("Party"),
 			fieldtype: "MultiSelectList",
+			options: "party_type",
 			get_data: function (txt) {
 				if (!frappe.query_report.filters) return;
 
@@ -163,7 +164,7 @@ frappe.query_reports["Accounts Payable"] = {
 	},
 };
 
-erpnext.utils.add_dimensions("Accounts Payable", 9);
+erpnext.utils.add_dimensions("Accounts Payable", 10);
 
 function get_party_type_options() {
 	let options = [];

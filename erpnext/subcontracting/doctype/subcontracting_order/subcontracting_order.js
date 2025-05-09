@@ -16,14 +16,14 @@ frappe.ui.form.on("Subcontracting Order Item", {
 			service_item.doctype,
 			service_item.name,
 			"qty",
-			row.qty * row.sc_conversion_factor
+			row.qty * row.subcontracting_conversion_factor
 		);
 		frappe.model.set_value(service_item.doctype, service_item.name, "fg_item_qty", row.qty);
 		frappe.model.set_value(
 			service_item.doctype,
 			service_item.name,
 			"amount",
-			row.qty * row.sc_conversion_factor * service_item.rate
+			row.qty * row.subcontracting_conversion_factor * service_item.rate
 		);
 	},
 	before_items_remove(frm, cdt, cdn) {
@@ -254,20 +254,24 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 		if (doc.docstatus == 1) {
 			if (!["Closed", "Completed"].includes(doc.status)) {
 				if (flt(doc.per_received) < 100) {
-					cur_frm.add_custom_button(
+					this.frm.add_custom_button(
 						__("Subcontracting Receipt"),
 						this.make_subcontracting_receipt,
 						__("Create")
 					);
 					if (me.has_unsupplied_items()) {
-						cur_frm.add_custom_button(
+						this.frm.add_custom_button(
 							__("Material to Supplier"),
 							this.make_stock_entry,
 							__("Transfer")
 						);
 					}
 				}
-				cur_frm.page.set_inner_btn_group_as_primary(__("Create"));
+				if (flt(doc.per_received) < 100 && me.has_unsupplied_items()) {
+					this.frm.page.set_inner_btn_group_as_primary(__("Transfer"));
+				} else {
+					this.frm.page.set_inner_btn_group_as_primary(__("Create"));
+				}
 			}
 		}
 	}

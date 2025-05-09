@@ -24,6 +24,7 @@
   "apply_tds",
   "tax_withholding_category",
   "is_subcontracted",
+  "has_unit_price_items",
   "supplier_warehouse",
   "amended_from",
   "accounting_dimensions_section",
@@ -109,8 +110,10 @@
   "contact_mobile",
   "contact_email",
   "shipping_address_section",
-  "shipping_address",
+  "dispatch_address",
+  "dispatch_address_display",
   "column_break_99",
+  "shipping_address",
   "shipping_address_display",
   "company_billing_address_section",
   "billing_address",
@@ -1282,13 +1285,36 @@
    "oldfieldtype": "Select",
    "options": "Not Initiated\nInitiated\nPartially Paid\nFully Paid",
    "print_hide": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "has_unit_price_items",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Has Unit Price Items",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "dispatch_address",
+   "fieldtype": "Link",
+   "label": "Dispatch Address",
+   "options": "Address",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "dispatch_address_display",
+   "fieldtype": "Text Editor",
+   "label": "Dispatch Address Details",
+   "print_hide": 1,
+   "read_only": 1
   }
  ],
+ "grid_page_length": 50,
  "icon": "fa fa-file-text",
  "idx": 105,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-03-27 13:10:24.518785",
+ "modified": "2025-04-09 16:54:08.836106",
  "modified_by": "Administrator",
  "module": "Buying",
  "name": "Purchase Order",
@@ -1335,6 +1361,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "search_fields": "status, transaction_date, supplier, grand_total",
  "show_name_in_global_search": 1,
  "sort_field": "creation",

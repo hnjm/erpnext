@@ -334,7 +334,7 @@ frappe.ui.form.on("Production Plan", {
 
 		frm.set_value("consider_minimum_order_qty", 0);
 
-		if (frm.doc.ignore_existing_ordered_qty) {
+		if (!frm.doc.ignore_existing_ordered_qty) {
 			frm.events.get_items_for_material_requests(frm);
 		} else {
 			const title = __("Transfer Materials For Warehouse {0}", [frm.doc.for_warehouse]);
@@ -562,6 +562,28 @@ frappe.ui.form.on("Production Plan Sales Order", {
 frappe.ui.form.on("Production Plan Sub Assembly Item", {
 	fg_warehouse(frm, cdt, cdn) {
 		erpnext.utils.copy_value_in_all_rows(frm.doc, cdt, cdn, "sub_assembly_items", "fg_warehouse");
+
+		let row = locals[cdt][cdn];
+		if (row.fg_warehouse && row.production_item) {
+			let child_row = {
+				item_code: row.production_item,
+				warehouse: row.fg_warehouse,
+			};
+
+			frappe.call({
+				method: "erpnext.manufacturing.doctype.production_plan.production_plan.get_bin_details",
+				args: {
+					row: child_row,
+					company: frm.doc.company,
+					for_warehouse: row.fg_warehouse,
+				},
+				callback: function (r) {
+					if (r.message && r.message.length) {
+						frappe.model.set_value(cdt, cdn, "actual_qty", r.message[0].actual_qty);
+					}
+				},
+			});
+		}
 	},
 });
 

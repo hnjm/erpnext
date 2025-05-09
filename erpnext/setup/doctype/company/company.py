@@ -87,6 +87,9 @@ class Company(NestedSet):
 		payment_terms: DF.Link | None
 		phone_no: DF.Data | None
 		reconcile_on_advance_payment_date: DF.Check
+		reconciliation_takes_effect_on: DF.Literal[
+			"Advance Payment Date", "Oldest Of Invoice Or Advance", "Reconciliation Date"
+		]
 		registration_details: DF.Code | None
 		rgt: DF.Int
 		round_off_account: DF.Link | None
@@ -278,6 +281,7 @@ class Company(NestedSet):
 		frappe.clear_cache()
 
 	def create_default_warehouses(self):
+		parent_warehouse = None
 		for wh_detail in [
 			{"warehouse_name": _("All Warehouses"), "is_group": 1},
 			{"warehouse_name": _("Stores"), "is_group": 0},
@@ -285,22 +289,31 @@ class Company(NestedSet):
 			{"warehouse_name": _("Finished Goods"), "is_group": 0},
 			{"warehouse_name": _("Goods In Transit"), "is_group": 0, "warehouse_type": "Transit"},
 		]:
-			if not frappe.db.exists("Warehouse", "{} - {}".format(wh_detail["warehouse_name"], self.abbr)):
-				warehouse = frappe.get_doc(
-					{
-						"doctype": "Warehouse",
-						"warehouse_name": wh_detail["warehouse_name"],
-						"is_group": wh_detail["is_group"],
-						"company": self.name,
-						"parent_warehouse": "{} - {}".format(_("All Warehouses"), self.abbr)
-						if not wh_detail["is_group"]
-						else "",
-						"warehouse_type": wh_detail.get("warehouse_type"),
-					}
-				)
-				warehouse.flags.ignore_permissions = True
-				warehouse.flags.ignore_mandatory = True
-				warehouse.insert()
+			if frappe.db.exists(
+				"Warehouse",
+				{
+					"warehouse_name": wh_detail["warehouse_name"],
+					"company": self.name,
+				},
+			):
+				continue
+
+			warehouse = frappe.get_doc(
+				{
+					"doctype": "Warehouse",
+					"warehouse_name": wh_detail["warehouse_name"],
+					"is_group": wh_detail["is_group"],
+					"company": self.name,
+					"parent_warehouse": parent_warehouse,
+					"warehouse_type": wh_detail.get("warehouse_type"),
+				}
+			)
+			warehouse.flags.ignore_permissions = True
+			warehouse.flags.ignore_mandatory = True
+			warehouse.insert()
+
+			if wh_detail["is_group"]:
+				parent_warehouse = warehouse.name
 
 	def create_default_accounts(self):
 		from erpnext.accounts.doctype.account.chart_of_accounts.chart_of_accounts import create_charts
@@ -907,6 +920,14 @@ def get_default_company_address(name, sort_key="is_primary_address", existing_ad
 		return max(out, key=lambda x: x[1])[0]  # find max by sort_key
 	else:
 		return None
+
+
+@frappe.whitelist()
+def get_billing_shipping_address(name, billing_address=None, shipping_address=None):
+	primary_address = get_default_company_address(name, "is_primary_address", billing_address)
+	shipping_address = get_default_company_address(name, "is_shipping_address", shipping_address)
+
+	return {"primary_address": primary_address, "shipping_address": shipping_address}
 
 
 @frappe.whitelist()

@@ -23,6 +23,7 @@ class SerialandBatchEntry(Document):
 		parentfield: DF.Data
 		parenttype: DF.Data
 		qty: DF.Float
+		reference_for_reservation: DF.Data | None
 		serial_no: DF.Link | None
 		stock_queue: DF.SmallText | None
 		stock_value_difference: DF.Float

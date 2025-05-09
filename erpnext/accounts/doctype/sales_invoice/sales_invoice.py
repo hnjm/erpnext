@@ -29,7 +29,11 @@ from erpnext.accounts.doctype.tax_withholding_category.tax_withholding_category 
 )
 from erpnext.accounts.general_ledger import get_round_off_account_and_cost_center
 from erpnext.accounts.party import get_due_date, get_party_account, get_party_details
-from erpnext.accounts.utils import cancel_exchange_gain_loss_journal, get_account_currency
+from erpnext.accounts.utils import (
+	cancel_exchange_gain_loss_journal,
+	get_account_currency,
+	update_voucher_outstanding,
+)
 from erpnext.assets.doctype.asset.depreciation import (
 	depreciate_asset,
 	get_gl_entries_on_asset_disposal,
@@ -45,6 +49,10 @@ from erpnext.setup.doctype.company.company import update_company_current_month_s
 from erpnext.stock.doctype.delivery_note.delivery_note import update_billed_amount_based_on_so
 
 form_grid_templates = {"items": "templates/form_grid/item_grid.html"}
+
+
+class PartialPaymentValidationError(frappe.ValidationError):
+	pass
 
 
 class SalesInvoice(SellingController):
@@ -129,6 +137,7 @@ class SalesInvoice(SellingController):
 		inter_company_invoice_reference: DF.Link | None
 		is_cash_or_non_trade_discount: DF.Check
 		is_consolidated: DF.Check
+		is_created_using_pos: DF.Check
 		is_debit_note: DF.Check
 		is_discounted: DF.Check
 		is_internal_customer: DF.Check
@@ -158,6 +167,7 @@ class SalesInvoice(SellingController):
 		plc_conversion_rate: DF.Float
 		po_date: DF.Date | None
 		po_no: DF.Data | None
+		pos_closing_entry: DF.Link | None
 		pos_profile: DF.Link | None
 		posting_date: DF.Date
 		posting_time: DF.Time | None
@@ -206,7 +216,6 @@ class SalesInvoice(SellingController):
 		terms: DF.TextEditor | None
 		territory: DF.Link | None
 		timesheets: DF.Table[SalesInvoiceTimesheet]
-		title: DF.Data | None
 		to_date: DF.Date | None
 		total: DF.Currency
 		total_advance: DF.Currency
@@ -270,8 +279,8 @@ class SalesInvoice(SellingController):
 			self.indicator_title = _("Paid")
 
 	def validate(self):
-		super().validate()
 		self.validate_auto_set_posting_time()
+		super().validate()
 
 		if not (self.is_pos or self.is_debit_note):
 			self.so_dn_required()
@@ -303,6 +312,10 @@ class SalesInvoice(SellingController):
 		if cint(self.is_pos):
 			self.validate_pos()
 
+		if cint(self.is_created_using_pos):
+			self.validate_created_using_pos()
+			self.validate_full_payment()
+
 		self.validate_dropship_item()
 
 		if cint(self.update_stock):
@@ -323,9 +336,7 @@ class SalesInvoice(SellingController):
 		self.set_against_income_account()
 		self.validate_time_sheets_are_submitted()
 		self.validate_multiple_billing("Delivery Note", "dn_detail", "amount")
-		if not self.is_return:
-			self.validate_serial_numbers()
-		else:
+		if self.is_return:
 			self.timesheets = []
 		self.update_packing_list()
 		self.set_billing_hours_and_amount()
@@ -449,6 +460,8 @@ class SalesInvoice(SellingController):
 
 				self.make_bundle_for_sales_purchase_return(table_name)
 				self.make_bundle_using_old_serial_batch_fields(table_name)
+
+			self.update_stock_reservation_entries()
 			self.update_stock_ledger()
 
 		# this sequence because outstanding may get -ve
@@ -525,7 +538,22 @@ class SalesInvoice(SellingController):
 				)
 				frappe.throw(msg, title=_("Not Allowed"))
 
+	def check_if_created_using_pos_and_pos_closing_entry_generated(self):
+		if self.doctype == "Sales Invoice" and self.is_created_using_pos and self.pos_closing_entry:
+			pos_closing_entry_docstatus = frappe.db.get_value(
+				"POS Closing Entry", self.pos_closing_entry, "docstatus"
+			)
+			if pos_closing_entry_docstatus == 1:
+				frappe.throw(
+					msg=_("To cancel this Sales Invoice you need to cancel the POS Closing Entry {}.").format(
+						get_link_to_form("POS Closing Entry", self.pos_closing_entry)
+					),
+					title=_("Not Allowed"),
+				)
+
 	def before_cancel(self):
+		# check if generated via POS and already included in POS Closing Entry
+		self.check_if_created_using_pos_and_pos_closing_entry_generated()
 		self.check_if_consolidated_invoice()
 
 		super().before_cancel()
@@ -558,6 +586,7 @@ class SalesInvoice(SellingController):
 		self.make_gl_entries_on_cancel()
 
 		if self.update_stock == 1:
+			self.update_stock_reservation_entries()
 			self.repost_future_sle_and_gle()
 
 		self.db_set("status", "Cancelled")
@@ -593,6 +622,15 @@ class SalesInvoice(SellingController):
 		)
 
 		self.delete_auto_created_batches()
+
+		if (
+			self.doctype == "Sales Invoice"
+			and self.is_pos
+			and self.is_return
+			and self.is_created_using_pos
+			and not self.pos_closing_entry
+		):
+			self.cancel_pos_invoice_credit_note_generated_during_sales_invoice_mode()
 
 	def update_status_updater_args(self):
 		if not cint(self.update_stock):
@@ -665,6 +703,15 @@ class SalesInvoice(SellingController):
 			timesheet.flags.ignore_validate_update_after_submit = True
 			timesheet.db_update_all()
 
+	def cancel_pos_invoice_credit_note_generated_during_sales_invoice_mode(self):
+		pos_invoices = frappe.get_all(
+			"POS Invoice", filters={"consolidated_invoice": self.name}, pluck="name"
+		)
+		if pos_invoices:
+			for pos_invoice in pos_invoices:
+				pos_invoice_doc = frappe.get_doc("POS Invoice", pos_invoice)
+				pos_invoice_doc.cancel()
+
 	@frappe.whitelist()
 	def set_missing_values(self, for_validate=False):
 		pos = self.set_pos_fields(for_validate)
@@ -675,7 +722,13 @@ class SalesInvoice(SellingController):
 				"Account", self.debit_to, "account_currency", cache=True
 			)
 		if not self.due_date and self.customer:
-			self.due_date = get_due_date(self.posting_date, "Customer", self.customer, self.company)
+			self.due_date = get_due_date(
+				self.posting_date,
+				"Customer",
+				self.customer,
+				self.company,
+				template_name=self.payment_terms_template,
+			)
 
 		super().set_missing_values(for_validate)
 
@@ -693,6 +746,13 @@ class SalesInvoice(SellingController):
 				"utm_medium": pos.get("utm_medium"),
 				"allow_print_before_pay": pos.get("allow_print_before_pay"),
 			}
+
+	@frappe.whitelist()
+	def reset_mode_of_payments(self):
+		if self.pos_profile:
+			pos_profile = frappe.get_cached_doc("POS Profile", self.pos_profile)
+			update_multi_mode_option(self, pos_profile)
+			self.paid_amount = 0
 
 	def update_time_sheet(self, sales_invoice):
 		for d in self.timesheets:
@@ -744,10 +804,10 @@ class SalesInvoice(SellingController):
 		self.paid_amount = paid_amount
 		self.base_paid_amount = base_paid_amount
 
+	@frappe.whitelist()
 	def set_account_for_mode_of_payment(self):
 		for payment in self.payments:
-			if not payment.account:
-				payment.account = get_bank_cash_account(payment.mode_of_payment, self.company).get("account")
+			payment.account = get_bank_cash_account(payment.mode_of_payment, self.company).get("account")
 
 	def validate_time_sheets_are_submitted(self):
 		for data in self.timesheets:
@@ -1015,6 +1075,32 @@ class SalesInvoice(SellingController):
 			) > 1.0 / (10.0 ** (self.precision("grand_total") + 1.0)):
 				frappe.throw(_("Paid amount + Write Off Amount can not be greater than Grand Total"))
 
+	def validate_created_using_pos(self):
+		if self.is_created_using_pos and not self.pos_profile:
+			frappe.throw(_("POS Profile is mandatory to mark this invoice as POS Transaction."))
+
+		self.is_pos_using_sales_invoice = frappe.db.get_single_value(
+			"Accounts Settings", "use_sales_invoice_in_pos"
+		)
+		if not self.is_pos_using_sales_invoice and not self.is_return:
+			frappe.throw(_("Transactions using Sales Invoice in POS are disabled."))
+
+	def validate_full_payment(self):
+		invoice_total = flt(self.rounded_total) or flt(self.grand_total)
+
+		if self.docstatus == 1:
+			if self.is_return and self.paid_amount != invoice_total:
+				frappe.throw(
+					msg=_("Partial Payment in POS Transactions are not allowed."),
+					exc=PartialPaymentValidationError,
+				)
+
+			if self.paid_amount < invoice_total:
+				frappe.throw(
+					msg=_("Partial Payment in POS Transactions are not allowed."),
+					exc=PartialPaymentValidationError,
+				)
+
 	def validate_warehouse(self):
 		super().validate_warehouse()
 
@@ -1092,10 +1178,14 @@ class SalesInvoice(SellingController):
 					timesheet.billing_amount = ts_doc.total_billable_amount
 
 	def update_timesheet_billing_for_project(self):
-		if not self.timesheets and self.project:
+		if not self.timesheets and self.project and self.is_auto_fetch_timesheet_enabled():
 			self.add_timesheet_data()
 		else:
 			self.calculate_billing_amount_for_timesheet()
+
+	@frappe.whitelist()
+	def is_auto_fetch_timesheet_enabled(self):
+		return frappe.db.get_single_value("Projects Settings", "fetch_timesheet_in_sales_invoice")
 
 	@frappe.whitelist()
 	def add_timesheet_data(self):
@@ -1192,14 +1282,14 @@ class SalesInvoice(SellingController):
 				make_reverse_gl_entries(voucher_type=self.doctype, voucher_no=self.name)
 
 			if update_outstanding == "No":
-				from erpnext.accounts.doctype.gl_entry.gl_entry import update_outstanding_amt
-
-				update_outstanding_amt(
-					self.debit_to,
-					"Customer",
-					self.customer,
-					self.doctype,
-					self.return_against if cint(self.is_return) and self.return_against else self.name,
+				update_voucher_outstanding(
+					voucher_type=self.doctype,
+					voucher_no=self.return_against
+					if cint(self.is_return) and self.return_against
+					else self.name,
+					account=self.debit_to,
+					party_type="Customer",
+					party=self.customer,
 				)
 
 		elif self.docstatus == 2 and cint(self.update_stock) and cint(auto_accounting_for_stock):
@@ -1230,6 +1320,7 @@ class SalesInvoice(SellingController):
 		self.make_write_off_gl_entry(gl_entries)
 		self.make_gle_for_rounding_adjustment(gl_entries)
 
+		self.set_transaction_currency_and_rate_in_gl_map(gl_entries)
 		return gl_entries
 
 	def make_customer_gl_entry(self, gl_entries):
@@ -1263,6 +1354,7 @@ class SalesInvoice(SellingController):
 						"debit_in_account_currency": base_grand_total
 						if self.party_account_currency == self.company_currency
 						else grand_total,
+						"debit_in_transaction_currency": grand_total,
 						"against_voucher": against_voucher,
 						"against_voucher_type": self.doctype,
 						"cost_center": self.cost_center,
@@ -1294,6 +1386,9 @@ class SalesInvoice(SellingController):
 								if account_currency == self.company_currency
 								else flt(amount, tax.precision("tax_amount_after_discount_amount"))
 							),
+							"credit_in_transaction_currency": flt(
+								amount, tax.precision("tax_amount_after_discount_amount")
+							),
 							"cost_center": tax.cost_center,
 						},
 						account_currency,
@@ -1311,6 +1406,7 @@ class SalesInvoice(SellingController):
 						"against": self.customer,
 						"debit": flt(self.total_taxes_and_charges),
 						"debit_in_account_currency": flt(self.base_total_taxes_and_charges),
+						"debit_in_transaction_currency": flt(self.total_taxes_and_charges),
 						"cost_center": self.cost_center,
 					},
 					account_currency,
@@ -1325,7 +1421,7 @@ class SalesInvoice(SellingController):
 		)
 
 		for item in self.get("items"):
-			if flt(item.base_net_amount, item.precision("base_net_amount")):
+			if flt(item.base_net_amount, item.precision("base_net_amount")) or item.is_fixed_asset:
 				# Do not book income for transfer within same company
 				if self.is_internal_transfer():
 					continue
@@ -1409,6 +1505,7 @@ class SalesInvoice(SellingController):
 									if account_currency == self.company_currency
 									else flt(amount, item.precision("net_amount"))
 								),
+								"credit_in_transaction_currency": flt(amount, item.precision("net_amount")),
 								"cost_center": item.cost_center,
 								"project": item.project or self.project,
 							},
@@ -1460,6 +1557,7 @@ class SalesInvoice(SellingController):
 						+ cstr(self.loyalty_redemption_account)
 						+ " for the Loyalty Program",
 						"credit": self.loyalty_amount,
+						"credit_in_transaction_currency": self.loyalty_amount,
 						"against_voucher": self.return_against if cint(self.is_return) else self.name,
 						"against_voucher_type": self.doctype,
 						"cost_center": self.cost_center,
@@ -1474,6 +1572,7 @@ class SalesInvoice(SellingController):
 						"cost_center": self.cost_center or self.loyalty_redemption_cost_center,
 						"against": self.customer,
 						"debit": self.loyalty_amount,
+						"debit_in_transaction_currency": self.loyalty_amount,
 						"remark": "Loyalty Points redeemed by the customer",
 					},
 					item=self,
@@ -1507,6 +1606,7 @@ class SalesInvoice(SellingController):
 								"credit_in_account_currency": payment_mode.base_amount
 								if self.party_account_currency == self.company_currency
 								else payment_mode.amount,
+								"credit_in_transaction_currency": payment_mode.amount,
 								"against_voucher": against_voucher,
 								"against_voucher_type": self.doctype,
 								"cost_center": self.cost_center,
@@ -1526,6 +1626,7 @@ class SalesInvoice(SellingController):
 								"debit_in_account_currency": payment_mode.base_amount
 								if payment_mode_account_currency == self.company_currency
 								else payment_mode.amount,
+								"debit_in_transaction_currency": payment_mode.amount,
 								"cost_center": self.cost_center,
 							},
 							payment_mode_account_currency,
@@ -1554,6 +1655,7 @@ class SalesInvoice(SellingController):
 					"debit_in_account_currency": flt(self.base_change_amount)
 					if self.party_account_currency == self.company_currency
 					else flt(self.change_amount),
+					"debit_in_transaction_currency": flt(self.change_amount),
 					"against_voucher": self.return_against
 					if cint(self.is_return) and self.return_against
 					else self.name,
@@ -1569,6 +1671,7 @@ class SalesInvoice(SellingController):
 					"account": self.account_for_change_amount,
 					"against": self.customer,
 					"credit": self.base_change_amount,
+					"credit_in_transaction_currency": self.change_amount,
 					"cost_center": self.cost_center,
 				},
 				item=self,
@@ -1598,6 +1701,9 @@ class SalesInvoice(SellingController):
 							if self.party_account_currency == self.company_currency
 							else flt(self.write_off_amount, self.precision("write_off_amount"))
 						),
+						"credit_in_transaction_currency": flt(
+							self.write_off_amount, self.precision("write_off_amount")
+						),
 						"against_voucher": self.return_against if cint(self.is_return) else self.name,
 						"against_voucher_type": self.doctype,
 						"cost_center": self.cost_center,
@@ -1617,6 +1723,9 @@ class SalesInvoice(SellingController):
 							flt(self.base_write_off_amount, self.precision("base_write_off_amount"))
 							if write_off_account_currency == self.company_currency
 							else flt(self.write_off_amount, self.precision("write_off_amount"))
+						),
+						"debit_in_transaction_currency": flt(
+							self.write_off_amount, self.precision("write_off_amount")
 						),
 						"cost_center": self.cost_center or self.write_off_cost_center or default_cost_center,
 					},
@@ -1662,6 +1771,9 @@ class SalesInvoice(SellingController):
 						"credit_in_account_currency": flt(
 							self.rounding_adjustment, self.precision("rounding_adjustment")
 						),
+						"credit_in_transaction_currency": flt(
+							self.rounding_adjustment, self.precision("rounding_adjustment")
+						),
 						"credit": flt(
 							self.base_rounding_adjustment, self.precision("base_rounding_adjustment")
 						),
@@ -1702,14 +1814,6 @@ class SalesInvoice(SellingController):
 	def on_recurring(self, reference_doc, auto_repeat_doc):
 		self.set("write_off_amount", reference_doc.get("write_off_amount"))
 		self.due_date = None
-
-	def validate_serial_numbers(self):
-		"""
-		validate serial number agains Delivery Note and Sales Invoice
-		"""
-		for item in self.items:
-			item.set_serial_no_against_delivery_note()
-			item.validate_serial_against_delivery_note()
 
 	def update_project(self):
 		unique_projects = list(set([d.project for d in self.get("items") if d.project]))
@@ -1934,13 +2038,16 @@ def is_overdue(doc, total):
 		"base_payment_amount" if doc.party_account_currency != doc.currency else "payment_amount"
 	)
 
-	payable_amount = sum(
-		payment.get(payment_amount_field)
-		for payment in doc.payment_schedule
-		if getdate(payment.due_date) < today
+	payable_amount = flt(
+		sum(
+			payment.get(payment_amount_field)
+			for payment in doc.payment_schedule
+			if getdate(payment.due_date) < today
+		),
+		doc.precision("outstanding_amount"),
 	)
 
-	return (total - outstanding_amount) < payable_amount
+	return flt(total - outstanding_amount, doc.precision("outstanding_amount")) < payable_amount
 
 
 def get_discounting_status(sales_invoice):
@@ -2264,7 +2371,10 @@ def make_inter_company_transaction(doctype, source_name, target_doc=None):
 			# Invert Addresses
 			update_address(target_doc, "supplier_address", "address_display", source_doc.company_address)
 			update_address(
-				target_doc, "shipping_address", "shipping_address_display", source_doc.customer_address
+				target_doc, "dispatch_address", "dispatch_address_display", source_doc.dispatch_address_name
+			)
+			update_address(
+				target_doc, "shipping_address", "shipping_address_display", source_doc.shipping_address_name
 			)
 			update_address(
 				target_doc, "billing_address", "billing_address_display", source_doc.customer_address
@@ -2686,9 +2796,11 @@ def create_dunning(source_name, target_doc=None, ignore_permissions=False):
 				target.closing_text = letter_text.get("closing_text")
 				target.language = letter_text.get("language")
 
-		# update outstanding
+		# update outstanding from doc
 		if source.payment_schedule and len(source.payment_schedule) == 1:
-			target.overdue_payments[0].outstanding = source.get("outstanding_amount")
+			for row in target.overdue_payments:
+				if row.payment_schedule == source.payment_schedule[0].name:
+					row.outstanding = source.get("outstanding_amount")
 
 		target.validate()
 

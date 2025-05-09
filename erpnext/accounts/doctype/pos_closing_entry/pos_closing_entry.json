@@ -21,6 +21,7 @@
   "user",
   "section_break_12",
   "pos_transactions",
+  "sales_invoice_transactions",
   "section_break_9",
   "payment_reconciliation_details",
   "section_break_11",
@@ -227,8 +228,15 @@
    "label": "Posting Time",
    "no_copy": 1,
    "reqd": 1
+  },
+  {
+   "fieldname": "sales_invoice_transactions",
+   "fieldtype": "Table",
+   "label": "Sales Invoice Transactions",
+   "options": "Sales Invoice Reference"
   }
  ],
+ "grid_page_length": 50,
  "is_submittable": 1,
  "links": [
   {
@@ -236,7 +244,7 @@
    "link_fieldname": "pos_closing_entry"
   }
  ],
- "modified": "2024-03-27 13:10:14.073467",
+ "modified": "2025-03-19 19:49:58.845697",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Closing Entry",
@@ -285,6 +293,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

@@ -40,9 +40,14 @@
   "show_payment_schedule_in_print",
   "currency_exchange_section",
   "allow_stale",
+  "column_break_yuug",
+  "stale_days",
   "section_break_jpd0",
   "auto_reconcile_payments",
-  "stale_days",
+  "auto_reconciliation_job_trigger",
+  "reconciliation_queue_size",
+  "column_break_resa",
+  "exchange_gain_loss_posting_date",
   "invoicing_settings_tab",
   "accounts_transactions_settings_section",
   "over_billing_allowance",
@@ -53,6 +58,8 @@
   "pos_tab",
   "pos_setting_section",
   "post_change_gl_entries",
+  "column_break_xrnd",
+  "use_sales_invoice_in_pos",
   "assets_tab",
   "asset_settings_section",
   "calculate_depr_using_total_days",
@@ -74,6 +81,10 @@
   "general_ledger_remarks_length",
   "column_break_lvjk",
   "receivable_payable_remarks_length",
+  "accounts_receivable_payable_tuning_section",
+  "receivable_payable_fetch_method",
+  "legacy_section",
+  "ignore_is_opening_check_for_reporting",
   "payment_request_settings",
   "create_pr_in_draft_status"
  ],
@@ -384,7 +395,7 @@
   {
    "fieldname": "section_break_jpd0",
    "fieldtype": "Section Break",
-   "label": "Payment Reconciliations"
+   "label": "Payment Reconciliation Settings"
   },
   {
    "default": "0",
@@ -489,14 +500,80 @@
    "fieldname": "create_pr_in_draft_status",
    "fieldtype": "Check",
    "label": "Create in Draft Status"
+  },
+  {
+   "fieldname": "column_break_yuug",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_resa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "15",
+   "description": "Interval should be between 1 to 59 MInutes",
+   "fieldname": "auto_reconciliation_job_trigger",
+   "fieldtype": "Int",
+   "label": "Auto Reconciliation Job Trigger"
+  },
+  {
+   "default": "5",
+   "description": "Documents Processed on each trigger. Queue Size should be between 5 and 100",
+   "fieldname": "reconciliation_queue_size",
+   "fieldtype": "Int",
+   "label": "Reconciliation Queue Size"
+  },
+  {
+   "default": "0",
+   "description": "Ignores legacy Is Opening field in GL Entry that allows adding opening balance post the system is in use while generating reports",
+   "fieldname": "ignore_is_opening_check_for_reporting",
+   "fieldtype": "Check",
+   "label": "Ignore Is Opening check for reporting"
+  },
+  {
+   "default": "Payment",
+   "description": "Only applies for Normal Payments",
+   "fieldname": "exchange_gain_loss_posting_date",
+   "fieldtype": "Select",
+   "label": "Posting Date Inheritance for Exchange Gain / Loss",
+   "options": "Invoice\nPayment\nReconciliation Date"
+  },
+  {
+   "fieldname": "column_break_xrnd",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "If enabled, Sales Invoice will be generated instead of POS Invoice in POS Transactions for real-time update of G/L and Stock Ledger.",
+   "fieldname": "use_sales_invoice_in_pos",
+   "fieldtype": "Check",
+   "label": "Use Sales Invoice"
+  },
+  {
+   "default": "Buffered Cursor",
+   "fieldname": "receivable_payable_fetch_method",
+   "fieldtype": "Select",
+   "label": "Data Fetch Method",
+   "options": "Buffered Cursor\nUnBuffered Cursor"
+  },
+  {
+   "fieldname": "accounts_receivable_payable_tuning_section",
+   "fieldtype": "Section Break",
+   "label": "Accounts Receivable / Payable Tuning"
+  },
+  {
+   "fieldname": "legacy_section",
+   "fieldtype": "Section Break",
+   "label": "Legacy Fields"
   }
  ],
+ "grid_page_length": 50,
  "icon": "icon-cog",
  "idx": 1,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2024-07-26 06:48:52.714630",
+ "modified": "2025-05-05 12:29:38.302027",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Accounts Settings",
@@ -521,6 +598,7 @@
   }
  ],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "ASC",
  "states": [],

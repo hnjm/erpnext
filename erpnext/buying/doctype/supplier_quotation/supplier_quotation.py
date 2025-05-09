@@ -60,6 +60,7 @@ class SupplierQuotation(BuyingController):
 		discount_amount: DF.Currency
 		grand_total: DF.Currency
 		group_same_items: DF.Check
+		has_unit_price_items: DF.Check
 		ignore_pricing_rule: DF.Check
 		in_words: DF.Data | None
 		incoterm: DF.Link | None
@@ -103,6 +104,10 @@ class SupplierQuotation(BuyingController):
 		valid_till: DF.Date | None
 	# end: auto-generated types
 
+	def before_validate(self):
+		self.set_has_unit_price_items()
+		self.flags.allow_zero_qty = self.has_unit_price_items
+
 	def validate(self):
 		super().validate()
 
@@ -128,6 +133,17 @@ class SupplierQuotation(BuyingController):
 
 	def on_trash(self):
 		pass
+
+	def set_has_unit_price_items(self):
+		"""
+		If permitted in settings and any item has 0 qty, the SQ has unit price items.
+		"""
+		if not frappe.db.get_single_value("Buying Settings", "allow_zero_qty_in_supplier_quotation"):
+			return
+
+		self.has_unit_price_items = any(
+			not row.qty for row in self.get("items") if (row.item_code and not row.qty)
+		)
 
 	def validate_with_previous_doc(self):
 		super().validate_with_previous_doc(
@@ -234,6 +250,7 @@ def make_purchase_order(source_name, target_doc=None):
 		{
 			"Supplier Quotation": {
 				"doctype": "Purchase Order",
+				"field_no_map": ["transaction_date"],
 				"validation": {
 					"docstatus": ["=", 1],
 				},

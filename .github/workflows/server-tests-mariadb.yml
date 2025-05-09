@@ -133,7 +133,7 @@ jobs:
         run: cat ~/frappe-bench/bench_start.log || true
 
       - name: Upload coverage data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
           name: coverage-${{ matrix.container }}
@@ -149,7 +149,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: Upload coverage data
         uses: codecov/codecov-action@v4

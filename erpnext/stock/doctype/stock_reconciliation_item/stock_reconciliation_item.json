@@ -14,6 +14,7 @@
   "column_break_6",
   "warehouse",
   "qty",
+  "stock_uom",
   "valuation_rate",
   "amount",
   "allow_zero_valuation_rate",
@@ -88,6 +89,16 @@
   },
   {
    "columns": 2,
+   "fetch_from": "item_code.stock_uom",
+   "fieldname": "stock_uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Stock UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
    "fieldname": "valuation_rate",
    "fieldtype": "Currency",
    "in_list_view": 1,
@@ -110,7 +121,8 @@
    "depends_on": "eval:doc.use_serial_batch_fields === 1",
    "fieldname": "serial_no",
    "fieldtype": "Long Text",
-   "label": "Serial No"
+   "label": "Serial No",
+   "no_copy": 1
   },
   {
    "fieldname": "column_break_11",
@@ -253,15 +265,17 @@
    "label": "Reconcile All Serial Nos / Batches"
   }
  ],
+ "grid_page_length": 50,
  "istable": 1,
  "links": [],
- "modified": "2024-05-30 23:20:00.947243",
+ "modified": "2025-04-28 22:40:30.086415",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Stock Reconciliation Item",
  "owner": "Administrator",
  "permissions": [],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

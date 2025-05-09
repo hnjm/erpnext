@@ -4,7 +4,7 @@ app_publisher = "Frappe Technologies Pvt. Ltd."
 app_description = """ERP made simple"""
 app_icon = "fa fa-th"
 app_color = "#e74c3c"
-app_email = "info@erpnext.com"
+app_email = "hello@frappe.io"
 app_license = "GNU General Public License (v3)"
 source_link = "https://github.com/frappe/erpnext"
 app_logo_url = "/assets/erpnext/images/erpnext-logo.svg"
@@ -13,7 +13,7 @@ app_home = "/app/home"
 add_to_apps_screen = [
 	{
 		"name": app_name,
-		"logo": "/assets/erpnext/images/erpnext-logo-blue.png",
+		"logo": "/assets/erpnext/images/erpnext-logo.svg",
 		"title": app_title,
 		"route": app_home,
 		"has_permission": "erpnext.check_app_permission",
@@ -335,17 +335,17 @@ doc_events = {
 	"User": {
 		"after_insert": "frappe.contacts.doctype.contact.contact.update_contact",
 		"validate": "erpnext.setup.doctype.employee.employee.validate_employee_role",
-		"on_update": [
-			"erpnext.setup.doctype.employee.employee.update_user_permissions",
-			"erpnext.portal.utils.set_default_role",
-		],
+		"on_update": "erpnext.portal.utils.set_default_role",
 	},
 	"Communication": {
 		"on_update": [
 			"erpnext.support.doctype.service_level_agreement.service_level_agreement.on_communication_update",
 			"erpnext.support.doctype.issue.issue.set_first_response_time",
 		],
-		"after_insert": "erpnext.crm.utils.link_communications_with_prospect",
+		"after_insert": [
+			"erpnext.crm.utils.link_communications_with_prospect",
+			"erpnext.crm.utils.update_modified_timestamp",
+		],
 	},
 	"Event": {
 		"after_insert": "erpnext.crm.utils.link_events_with_prospect",
@@ -407,7 +407,6 @@ scheduler_events = {
 	"cron": {
 		"0/15 * * * *": [
 			"erpnext.manufacturing.doctype.bom_update_log.bom_update_log.resume_bom_cost_update_jobs",
-			"erpnext.accounts.doctype.process_payment_reconciliation.process_payment_reconciliation.trigger_reconciliation_for_queued_docs",
 		],
 		"0/30 * * * *": [
 			"erpnext.utilities.doctype.video.video.update_youtube_data",
@@ -477,7 +476,7 @@ email_brand_image = "assets/erpnext/images/erpnext-logo.jpg"
 default_mail_footer = """
 	<span>
 		Sent via
-		<a class="text-muted" href="https://erpnext.com?source=via_email_footer" target="_blank">
+		<a class="text-muted" href="https://frappe.io/erpnext?source=via_email_footer" target="_blank">
 			ERPNext
 		</a>
 	</span>

@@ -141,6 +141,7 @@ class JournalEntry(AccountsController):
 		self.validate_empty_accounts_table()
 		self.validate_inter_company_accounts()
 		self.validate_depr_entry_voucher_type()
+		self.validate_company_in_accounting_dimension()
 		self.validate_advance_accounts()
 
 		if self.docstatus == 0:
@@ -252,11 +253,20 @@ class JournalEntry(AccountsController):
 
 	def validate_inter_company_accounts(self):
 		if self.voucher_type == "Inter Company Journal Entry" and self.inter_company_journal_entry_reference:
-			doc = frappe.get_doc("Journal Entry", self.inter_company_journal_entry_reference)
+			doc = frappe.db.get_value(
+				"Journal Entry",
+				self.inter_company_journal_entry_reference,
+				["company", "total_debit", "total_credit"],
+				as_dict=True,
+			)
 			account_currency = frappe.get_cached_value("Company", self.company, "default_currency")
 			previous_account_currency = frappe.get_cached_value("Company", doc.company, "default_currency")
 			if account_currency == previous_account_currency:
-				if self.total_credit != doc.total_debit or self.total_debit != doc.total_credit:
+				credit_precision = self.precision("total_credit")
+				debit_precision = self.precision("total_debit")
+				if (flt(self.total_credit, credit_precision) != flt(doc.total_debit, debit_precision)) or (
+					flt(self.total_debit, debit_precision) != flt(doc.total_credit, credit_precision)
+				):
 					frappe.throw(_("Total Credit/ Debit Amount should be same as linked Journal Entry"))
 
 	def validate_depr_entry_voucher_type(self):
@@ -578,8 +588,22 @@ class JournalEntry(AccountsController):
 		if customers:
 			from erpnext.selling.doctype.customer.customer import check_credit_limit
 
+			customer_details = frappe._dict(
+				frappe.db.get_all(
+					"Customer Credit Limit",
+					filters={
+						"parent": ["in", customers],
+						"parenttype": ["=", "Customer"],
+						"company": ["=", self.company],
+					},
+					fields=["parent", "bypass_credit_limit_check"],
+					as_list=True,
+				)
+			)
+
 			for customer in customers:
-				check_credit_limit(customer, self.company)
+				ignore_outstanding_sales_order = bool(customer_details.get(customer))
+				check_credit_limit(customer, self.company, ignore_outstanding_sales_order)
 
 	def validate_cheque_info(self):
 		if self.voucher_type in ["Bank Entry"]:
@@ -827,14 +851,13 @@ class JournalEntry(AccountsController):
 				"Debit Note",
 				"Credit Note",
 			]:
-				invoice = frappe.db.get_value(
-					reference_type, reference_name, ["docstatus", "outstanding_amount"], as_dict=1
-				)
+				invoice = frappe.get_doc(reference_type, reference_name)
 
 				if invoice.docstatus != 1:
 					frappe.throw(_("{0} {1} is not submitted").format(reference_type, reference_name))
 
-				if total and flt(invoice.outstanding_amount) < total:
+				precision = invoice.precision("outstanding_amount")
+				if total and flt(invoice.outstanding_amount, precision) < flt(total, precision):
 					frappe.throw(
 						_("Payment against {0} {1} cannot be greater than Outstanding Amount {2}").format(
 							reference_type, reference_name, invoice.outstanding_amount
@@ -1062,14 +1085,15 @@ class JournalEntry(AccountsController):
 		gl_map = []
 
 		company_currency = erpnext.get_company_currency(self.company)
+		self.transaction_currency = company_currency
+		self.transaction_exchange_rate = 1
 		if self.multi_currency:
 			for row in self.get("accounts"):
 				if row.account_currency != company_currency:
-					self.currency = row.account_currency
-					self.conversion_rate = row.exchange_rate
+					# Journal assumes the first foreign currency as transaction currency
+					self.transaction_currency = row.account_currency
+					self.transaction_exchange_rate = row.exchange_rate
 					break
-		else:
-			self.currency = company_currency
 
 		for d in self.get("accounts"):
 			if d.debit or d.credit or (self.voucher_type == "Exchange Gain Or Loss"):
@@ -1094,6 +1118,18 @@ class JournalEntry(AccountsController):
 							"credit_in_account_currency": flt(
 								d.credit_in_account_currency, d.precision("credit_in_account_currency")
 							),
+							"transaction_currency": self.transaction_currency,
+							"transaction_exchange_rate": self.transaction_exchange_rate,
+							"debit_in_transaction_currency": flt(
+								d.debit_in_account_currency, d.precision("debit_in_account_currency")
+							)
+							if self.transaction_currency == d.account_currency
+							else flt(d.debit, d.precision("debit")) / self.transaction_exchange_rate,
+							"credit_in_transaction_currency": flt(
+								d.credit_in_account_currency, d.precision("credit_in_account_currency")
+							)
+							if self.transaction_currency == d.account_currency
+							else flt(d.credit, d.precision("credit")) / self.transaction_exchange_rate,
 							"against_voucher_type": d.reference_type,
 							"against_voucher": d.reference_name,
 							"remarks": remarks,
@@ -1235,9 +1271,7 @@ class JournalEntry(AccountsController):
 
 
 @frappe.whitelist()
-def get_default_bank_cash_account(
-	company, account_type=None, mode_of_payment=None, account=None, ignore_permissions=False
-):
+def get_default_bank_cash_account(company, account_type=None, mode_of_payment=None, account=None):
 	from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
 
 	if mode_of_payment:
@@ -1275,7 +1309,7 @@ def get_default_bank_cash_account(
 		return frappe._dict(
 			{
 				"account": account,
-				"balance": get_balance_on(account, ignore_account_permission=ignore_permissions),
+				"balance": get_balance_on(account),
 				"account_currency": account_details.account_currency,
 				"account_type": account_details.account_type,
 			}

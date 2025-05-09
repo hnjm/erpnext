@@ -7,7 +7,7 @@ import unittest
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.tests import IntegrationTestCase, UnitTestCase
-from frappe.utils import add_days, today
+from frappe.utils import add_days, add_months, today
 
 from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 from erpnext.accounts.utils import get_fiscal_year
@@ -60,6 +60,49 @@ class TestTaxWithholdingCategory(IntegrationTestCase):
 		invoices.append(pi)
 
 		# TDS is already deducted, so from onward system will deduct the TDS on every invoice
+		pi = create_purchase_invoice(supplier="Test TDS Supplier", rate=5000)
+		pi.submit()
+
+		# assert equal tax deduction on total invoice amount until now
+		self.assertEqual(pi.taxes_and_charges_deducted, 500)
+		invoices.append(pi)
+
+		# delete invoices to avoid clashing
+		for d in reversed(invoices):
+			d.cancel()
+
+	def test_tds_with_account_changed(self):
+		frappe.db.set_value(
+			"Supplier", "Test TDS Supplier", "tax_withholding_category", "Multi Account TDS Category"
+		)
+		invoices = []
+
+		# create invoices for lower than single threshold tax rate
+		for _ in range(2):
+			pi = create_purchase_invoice(supplier="Test TDS Supplier")
+			pi.submit()
+			invoices.append(pi)
+
+		# create another invoice whose total when added to previously created invoice,
+		# surpasses cumulative threshhold
+		pi = create_purchase_invoice(supplier="Test TDS Supplier")
+		pi.submit()
+
+		# assert equal tax deduction on total invoice amount until now
+		self.assertEqual(pi.taxes_and_charges_deducted, 3000)
+		self.assertEqual(pi.grand_total, 7000)
+		invoices.append(pi)
+
+		# account changed
+
+		frappe.db.set_value(
+			"Tax Withholding Account",
+			{"parent": "Multi Account TDS Category"},
+			"account",
+			"_Test Account VAT - _TC",
+		)
+
+		# TDS should be on invoice only even though account is changed
 		pi = create_purchase_invoice(supplier="Test TDS Supplier", rate=5000)
 		pi.submit()
 
@@ -486,7 +529,7 @@ class TestTaxWithholdingCategory(IntegrationTestCase):
 		payment = get_payment_entry(order.doctype, order.name)
 		payment.apply_tax_withholding_amount = 1
 		payment.tax_withholding_category = "Cumulative Threshold TDS"
-		payment.submit()
+		payment.save().submit()
 		self.assertEqual(payment.taxes[0].tax_amount, 4000)
 
 	def test_multi_category_single_supplier(self):
@@ -536,6 +579,15 @@ class TestTaxWithholdingCategory(IntegrationTestCase):
 		pi1.submit()
 		invoices.append(pi1)
 
+		pe = create_payment_entry(
+			payment_type="Pay", party_type="Supplier", party="Test TDS Supplier6", paid_amount=1000
+		)
+		pe.apply_tax_withholding_amount = 1
+		pe.tax_withholding_category = "Test Multi Invoice Category"
+		pe.save()
+		pe.submit()
+		invoices.append(pe)
+
 		pi2 = create_purchase_invoice(supplier="Test TDS Supplier6", rate=9000, do_not_save=True)
 		pi2.apply_tds = 1
 		pi2.tax_withholding_category = "Test Multi Invoice Category"
@@ -551,6 +603,8 @@ class TestTaxWithholdingCategory(IntegrationTestCase):
 		self.assertTrue(pi2.tax_withheld_vouchers[0].taxable_amount == pi1.net_total)
 		self.assertTrue(pi2.tax_withheld_vouchers[1].voucher_name == pi.name)
 		self.assertTrue(pi2.tax_withheld_vouchers[1].taxable_amount == pi.net_total)
+		self.assertTrue(pi2.tax_withheld_vouchers[2].voucher_name == pe.name)
+		self.assertTrue(pi2.tax_withheld_vouchers[2].taxable_amount == pe.paid_amount)
 
 		# cancel invoices to avoid clashing
 		for d in reversed(invoices):
@@ -621,6 +675,49 @@ class TestTaxWithholdingCategory(IntegrationTestCase):
 		pi1.cancel()
 		pi2.cancel()
 		pi3.cancel()
+
+	def test_ldc_at_0_rate(self):
+		frappe.db.set_value(
+			"Supplier",
+			"Test LDC Supplier",
+			{
+				"tax_withholding_category": "Test Service Category",
+				"pan": "ABCTY1234D",
+			},
+		)
+
+		fiscal_year = get_fiscal_year(today(), company="_Test Company")
+		valid_from = fiscal_year[1]
+		valid_upto = add_months(valid_from, 1)
+		create_lower_deduction_certificate(
+			supplier="Test LDC Supplier",
+			certificate_no="1AE0423AAJ",
+			tax_withholding_category="Test Service Category",
+			tax_rate=0,
+			limit=50000,
+			valid_from=valid_from,
+			valid_upto=valid_upto,
+		)
+
+		pi1 = create_purchase_invoice(
+			supplier="Test LDC Supplier", rate=35000, posting_date=valid_from, set_posting_time=True
+		)
+		pi1.submit()
+		self.assertEqual(pi1.taxes, [])
+
+		pi2 = create_purchase_invoice(
+			supplier="Test LDC Supplier",
+			rate=35000,
+			posting_date=add_days(valid_upto, 1),
+			set_posting_time=True,
+		)
+		pi2.submit()
+		self.assertEqual(len(pi2.taxes), 1)
+		# pi1 net total shouldn't be included as it lies within LDC at rate of '0'
+		self.assertEqual(pi2.taxes[0].tax_amount, 3500)
+
+		pi1.cancel()
+		pi2.cancel()
 
 	def set_previous_fy_and_tax_category(self):
 		test_company = "_Test Company"
@@ -779,7 +876,8 @@ def create_purchase_invoice(**args):
 	pi = frappe.get_doc(
 		{
 			"doctype": "Purchase Invoice",
-			"posting_date": today(),
+			"set_posting_time": args.set_posting_time or False,
+			"posting_date": args.posting_date or today(),
 			"apply_tds": 0 if args.do_not_apply_tds else 1,
 			"supplier": args.supplier,
 			"company": "_Test Company",
@@ -1071,6 +1169,16 @@ def create_tax_withholding_category_records():
 		consider_party_ledger_amount=1,
 	)
 
+	create_tax_withholding_category(
+		category_name="Multi Account TDS Category",
+		rate=10,
+		from_date=from_date,
+		to_date=to_date,
+		account="TDS - _TC",
+		single_threshold=0,
+		cumulative_threshold=30000,
+	)
+
 
 def create_tax_withholding_category(
 	category_name,
@@ -1107,7 +1215,9 @@ def create_tax_withholding_category(
 		).insert()
 
 
-def create_lower_deduction_certificate(supplier, tax_withholding_category, tax_rate, certificate_no, limit):
+def create_lower_deduction_certificate(
+	supplier, tax_withholding_category, tax_rate, certificate_no, limit, valid_from=None, valid_upto=None
+):
 	fiscal_year = get_fiscal_year(today(), company="_Test Company")
 	if not frappe.db.exists("Lower Deduction Certificate", certificate_no):
 		frappe.get_doc(
@@ -1118,8 +1228,8 @@ def create_lower_deduction_certificate(supplier, tax_withholding_category, tax_r
 				"certificate_no": certificate_no,
 				"tax_withholding_category": tax_withholding_category,
 				"fiscal_year": fiscal_year[0],
-				"valid_from": fiscal_year[1],
-				"valid_upto": fiscal_year[2],
+				"valid_from": valid_from or fiscal_year[1],
+				"valid_upto": valid_upto or fiscal_year[2],
 				"rate": tax_rate,
 				"certificate_limit": limit,
 			}

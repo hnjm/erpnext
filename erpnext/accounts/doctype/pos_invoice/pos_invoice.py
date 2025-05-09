@@ -4,6 +4,7 @@
 
 import frappe
 from frappe import _, bold
+from frappe.model.mapper import map_child_doc, map_doc
 from frappe.query_builder.functions import IfNull, Sum
 from frappe.utils import cint, flt, get_link_to_form, getdate, nowdate
 from frappe.utils.nestedset import get_descendants_of
@@ -17,6 +18,7 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
 )
 from erpnext.accounts.party import get_due_date, get_party_account
 from erpnext.controllers.queries import item_query as _item_query
+from erpnext.controllers.sales_and_purchase_return import get_sales_invoice_item_from_consolidated_invoice
 from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos
 
 
@@ -161,7 +163,6 @@ class POSInvoice(SalesInvoice):
 		terms: DF.TextEditor | None
 		territory: DF.Link | None
 		timesheets: DF.Table[SalesInvoiceTimesheet]
-		title: DF.Data | None
 		to_date: DF.Date | None
 		total: DF.Currency
 		total_advance: DF.Currency
@@ -193,6 +194,8 @@ class POSInvoice(SalesInvoice):
 
 		# run on validate method of selling controller
 		super(SalesInvoice, self).validate()
+		self.validate_pos_opening_entry()
+		self.validate_is_pos_using_sales_invoice()
 		self.validate_auto_set_posting_time()
 		self.validate_mode_of_payment()
 		self.validate_uom_is_integer("stock_uom", "stock_qty")
@@ -211,6 +214,7 @@ class POSInvoice(SalesInvoice):
 		self.validate_payment_amount()
 		self.validate_loyalty_transaction()
 		self.validate_company_with_pos_company()
+		self.validate_full_payment()
 		if self.coupon_code:
 			from erpnext.accounts.doctype.pricing_rule.utils import validate_coupon_code
 
@@ -238,6 +242,9 @@ class POSInvoice(SalesInvoice):
 
 			update_coupon_code_count(self.coupon_code, "used")
 		self.clear_unallocated_mode_of_payments()
+
+		if self.is_return and self.is_pos_using_sales_invoice:
+			self.create_and_add_consolidated_sales_invoice()
 
 	def before_cancel(self):
 		if (
@@ -282,6 +289,47 @@ class POSInvoice(SalesInvoice):
 		sip = frappe.qb.DocType("Sales Invoice Payment")
 		frappe.qb.from_(sip).delete().where(sip.parent == self.name).where(sip.amount == 0).run()
 
+	def create_and_add_consolidated_sales_invoice(self):
+		sales_inv = self.create_return_sales_invoice()
+		self.db_set("consolidated_invoice", sales_inv.name)
+		self.set_status(update=True)
+
+	def create_return_sales_invoice(self):
+		return_sales_invoice = frappe.new_doc("Sales Invoice")
+		return_sales_invoice.is_pos = 1
+		return_sales_invoice.is_return = 1
+		map_doc(self, return_sales_invoice, table_map={"doctype": return_sales_invoice.doctype})
+		return_sales_invoice.is_created_using_pos = 1
+		return_sales_invoice.is_consolidated = 1
+		return_sales_invoice.return_against = frappe.db.get_value(
+			"POS Invoice", self.return_against, "consolidated_invoice"
+		)
+		items, taxes, payments = [], [], []
+		for d in self.items:
+			si_item = map_child_doc(d, return_sales_invoice, {"doctype": "Sales Invoice Item"})
+			si_item.pos_invoice = self.name
+			si_item.pos_invoice_item = d.name
+			si_item.sales_invoice_item = get_sales_invoice_item_from_consolidated_invoice(
+				self.return_against, d.pos_invoice_item
+			)
+			items.append(si_item)
+
+		for d in self.get("taxes"):
+			tax = map_child_doc(d, return_sales_invoice, {"doctype": "Sales Taxes and Charges"})
+			taxes.append(tax)
+
+		for d in self.get("payments"):
+			payment = map_child_doc(d, return_sales_invoice, {"doctype": "Sales Invoice Payment"})
+			payments.append(payment)
+
+		return_sales_invoice.set("items", items)
+		return_sales_invoice.set("taxes", taxes)
+		return_sales_invoice.set("payments", payments)
+		return_sales_invoice.save()
+		return_sales_invoice.submit()
+
+		return return_sales_invoice
+
 	def delink_serial_and_batch_bundle(self):
 		for row in self.items:
 			if row.serial_and_batch_bundle:
@@ -323,6 +371,18 @@ class POSInvoice(SalesInvoice):
 						_("Payment related to {0} is not completed").format(pay.mode_of_payment)
 					)
 
+	def validate_pos_opening_entry(self):
+		opening_entries = frappe.get_list(
+			"POS Opening Entry", filters={"pos_profile": self.pos_profile, "status": "Open", "docstatus": 1}
+		)
+		if len(opening_entries) == 0:
+			frappe.throw(
+				title=_("POS Opening Entry Missing"),
+				msg=_("No open POS Opening Entry found for POS Profile {0}.").format(
+					frappe.bold(self.pos_profile)
+				),
+			)
+
 	def validate_stock_availablility(self):
 		if self.is_return:
 			return
@@ -360,6 +420,13 @@ class POSInvoice(SalesInvoice):
 						).format(d.idx, item_code, warehouse, available_stock),
 						title=_("Item Unavailable"),
 					)
+
+	def validate_is_pos_using_sales_invoice(self):
+		self.is_pos_using_sales_invoice = frappe.db.get_single_value(
+			"Accounts Settings", "use_sales_invoice_in_pos"
+		)
+		if self.is_pos_using_sales_invoice and not self.is_return:
+			frappe.throw(_("Sales Invoice mode is activated in POS. Please create Sales Invoice instead."))
 
 	def validate_serialised_or_batched_item(self):
 		error_msg = []

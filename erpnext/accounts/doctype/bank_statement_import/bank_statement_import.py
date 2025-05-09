@@ -99,9 +99,9 @@ class BankStatementImport(DataImport):
 				template_options=self.template_options,
 				now=run_now,
 			)
-			return True
+			return job_id
 
-		return False
+		return None
 
 
 @frappe.whitelist()
@@ -113,7 +113,8 @@ def get_preview_from_template(data_import, import_file=None, google_sheets_url=N
 
 @frappe.whitelist()
 def form_start_import(data_import):
-	return frappe.get_doc("Bank Statement Import", data_import).start_import()
+	job_id = frappe.get_doc("Bank Statement Import", data_import).start_import()
+	return job_id is not None
 
 
 @frappe.whitelist()

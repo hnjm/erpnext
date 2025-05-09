@@ -26,10 +26,18 @@ frappe.listview_settings["Sales Order"] = {
 		} else if (!doc.skip_delivery_note && flt(doc.per_delivered) < 100) {
 			if (frappe.datetime.get_diff(doc.delivery_date) < 0) {
 				// not delivered & overdue
-				return [__("Overdue"), "red", "per_delivered,<,100|delivery_date,<,Today|status,!=,Closed"];
+				return [
+					__("Overdue"),
+					"red",
+					"per_delivered,<,100|delivery_date,<,Today|status,!=,Closed|docstatus,=,1",
+				];
 			} else if (flt(doc.grand_total) === 0) {
 				// not delivered (zeroount order)
-				return [__("To Deliver"), "orange", "per_delivered,<,100|grand_total,=,0|status,!=,Closed"];
+				return [
+					__("To Deliver"),
+					"orange",
+					"per_delivered,<,100|grand_total,=,0|status,!=,Closed|docstatus,=,1",
+				];
 			} else if (flt(doc.per_billed) < 100) {
 				// not delivered & not billed
 				return [
@@ -63,47 +71,57 @@ frappe.listview_settings["Sales Order"] = {
 			listview.call_for_selected_items(method, { status: "Submitted" });
 		});
 
-		listview.page.add_action_item(__("Sales Invoice"), () => {
-			erpnext.bulk_transaction_processing.create(listview, "Sales Order", "Sales Invoice");
-		});
+		if (frappe.model.can_create("Sales Invoice")) {
+			listview.page.add_action_item(__("Sales Invoice"), () => {
+				erpnext.bulk_transaction_processing.create(listview, "Sales Order", "Sales Invoice");
+			});
+		}
 
-		listview.page.add_action_item(__("Delivery Note"), () => {
-			frappe.call({
-				method: "erpnext.selling.doctype.sales_order.sales_order.is_enable_cutoff_date_on_bulk_delivery_note_creation",
-				callback: (r) => {
-					if (r.message) {
-						var dialog = new frappe.ui.Dialog({
-							title: __("Select Items up to Delivery Date"),
-							fields: [
-								{
-									fieldtype: "Date",
-									fieldname: "delivery_date",
-									default: frappe.datetime.add_days(frappe.datetime.nowdate(), 1),
-								},
-							],
-						});
-						dialog.set_primary_action(__("Select"), function (values) {
-							var until_delivery_date = values.delivery_date;
+		if (frappe.model.can_create("Delivery Note")) {
+			listview.page.add_action_item(__("Delivery Note"), () => {
+				frappe.call({
+					method: "erpnext.selling.doctype.sales_order.sales_order.is_enable_cutoff_date_on_bulk_delivery_note_creation",
+					callback: (r) => {
+						if (r.message) {
+							var dialog = new frappe.ui.Dialog({
+								title: __("Select Items up to Delivery Date"),
+								fields: [
+									{
+										fieldtype: "Date",
+										fieldname: "delivery_date",
+										default: frappe.datetime.add_days(frappe.datetime.nowdate(), 1),
+									},
+								],
+							});
+							dialog.set_primary_action(__("Select"), function (values) {
+								var until_delivery_date = values.delivery_date;
+								erpnext.bulk_transaction_processing.create(
+									listview,
+									"Sales Order",
+									"Delivery Note",
+									{
+										until_delivery_date,
+									}
+								);
+								dialog.hide();
+							});
+							dialog.show();
+						} else {
 							erpnext.bulk_transaction_processing.create(
 								listview,
 								"Sales Order",
-								"Delivery Note",
-								{
-									until_delivery_date,
-								}
+								"Delivery Note"
 							);
-							dialog.hide();
-						});
-						dialog.show();
-					} else {
-						erpnext.bulk_transaction_processing.create(listview, "Sales Order", "Delivery Note");
-					}
-				},
+						}
+					},
+				});
 			});
-		});
+		}
 
-		listview.page.add_action_item(__("Advance Payment"), () => {
-			erpnext.bulk_transaction_processing.create(listview, "Sales Order", "Payment Entry");
-		});
+		if (frappe.model.can_create("Payment Entry")) {
+			listview.page.add_action_item(__("Advance Payment"), () => {
+				erpnext.bulk_transaction_processing.create(listview, "Sales Order", "Payment Entry");
+			});
+		}
 	},
 };

@@ -267,6 +267,10 @@ $.extend(erpnext.utils, {
 								fieldname: dimension["fieldname"],
 								label: __(dimension["doctype"]),
 								fieldtype: "MultiSelectList",
+								depends_on:
+									report_name === "Stock Balance"
+										? "eval:doc.show_dimension_wise_stock === 1"
+										: "",
 								get_data: function (txt) {
 									return frappe.db.get_link_options(dimension["doctype"], txt);
 								},
@@ -622,6 +626,7 @@ erpnext.utils.update_child_items = function (opts) {
 			docname: d.name,
 			name: d.name,
 			item_code: d.item_code,
+			item_name: d.item_name,
 			delivery_date: d.delivery_date,
 			schedule_date: d.schedule_date,
 			conversion_factor: d.conversion_factor,
@@ -668,6 +673,77 @@ erpnext.utils.update_child_items = function (opts) {
 					filters: filters,
 				};
 			},
+			onchange: function () {
+				const me = this;
+
+				frm.call({
+					method: "erpnext.stock.get_item_details.get_item_details",
+					args: {
+						doc: frm.doc,
+						ctx: {
+							item_code: this.value,
+							set_warehouse: frm.doc.set_warehouse,
+							customer: frm.doc.customer || frm.doc.party_name,
+							quotation_to: frm.doc.quotation_to,
+							supplier: frm.doc.supplier,
+							currency: frm.doc.currency,
+							is_internal_supplier: frm.doc.is_internal_supplier,
+							is_internal_customer: frm.doc.is_internal_customer,
+							conversion_rate: frm.doc.conversion_rate,
+							price_list: frm.doc.selling_price_list || frm.doc.buying_price_list,
+							price_list_currency: frm.doc.price_list_currency,
+							plc_conversion_rate: frm.doc.plc_conversion_rate,
+							company: frm.doc.company,
+							order_type: frm.doc.order_type,
+							is_pos: cint(frm.doc.is_pos),
+							is_return: cint(frm.doc.is_return),
+							is_subcontracted: frm.doc.is_subcontracted,
+							ignore_pricing_rule: frm.doc.ignore_pricing_rule,
+							doctype: frm.doc.doctype,
+							name: frm.doc.name,
+							qty: me.doc.qty || 1,
+							uom: me.doc.uom,
+							pos_profile: cint(frm.doc.is_pos) ? frm.doc.pos_profile : "",
+							tax_category: frm.doc.tax_category,
+							child_doctype: frm.doc.doctype + " Item",
+							is_old_subcontracting_flow: frm.doc.is_old_subcontracting_flow,
+						},
+					},
+					callback: function (r) {
+						if (r.message) {
+							const {
+								qty,
+								price_list_rate: rate,
+								uom,
+								conversion_factor,
+								item_name,
+								bom_no,
+							} = r.message;
+
+							const row = dialog.fields_dict.trans_items.df.data.find(
+								(doc) => doc.idx == me.doc.idx
+							);
+							if (row) {
+								Object.assign(row, {
+									conversion_factor: me.doc.conversion_factor || conversion_factor,
+									uom: me.doc.uom || uom,
+									qty: me.doc.qty || qty,
+									rate: me.doc.rate || rate,
+									item_name: item_name,
+									bom_no: bom_no,
+								});
+								dialog.fields_dict.trans_items.grid.refresh();
+							}
+						}
+					},
+				});
+			},
+		},
+		{
+			fieldtype: "Data",
+			fieldname: "item_name",
+			label: __("Item Name"),
+			read_only: 1,
 		},
 		{
 			fieldtype: "Link",
@@ -1152,9 +1228,9 @@ function set_time_to_resolve_and_response(frm, apply_sla_for_resolution) {
 	if (apply_sla_for_resolution) {
 		let time_to_resolve;
 		if (!frm.doc.resolution_date) {
-			time_to_resolve = get_time_left(frm.doc.resolution_by, frm.doc.agreement_status);
+			time_to_resolve = get_time_left(frm.doc.sla_resolution_by, frm.doc.agreement_status);
 		} else {
-			time_to_resolve = get_status(frm.doc.resolution_by, frm.doc.resolution_date);
+			time_to_resolve = get_status(frm.doc.sla_resolution_by, frm.doc.sla_resolution_date);
 		}
 
 		alert += `

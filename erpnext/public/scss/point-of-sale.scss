@@ -2,6 +2,7 @@
 	display: grid;
 	grid-template-columns: repeat(10, minmax(0, 1fr));
 	gap: var(--margin-md);
+	padding: 1%;
 
 	section {
 		min-height: 45rem;
@@ -152,9 +153,11 @@
 					margin-bottom: 0px;
 					min-height: 8rem;
 					height: 8rem;
+					overflow: hidden;
 
 					> img {
 						@extend .image;
+						width: 100%;
 					}
 				}
 
@@ -394,9 +397,11 @@
 							border-radius: var(--border-radius-md);
 							color: var(--text-light);
 							margin-right: var(--margin-md);
+							overflow: hidden;
 
 							> img {
 								@extend .image;
+								width: 100%;
 							}
 						}
 
@@ -525,8 +530,7 @@
 
 					> .checkout-btn {
 						@extend .primary-action;
-						background-color: var(--blue-200);
-						color: white;
+						background-color: var(--control-bg);
 					}
 
 					> .edit-cart-btn {
@@ -607,7 +611,7 @@
 		padding: var(--padding-sm);
 
 		&:hover {
-			background-color: var(--gray-50);
+			background-color: var(--control-bg);
 		}
 
 		> .invoice-name-date {
@@ -699,14 +703,16 @@
 				display: flex;
 				align-items: center;
 				justify-content: center;
-				width: 11rem;
-				height: 11rem;
+				max-width: 11rem;
+				max-height: 11rem;
 				border-radius: var(--border-radius-md);
 				margin-left: var(--margin-md);
 				color: var(--gray-500);
+				overflow: hidden;
 
 				> img {
 					@extend .image;
+					width: 100%;
 				}
 
 				> .item-abbr {
@@ -716,8 +722,8 @@
 					justify-content: center;
 					border-radius: var(--border-radius-md);
 					font-size: var(--text-3xl);
-					width: 100%;
-					height: 100%;
+					width: 11rem;
+					height: 11rem;
 				}
 			}
 		}
@@ -747,6 +753,7 @@
 			display: grid;
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			column-gap: var(--padding-md);
+			row-gap: var(--padding-md);
 
 			> .auto-fetch-btn {
 				@extend .pointer-no-select;
@@ -768,8 +775,8 @@
 
 		.submit-order-btn {
 			@extend .primary-action;
-			background-color: var(--blue-500);
-			color: white;
+			background-color: var(--btn-primary);
+			color: var(--neutral);
 		}
 
 		.section-label {
@@ -1086,34 +1093,49 @@
 
 					> .item-row-wrapper {
 						display: flex;
-						align-items: center;
+						gap: 2px;
+						flex-direction: column;
 						padding: var(--padding-sm) var(--padding-md);
+						border: 1px solid lightgray;
+						border-radius: 10px;
+						background: var(--bg-light-gray);
 
-						> .item-name {
-							@extend .nowrap;
-							font-weight: 500;
-							margin-right: var(--margin-md);
-						}
-
-						> .item-qty {
-							font-weight: 500;
-							margin-left: auto;
-						}
-
-						> .item-rate-disc {
+						> .item-row-data {
 							display: flex;
-							text-align: right;
-							margin-left: var(--margin-md);
-							justify-content: flex-end;
+							align-items: center;
 
-							> .item-disc {
-								color: var(--dark-green-500);
-							}
-
-							> .item-rate {
+							> .item-name {
+								@extend .nowrap;
 								font-weight: 500;
-								margin-left: var(--margin-md);
+								margin-right: var(--margin-md);
 							}
+
+							> .item-qty {
+								font-weight: 500;
+								margin-left: auto;
+								font-size: small;
+							}
+
+							> .item-rate-disc {
+								display: flex;
+								text-align: right;
+								margin-left: var(--margin-md);
+								justify-content: flex-end;
+								font-size: small;
+
+								> .item-disc {
+									color: var(--dark-green-500);
+								}
+
+								> .item-rate {
+									font-weight: 500;
+									margin-left: var(--margin-md);
+								}
+							}
+						}
+
+						> .item-row-refund {
+							font-size: x-small;
 						}
 					}
 
@@ -1126,6 +1148,12 @@
 					}
 				}
 
+				> .order-summary-container {
+					display: flex;
+					background: white;
+					gap: 8px;
+				}
+
 				> .summary-btns {
 					display: flex;
 					justify-content: space-between;
@@ -1136,11 +1164,21 @@
 					}
 
 					> .new-btn {
-						background-color: var(--blue-500);
-						color: white;
+						background-color: var(--btn-primary);
+						color: var(--neutral);
 						font-weight: 500;
 					}
 				}
+			}
+		}
+	}
+}
+
+@media screen and (max-width: 1200px) {
+	.point-of-sale-app {
+		> .items-selector {
+			> .items-container {
+				grid-template-columns: repeat(3, minmax(0, 1fr));
 			}
 		}
 	}

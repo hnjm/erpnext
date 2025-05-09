@@ -7,7 +7,7 @@ from operator import itemgetter
 
 import frappe
 from frappe import _
-from frappe.utils import cint, date_diff, flt
+from frappe.utils import cint, date_diff, flt, get_datetime
 
 from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos
 
@@ -51,6 +51,10 @@ def format_report_data(filters: Filters, item_details: dict, to_date: str) -> li
 		latest_age = date_diff(to_date, fifo_queue[-1][1])
 		range_values = get_range_age(filters, fifo_queue, to_date, item_dict)
 
+		check_and_replace_valuations_if_moving_average(
+			range_values, details.valuation_method, details.valuation_rate
+		)
+
 		row = [details.name, details.item_name, details.description, details.item_group, details.brand]
 
 		if filters.get("show_warehouse_wise_stock"):
@@ -72,6 +76,15 @@ def format_report_data(filters: Filters, item_details: dict, to_date: str) -> li
 	return data
 
 
+def check_and_replace_valuations_if_moving_average(range_values, item_valuation_method, valuation_rate):
+	if item_valuation_method == "Moving Average" or (
+		not item_valuation_method
+		and frappe.db.get_single_value("Stock Settings", "valuation_method") == "Moving Average"
+	):
+		for i in range(0, len(range_values), 2):
+			range_values[i + 1] = range_values[i] * valuation_rate
+
+
 def get_average_age(fifo_queue: list, to_date: str) -> float:
 	batch_age = age_qty = total_qty = 0.0
 	for batch in fifo_queue:
@@ -89,18 +102,22 @@ def get_average_age(fifo_queue: list, to_date: str) -> float:
 
 def get_range_age(filters: Filters, fifo_queue: list, to_date: str, item_dict: dict) -> list:
 	precision = cint(frappe.db.get_single_value("System Settings", "float_precision", cache=True))
-	range_values = [0.0] * (len(filters.ranges) + 1)
+	range_values = [0.0] * ((len(filters.ranges) * 2) + 2)
 
 	for item in fifo_queue:
 		age = flt(date_diff(to_date, item[1]))
 		qty = flt(item[0]) if not item_dict["has_serial_no"] else 1.0
+		stock_value = flt(item[2])
 
 		for i, age_limit in enumerate(filters.ranges):
 			if age <= flt(age_limit):
+				i *= 2
 				range_values[i] = flt(range_values[i] + qty, precision)
+				range_values[i + 1] = flt(range_values[i + 1] + stock_value, precision)
 				break
 		else:
-			range_values[-1] = flt(range_values[-1] + qty, precision)
+			range_values[-2] = flt(range_values[-2] + qty, precision)
+			range_values[-1] = flt(range_values[-1] + stock_value, precision)
 
 	return range_values
 
@@ -199,6 +216,7 @@ def setup_ageing_columns(filters: Filters, range_columns: list):
 	for i, label in enumerate(ranges):
 		fieldname = "range" + str(i + 1)
 		add_column(range_columns, label=_("Age ({0})").format(label), fieldname=fieldname)
+		add_column(range_columns, label=_("Value ({0})").format(label), fieldname=fieldname + "value")
 
 
 def add_column(range_columns: list, label: str, fieldname: str, fieldtype: str = "Float", width: int = 140):
@@ -262,7 +280,7 @@ class FIFOSlots:
 
 				self.__update_balances(d, key)
 
-			# Note that stock_ledger_entries is an iterator, you can not reuse it  like a list
+			# Note that stock_ledger_entries is an iterator, you can not reuse it like a list
 			del stock_ledger_entries
 
 		if not self.filters.get("show_warehouse_wise_stock"):
@@ -298,16 +316,22 @@ class FIFOSlots:
 					# neutralize 0/negative stock by adding positive stock
 					fifo_queue[0][0] += flt(row.actual_qty)
 					fifo_queue[0][1] = row.posting_date
+					fifo_queue[0][2] += flt(row.stock_value_difference)
 				else:
-					fifo_queue.append([flt(row.actual_qty), row.posting_date])
+					fifo_queue.append(
+						[flt(row.actual_qty), row.posting_date, flt(row.stock_value_difference)]
+					)
 				return
 
+			valuation = row.stock_value_difference / row.actual_qty
 			for serial_no in serial_nos:
 				if self.serial_no_batch_purchase_details.get(serial_no):
-					fifo_queue.append([serial_no, self.serial_no_batch_purchase_details.get(serial_no)])
+					fifo_queue.append(
+						[serial_no, self.serial_no_batch_purchase_details.get(serial_no), valuation]
+					)
 				else:
 					self.serial_no_batch_purchase_details.setdefault(serial_no, row.posting_date)
-					fifo_queue.append([serial_no, row.posting_date])
+					fifo_queue.append([serial_no, row.posting_date, valuation])
 
 	def __compute_outgoing_stock(self, row: dict, fifo_queue: list, transfer_key: tuple, serial_nos: list):
 		"Update FIFO Queue on outward stock."
@@ -316,34 +340,44 @@ class FIFOSlots:
 			return
 
 		qty_to_pop = abs(row.actual_qty)
+		stock_value = abs(row.stock_value_difference)
+
 		while qty_to_pop:
-			slot = fifo_queue[0] if fifo_queue else [0, None]
+			slot = fifo_queue[0] if fifo_queue else [0, None, 0]
 			if 0 < flt(slot[0]) <= qty_to_pop:
 				# qty to pop >= slot qty
 				# if +ve and not enough or exactly same balance in current slot, consume whole slot
 				qty_to_pop -= flt(slot[0])
+				stock_value -= flt(slot[2])
 				self.transferred_item_details[transfer_key].append(fifo_queue.pop(0))
 			elif not fifo_queue:
 				# negative stock, no balance but qty yet to consume
-				fifo_queue.append([-(qty_to_pop), row.posting_date])
-				self.transferred_item_details[transfer_key].append([qty_to_pop, row.posting_date])
+				fifo_queue.append([-(qty_to_pop), row.posting_date, -(stock_value)])
+				self.transferred_item_details[transfer_key].append(
+					[qty_to_pop, row.posting_date, stock_value]
+				)
 				qty_to_pop = 0
+				stock_value = 0
 			else:
 				# qty to pop < slot qty, ample balance
 				# consume actual_qty from first slot
 				slot[0] = flt(slot[0]) - qty_to_pop
-				self.transferred_item_details[transfer_key].append([qty_to_pop, slot[1]])
+				slot[2] = flt(slot[2]) - stock_value
+				self.transferred_item_details[transfer_key].append([qty_to_pop, slot[1], stock_value])
 				qty_to_pop = 0
+				stock_value = 0
 
 	def __adjust_incoming_transfer_qty(self, transfer_data: dict, fifo_queue: list, row: dict):
 		"Add previously removed stock back to FIFO Queue."
 		transfer_qty_to_pop = flt(row.actual_qty)
+		stock_value = flt(row.stock_value_difference)
 
 		def add_to_fifo_queue(slot):
 			if fifo_queue and flt(fifo_queue[0][0]) <= 0:
 				# neutralize 0/negative stock by adding positive stock
 				fifo_queue[0][0] += flt(slot[0])
 				fifo_queue[0][1] = slot[1]
+				fifo_queue[0][2] += flt(slot[2])
 			else:
 				fifo_queue.append(slot)
 
@@ -351,16 +385,20 @@ class FIFOSlots:
 			if transfer_data and 0 < transfer_data[0][0] <= transfer_qty_to_pop:
 				# bucket qty is not enough, consume whole
 				transfer_qty_to_pop -= transfer_data[0][0]
+				stock_value -= transfer_data[0][2]
 				add_to_fifo_queue(transfer_data.pop(0))
 			elif not transfer_data:
 				# transfer bucket is empty, extra incoming qty
-				add_to_fifo_queue([transfer_qty_to_pop, row.posting_date])
+				add_to_fifo_queue([transfer_qty_to_pop, row.posting_date, stock_value])
 				transfer_qty_to_pop = 0
+				stock_value = 0
 			else:
 				# ample bucket qty to consume
 				transfer_data[0][0] -= transfer_qty_to_pop
-				add_to_fifo_queue([transfer_qty_to_pop, transfer_data[0][1]])
+				transfer_data[0][2] -= stock_value
+				add_to_fifo_queue([transfer_qty_to_pop, transfer_data[0][1], stock_value])
 				transfer_qty_to_pop = 0
+				stock_value = 0
 
 	def __update_balances(self, row: dict, key: tuple | str):
 		self.item_details[key]["qty_after_transaction"] = row.qty_after_transaction
@@ -371,6 +409,7 @@ class FIFOSlots:
 			self.item_details[key]["total_qty"] += row.actual_qty
 
 		self.item_details[key]["has_serial_no"] = row.has_serial_no
+		self.item_details[key]["details"].valuation_rate = row.valuation_rate
 
 	def __aggregate_details_by_item(self, wh_wise_data: dict) -> dict:
 		"Aggregate Item-Wh wise data into single Item entry."
@@ -399,6 +438,7 @@ class FIFOSlots:
 	def __get_stock_ledger_entries(self) -> Iterator[dict]:
 		sle = frappe.qb.DocType("Stock Ledger Entry")
 		item = self.__get_item_query()  # used as derived table in sle query
+		to_date = get_datetime(self.filters.get("to_date") + " 23:59:59")
 
 		sle_query = (
 			frappe.qb.from_(sle)
@@ -411,7 +451,10 @@ class FIFOSlots:
 				item.description,
 				item.stock_uom,
 				item.has_serial_no,
+				item.valuation_method,
 				sle.actual_qty,
+				sle.stock_value_difference,
+				sle.valuation_rate,
 				sle.posting_date,
 				sle.voucher_type,
 				sle.voucher_no,
@@ -424,7 +467,7 @@ class FIFOSlots:
 			.where(
 				(sle.item_code == item.name)
 				& (sle.company == self.filters.get("company"))
-				& (sle.posting_date <= self.filters.get("to_date"))
+				& (sle.posting_datetime <= to_date)
 				& (sle.is_cancelled != 1)
 			)
 		)
@@ -441,7 +484,7 @@ class FIFOSlots:
 			if warehouses:
 				sle_query = sle_query.where(sle.warehouse.isin(warehouses))
 
-		sle_query = sle_query.orderby(sle.posting_date, sle.posting_time, sle.creation, sle.actual_qty)
+		sle_query = sle_query.orderby(sle.posting_datetime, sle.creation)
 
 		return sle_query.run(as_dict=True, as_iterator=True)
 
@@ -479,7 +522,14 @@ class FIFOSlots:
 		item_table = frappe.qb.DocType("Item")
 
 		item = frappe.qb.from_("Item").select(
-			"name", "item_name", "description", "stock_uom", "brand", "item_group", "has_serial_no"
+			"name",
+			"item_name",
+			"description",
+			"stock_uom",
+			"brand",
+			"item_group",
+			"has_serial_no",
+			"valuation_method",
 		)
 
 		if self.filters.get("item_code"):

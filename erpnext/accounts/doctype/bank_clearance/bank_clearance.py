@@ -6,7 +6,7 @@ import frappe
 from frappe import _, msgprint
 from frappe.model.document import Document
 from frappe.query_builder.custom import ConstantColumn
-from frappe.utils import flt, fmt_money, get_link_to_form, getdate
+from frappe.utils import cint, flt, fmt_money, get_link_to_form, getdate
 from pypika import Order
 
 import erpnext
@@ -48,6 +48,7 @@ class BankClearance(Document):
 		entries = []
 
 		# get entries from all the apps
+		precision = cint(frappe.db.get_default("currency_precision")) or 2
 		for method_name in frappe.get_hooks("get_payment_entries_for_bank_clearance"):
 			entries += (
 				frappe.get_attr(method_name)(
@@ -77,7 +78,7 @@ class BankClearance(Document):
 			if not d.get("account_currency"):
 				d.account_currency = default_currency
 
-			formatted_amount = fmt_money(abs(amount), 2, d.account_currency)
+			formatted_amount = fmt_money(abs(amount), precision, d.account_currency)
 			d.amount = formatted_amount + " " + (_("Dr") if amount > 0 else _("Cr"))
 			d.posting_date = getdate(d.posting_date)
 
@@ -159,9 +160,6 @@ def get_payment_entries_for_bank_clearance(
 		as_dict=1,
 	)
 
-	if bank_account:
-		condition += "and bank_account = %(bank_account)s"
-
 	payment_entries = frappe.db.sql(
 		f"""
 			select
@@ -183,7 +181,6 @@ def get_payment_entries_for_bank_clearance(
 			"account": account,
 			"from": from_date,
 			"to": to_date,
-			"bank_account": bank_account,
 		},
 		as_dict=1,
 	)

@@ -34,6 +34,8 @@
   "hide_tax_id",
   "enable_discount_accounting",
   "enable_cutoff_date_on_bulk_delivery_note_creation",
+  "allow_zero_qty_in_quotation",
+  "allow_zero_qty_in_sales_order",
   "experimental_section",
   "use_server_side_reactivity"
  ],
@@ -220,14 +222,29 @@
    "fieldname": "use_server_side_reactivity",
    "fieldtype": "Check",
    "label": "Use Server Side Reactivity"
+  },
+  {
+   "default": "0",
+   "description": "Allows users to submit Sales Orders with zero quantity. Useful when rates are fixed but the quantities are not. Eg. Rate Contracts.",
+   "fieldname": "allow_zero_qty_in_sales_order",
+   "fieldtype": "Check",
+   "label": "Allow Sales Order with Zero Quantity"
+  },
+  {
+   "default": "0",
+   "description": "Allows users to submit Quotations with zero quantity. Useful when rates are fixed but the quantities are not. Eg. Rate Contracts.",
+   "fieldname": "allow_zero_qty_in_quotation",
+   "fieldtype": "Check",
+   "label": "Allow Quotation with Zero Quantity"
   }
  ],
+ "grid_page_length": 50,
  "icon": "fa fa-cog",
  "idx": 1,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2024-12-06 11:41:54.722337",
+ "modified": "2025-05-06 15:23:14.332971",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Selling Settings",
@@ -252,6 +269,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

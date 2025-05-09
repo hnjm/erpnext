@@ -84,6 +84,20 @@ def link_communications_with_prospect(communication, method):
 			row.db_update()
 
 
+def update_modified_timestamp(communication, method):
+	if communication.reference_doctype and communication.reference_name:
+		if communication.sent_or_received == "Received" and frappe.db.get_single_value(
+			"CRM Settings", "update_timestamp_on_new_communication"
+		):
+			frappe.db.set_value(
+				dt=communication.reference_doctype,
+				dn=communication.reference_name,
+				field="modified",
+				val=now(),
+				update_modified=False,
+			)
+
+
 def get_linked_prospect(reference_doctype, reference_name):
 	prospect = None
 	if reference_doctype == "Lead":
@@ -133,14 +147,37 @@ def link_open_events(ref_doctype, ref_docname, doc):
 def get_open_activities(ref_doctype, ref_docname):
 	tasks = get_open_todos(ref_doctype, ref_docname)
 	events = get_open_events(ref_doctype, ref_docname)
+	tasks_history = get_closed_todos(ref_doctype, ref_docname)
+	events_history = get_closed_events(ref_doctype, ref_docname)
 
-	return {"tasks": tasks, "events": events}
+	return {
+		"tasks": tasks,
+		"events": events,
+		"tasks_history": tasks_history,
+		"events_history": events_history,
+	}
+
+
+def get_closed_todos(ref_doctype, ref_docname):
+	return get_filtered_todos(ref_doctype, ref_docname, status=("!=", "Open"))
 
 
 def get_open_todos(ref_doctype, ref_docname):
+	return get_filtered_todos(ref_doctype, ref_docname, status="Open")
+
+
+def get_open_events(ref_doctype, ref_docname):
+	return get_filtered_events(ref_doctype, ref_docname, open=True)
+
+
+def get_closed_events(ref_doctype, ref_docname):
+	return get_filtered_events(ref_doctype, ref_docname, open=False)
+
+
+def get_filtered_todos(ref_doctype, ref_docname, status: str | tuple[str, str]):
 	return frappe.get_all(
 		"ToDo",
-		filters={"reference_type": ref_doctype, "reference_name": ref_docname, "status": "Open"},
+		filters={"reference_type": ref_doctype, "reference_name": ref_docname, "status": status},
 		fields=[
 			"name",
 			"description",
@@ -150,9 +187,14 @@ def get_open_todos(ref_doctype, ref_docname):
 	)
 
 
-def get_open_events(ref_doctype, ref_docname):
+def get_filtered_events(ref_doctype, ref_docname, open: bool):
 	event = frappe.qb.DocType("Event")
 	event_link = frappe.qb.DocType("Event Participants")
+
+	if open:
+		event_status_filter = event.status == "Open"
+	else:
+		event_status_filter = event.status != "Open"
 
 	query = (
 		frappe.qb.from_(event)
@@ -169,7 +211,7 @@ def get_open_events(ref_doctype, ref_docname):
 		.where(
 			(event_link.reference_doctype == ref_doctype)
 			& (event_link.reference_docname == ref_docname)
-			& (event.status == "Open")
+			& (event_status_filter)
 		)
 	)
 	data = query.run(as_dict=True)

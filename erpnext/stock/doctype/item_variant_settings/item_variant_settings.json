@@ -8,6 +8,7 @@
   "section_break_3",
   "do_not_update_variants",
   "allow_rename_attribute_value",
+  "allow_different_uom",
   "copy_fields_to_variant",
   "fields"
  ],
@@ -40,11 +41,17 @@
    "fieldtype": "Table",
    "label": "Fields",
    "options": "Variant Field"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_different_uom",
+   "fieldtype": "Check",
+   "label": "Allow Variant UOM to be different from Template UOM"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2024-03-27 13:09:56.095684",
+ "modified": "2025-02-10 16:13:47.435148",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Item Variant Settings",

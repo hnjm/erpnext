@@ -185,15 +185,15 @@ function get_filters() {
 			fieldname: "period_start_date",
 			label: __("Start Date"),
 			fieldtype: "Date",
-			reqd: 1,
 			depends_on: "eval:doc.filter_based_on == 'Date Range'",
+			mandatory_depends_on: "eval:doc.filter_based_on == 'Date Range'",
 		},
 		{
 			fieldname: "period_end_date",
 			label: __("End Date"),
 			fieldtype: "Date",
-			reqd: 1,
 			depends_on: "eval:doc.filter_based_on == 'Date Range'",
+			mandatory_depends_on: "eval:doc.filter_based_on == 'Date Range'",
 		},
 		{
 			fieldname: "from_fiscal_year",
@@ -243,6 +243,7 @@ function get_filters() {
 					company: frappe.query_report.get_filter_value("company"),
 				});
 			},
+			options: "Cost Center",
 		},
 		{
 			fieldname: "project",
@@ -253,6 +254,7 @@ function get_filters() {
 					company: frappe.query_report.get_filter_value("company"),
 				});
 			},
+			options: "Project",
 		},
 	];
 

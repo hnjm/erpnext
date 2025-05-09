@@ -18,6 +18,7 @@ class ItemVariantSettings(Document):
 
 		from erpnext.stock.doctype.variant_field.variant_field import VariantField
 
+		allow_different_uom: DF.Check
 		allow_rename_attribute_value: DF.Check
 		do_not_update_variants: DF.Check
 		fields: DF.Table[VariantField]

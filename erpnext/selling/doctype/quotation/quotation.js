@@ -35,11 +35,19 @@ frappe.ui.form.on("Quotation", {
 				},
 			};
 		});
+
+		frm.set_indicator_formatter("item_code", function (doc) {
+			return !doc.qty && frm.doc.has_unit_price_items ? "yellow" : "";
+		});
 	},
 
 	refresh: function (frm) {
 		frm.trigger("set_label");
 		frm.trigger("set_dynamic_field_label");
+
+		if (frm.doc.docstatus === 0) {
+			erpnext.set_unit_price_items_note(frm);
+		}
 
 		let sbb_field = frm.get_docfield("packed_items", "serial_and_batch_bundle");
 		if (sbb_field) {
@@ -69,6 +77,9 @@ frappe.ui.form.on("Quotation", {
 erpnext.selling.QuotationController = class QuotationController extends erpnext.selling.SellingController {
 	onload(doc, dt, dn) {
 		super.onload(doc, dt, dn);
+
+		// TODO: think of better way to do this
+		// this.frm.trigger("disable_customer_if_creating_from_opportunity");
 	}
 	party_name() {
 		var me = this;
@@ -352,6 +363,32 @@ erpnext.selling.QuotationController = class QuotationController extends erpnext.
 			</p>`
 		);
 		dialog.show();
+	}
+
+	currency() {
+		super.currency();
+		let me = this;
+		const company_currency = this.get_company_currency();
+		if (this.frm.doc.currency && this.frm.doc.currency !== company_currency) {
+			this.get_exchange_rate(
+				this.frm.doc.transaction_date,
+				this.frm.doc.currency,
+				company_currency,
+				function (exchange_rate) {
+					if (exchange_rate != me.frm.doc.conversion_rate) {
+						me.set_margin_amount_based_on_currency(exchange_rate);
+						me.set_actual_charges_based_on_currency(exchange_rate);
+						me.frm.set_value("conversion_rate", exchange_rate);
+					}
+				}
+			);
+		}
+	}
+
+	disable_customer_if_creating_from_opportunity(doc) {
+		if (doc.opportunity) {
+			this.frm.set_df_property("party_name", "read_only", 1);
+		}
 	}
 };
 

@@ -10,6 +10,7 @@ frappe.treeview_settings["Account"] = {
 			fieldtype: "Select",
 			options: erpnext.utils.get_tree_options("company"),
 			label: __("Company"),
+			render_on_toolbar: true,
 			default: erpnext.utils.get_tree_default("company"),
 			on_change: function () {
 				var me = frappe.treeview_settings["Account"].treeview;
@@ -182,7 +183,9 @@ frappe.treeview_settings["Account"] = {
 			function () {
 				frappe.set_route("Tree", "Cost Center", { company: get_company() });
 			},
-			__("View")
+			__("View"),
+			"default",
+			true
 		);
 
 		treeview.page.add_inner_button(
@@ -190,31 +193,12 @@ frappe.treeview_settings["Account"] = {
 			function () {
 				frappe.set_route("Form", "Opening Invoice Creation Tool", { company: get_company() });
 			},
-			__("View")
+			__("View"),
+			"default",
+			true
 		);
 
-		treeview.page.add_inner_button(
-			__("Period Closing Voucher"),
-			function () {
-				frappe.set_route("List", "Period Closing Voucher", { company: get_company() });
-			},
-			__("View")
-		);
-
-		treeview.page.add_inner_button(
-			__("Journal Entry"),
-			function () {
-				frappe.new_doc("Journal Entry", { company: get_company() });
-			},
-			__("Create")
-		);
-		treeview.page.add_inner_button(
-			__("Company"),
-			function () {
-				frappe.new_doc("Company");
-			},
-			__("Create")
-		);
+		treeview.page.add_divider_to_button_group(__("View"));
 
 		// financial statements
 		for (let report of [
@@ -231,7 +215,7 @@ frappe.treeview_settings["Account"] = {
 				function () {
 					frappe.set_route("query-report", report, { company: get_company() });
 				},
-				__("Financial Statements")
+				__("View")
 			);
 		}
 	},

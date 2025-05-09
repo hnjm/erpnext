@@ -92,9 +92,12 @@ class PurchaseOrder(BuyingController):
 		customer_name: DF.Data | None
 		disable_rounded_total: DF.Check
 		discount_amount: DF.Currency
+		dispatch_address: DF.Link | None
+		dispatch_address_display: DF.TextEditor | None
 		from_date: DF.Date | None
 		grand_total: DF.Currency
 		group_same_items: DF.Check
+		has_unit_price_items: DF.Check
 		ignore_pricing_rule: DF.Check
 		in_words: DF.Data | None
 		incoterm: DF.Link | None
@@ -189,6 +192,10 @@ class PurchaseOrder(BuyingController):
 		self.set_onload("supplier_tds", supplier_tds)
 		self.set_onload("can_update_items", self.can_update_items())
 
+	def before_validate(self):
+		self.set_has_unit_price_items()
+		self.flags.allow_zero_qty = self.has_unit_price_items
+
 	def validate(self):
 		super().validate()
 
@@ -224,6 +231,17 @@ class PurchaseOrder(BuyingController):
 			self.doctype, self.supplier, self.company, self.inter_company_order_reference
 		)
 		self.reset_default_field_value("set_warehouse", "items", "warehouse")
+
+	def set_has_unit_price_items(self):
+		"""
+		If permitted in settings and any item has 0 qty, the PO has unit price items.
+		"""
+		if not frappe.db.get_single_value("Buying Settings", "allow_zero_qty_in_purchase_order"):
+			return
+
+		self.has_unit_price_items = any(
+			not row.qty for row in self.get("items") if (row.item_code and not row.qty)
+		)
 
 	def validate_with_previous_doc(self):
 		mri_compare_fields = [["project", "="], ["item_code", "="]]
@@ -469,6 +487,9 @@ class PurchaseOrder(BuyingController):
 		if self.is_against_so():
 			self.update_status_updater()
 
+		if self.is_against_pp():
+			self.update_status_updater_if_from_pp()
+
 		self.update_prevdoc_status()
 		if not self.is_subcontracted or self.is_old_subcontracting_flow:
 			self.update_requested_qty()
@@ -550,6 +571,20 @@ class PurchaseOrder(BuyingController):
 			}
 		)
 
+	def update_status_updater_if_from_pp(self):
+		self.status_updater.append(
+			{
+				"source_dt": "Purchase Order Item",
+				"target_dt": "Production Plan Sub Assembly Item",
+				"join_field": "production_plan_sub_assembly_item",
+				"target_field": "received_qty",
+				"target_parent_dt": "Production Plan",
+				"target_parent_field": "",
+				"target_ref_field": "qty",
+				"source_field": "fg_item_qty",
+			}
+		)
+
 	def update_delivered_qty_in_sales_order(self):
 		"""Update delivered qty in Sales Order for drop ship"""
 		sales_orders_to_update = []
@@ -569,6 +604,9 @@ class PurchaseOrder(BuyingController):
 
 	def is_against_so(self):
 		return any(d.sales_order for d in self.items if d.sales_order)
+
+	def is_against_pp(self):
+		return any(d.production_plan for d in self.items if d.production_plan)
 
 	def set_received_qty_for_drop_ship_items(self):
 		for item in self.items:
@@ -709,8 +747,13 @@ def set_missing_values(source, target):
 
 @frappe.whitelist()
 def make_purchase_receipt(source_name, target_doc=None):
+	has_unit_price_items = frappe.db.get_value("Purchase Order", source_name, "has_unit_price_items")
+
+	def is_unit_price_row(source):
+		return has_unit_price_items and source.qty == 0
+
 	def update_item(obj, target, source_parent):
-		target.qty = flt(obj.qty) - flt(obj.received_qty)
+		target.qty = flt(obj.qty) if is_unit_price_row(obj) else flt(obj.qty) - flt(obj.received_qty)
 		target.stock_qty = (flt(obj.qty) - flt(obj.received_qty)) * flt(obj.conversion_factor)
 		target.amount = (flt(obj.qty) - flt(obj.received_qty)) * flt(obj.rate)
 		target.base_amount = (
@@ -741,7 +784,9 @@ def make_purchase_receipt(source_name, target_doc=None):
 					"wip_composite_asset": "wip_composite_asset",
 				},
 				"postprocess": update_item,
-				"condition": lambda doc: abs(doc.received_qty) < abs(doc.qty)
+				"condition": lambda doc: (
+					True if is_unit_price_row(doc) else abs(doc.received_qty) < abs(doc.qty)
+				)
 				and doc.delivered_by_supplier != 1,
 			},
 			"Purchase Taxes and Charges": {"doctype": "Purchase Taxes and Charges", "reset_value": True},
@@ -902,7 +947,7 @@ def is_po_fully_subcontracted(po_name):
 	query = (
 		frappe.qb.from_(table)
 		.select(table.name)
-		.where((table.parent == po_name) & (table.qty != table.sco_qty))
+		.where((table.parent == po_name) & (table.qty != table.subcontracted_quantity))
 	)
 	return not query.run(as_dict=True)
 
@@ -957,7 +1002,7 @@ def get_mapped_subcontracting_order(source_name, target_doc=None):
 					"material_request_item": "material_request_item",
 				},
 				"field_no_map": ["qty", "fg_item_qty", "amount"],
-				"condition": lambda item: item.qty != item.sco_qty,
+				"condition": lambda item: item.qty != item.subcontracted_quantity,
 			},
 		},
 		target_doc,

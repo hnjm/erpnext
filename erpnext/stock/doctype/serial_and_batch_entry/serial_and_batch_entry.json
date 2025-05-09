@@ -17,7 +17,9 @@
   "outgoing_rate",
   "stock_value_difference",
   "is_outward",
-  "stock_queue"
+  "stock_queue",
+  "section_break_gmim",
+  "reference_for_reservation"
  ],
  "fields": [
   {
@@ -66,6 +68,7 @@
    "label": "Rate Section"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "incoming_rate",
    "fieldtype": "Float",
    "label": "Valuation Rate",
@@ -86,6 +89,7 @@
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "stock_value_difference",
    "fieldtype": "Float",
    "label": "Change in Stock Value",
@@ -117,12 +121,25 @@
    "print_hide": 1,
    "read_only": 1,
    "report_hide": 1
+  },
+  {
+   "fieldname": "section_break_gmim",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reference_for_reservation",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Reference for Reservation",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2024-03-27 13:10:39.060322",
+ "modified": "2025-01-02 21:51:52.528916",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Serial and Batch Entry",

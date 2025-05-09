@@ -11,25 +11,14 @@ from erpnext.deprecation_dumpster import deprecated
 from erpnext.stock.doctype.stock_closing_entry.stock_closing_entry import StockClosing
 from erpnext.stock.doctype.warehouse.warehouse import apply_warehouse_filter
 
-SLE_COUNT_LIMIT = 10_000
-
-
-def _estimate_table_row_count(doctype: str):
-	table = get_table_name(doctype)
-	return cint(
-		frappe.db.sql(
-			f"""select table_rows
-			   from  information_schema.tables
-			   where table_name = '{table}' ;"""
-		)[0][0]
-	)
+SLE_COUNT_LIMIT = 100_000
 
 
 def execute(filters=None):
 	if not filters:
 		filters = {}
 
-	sle_count = _estimate_table_row_count("Stock Ledger Entry")
+	sle_count = frappe.db.estimate_count("Stock Ledger Entry")
 
 	if (
 		sle_count > SLE_COUNT_LIMIT
@@ -179,6 +168,8 @@ def get_stock_ledger_entries_for_batch_bundle(filters):
 	sle = frappe.qb.DocType("Stock Ledger Entry")
 	batch_package = frappe.qb.DocType("Serial and Batch Entry")
 
+	to_date = get_datetime(str(filters.to_date) + " 23:59:59")
+
 	query = (
 		frappe.qb.from_(sle)
 		.inner_join(batch_package)
@@ -194,7 +185,7 @@ def get_stock_ledger_entries_for_batch_bundle(filters):
 			(sle.docstatus < 2)
 			& (sle.is_cancelled == 0)
 			& (sle.has_batch_no == 1)
-			& (sle.posting_date <= filters["to_date"])
+			& (sle.posting_datetime <= to_date)
 		)
 		.groupby(sle.voucher_no, batch_package.batch_no, batch_package.warehouse)
 		.orderby(sle.item_code, sle.warehouse)

@@ -10,7 +10,6 @@ from frappe.utils import cint, cstr, flt, formatdate, get_link_to_form, getdate,
 
 import erpnext
 from erpnext.accounts.deferred_revenue import validate_service_stop_date
-from erpnext.accounts.doctype.gl_entry.gl_entry import update_outstanding_amt
 from erpnext.accounts.doctype.repost_accounting_ledger.repost_accounting_ledger import (
 	validate_docs_for_deferred_accounting,
 	validate_docs_for_voucher_types,
@@ -33,7 +32,7 @@ from erpnext.accounts.general_ledger import (
 	merge_similar_entries,
 )
 from erpnext.accounts.party import get_due_date, get_party_account
-from erpnext.accounts.utils import get_account_currency, get_fiscal_year
+from erpnext.accounts.utils import get_account_currency, get_fiscal_year, update_voucher_outstanding
 from erpnext.assets.doctype.asset.asset import is_cwip_accounting_enabled
 from erpnext.assets.doctype.asset_category.asset_category import get_asset_category_account
 from erpnext.buying.utils import check_on_hold_or_closed_status
@@ -118,6 +117,8 @@ class PurchaseInvoice(BuyingController):
 		currency: DF.Link | None
 		disable_rounded_total: DF.Check
 		discount_amount: DF.Currency
+		dispatch_address: DF.Link | None
+		dispatch_address_display: DF.TextEditor | None
 		due_date: DF.Date | None
 		from_date: DF.Date | None
 		grand_total: DF.Currency
@@ -840,12 +841,12 @@ class PurchaseInvoice(BuyingController):
 
 	def update_supplier_outstanding(self, update_outstanding):
 		if update_outstanding == "No":
-			update_outstanding_amt(
-				self.credit_to,
-				"Supplier",
-				self.supplier,
-				self.doctype,
-				self.return_against if cint(self.is_return) and self.return_against else self.name,
+			update_voucher_outstanding(
+				voucher_type=self.doctype,
+				voucher_no=self.return_against if cint(self.is_return) and self.return_against else self.name,
+				account=self.credit_to,
+				party_type="Supplier",
+				party=self.supplier,
 			)
 
 	def get_gl_entries(self, warehouse_account=None):
@@ -874,6 +875,7 @@ class PurchaseInvoice(BuyingController):
 		self.make_payment_gl_entries(gl_entries)
 		self.make_write_off_gl_entry(gl_entries)
 		self.make_gle_for_rounding_adjustment(gl_entries)
+		self.set_transaction_currency_and_rate_in_gl_map(gl_entries)
 		return gl_entries
 
 	def check_asset_cwip_enabled(self):
@@ -919,6 +921,7 @@ class PurchaseInvoice(BuyingController):
 			"credit_in_account_currency": base_grand_total
 			if self.party_account_currency == self.company_currency
 			else grand_total,
+			"credit_in_transaction_currency": grand_total,
 			"against_voucher": against_voucher,
 			"against_voucher_type": self.doctype,
 			"project": self.project,
@@ -954,7 +957,7 @@ class PurchaseInvoice(BuyingController):
 		valuation_tax_accounts = [
 			d.account_head
 			for d in self.get("taxes")
-			if d.category in ("Valuation", "Total and Valuation")
+			if d.category in ("Valuation", "Valuation and Total")
 			and flt(d.base_tax_amount_after_discount_amount)
 		]
 
@@ -970,7 +973,6 @@ class PurchaseInvoice(BuyingController):
 
 		for item in self.get("items"):
 			if flt(item.base_net_amount):
-				account_currency = get_account_currency(item.expense_account)
 				if item.item_code:
 					frappe.get_cached_value("Item", item.item_code, "asset_category")
 
@@ -979,6 +981,7 @@ class PurchaseInvoice(BuyingController):
 					and self.auto_accounting_for_stock
 					and (item.item_code in stock_items or item.is_fixed_asset)
 				):
+					account_currency = get_account_currency(item.expense_account)
 					# warehouse account
 					warehouse_debit_amount = self.make_stock_adjustment_entry(
 						gl_entries, item, voucher_wise_stock_value, account_currency
@@ -994,6 +997,7 @@ class PurchaseInvoice(BuyingController):
 									"project": item.project or self.project,
 									"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
 									"debit": warehouse_debit_amount,
+									"debit_in_transaction_currency": item.net_amount,
 								},
 								warehouse_account[item.warehouse]["account_currency"],
 								item=item,
@@ -1014,6 +1018,7 @@ class PurchaseInvoice(BuyingController):
 									"project": item.project or self.project,
 									"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
 									"debit": -1 * flt(credit_amount, item.precision("base_net_amount")),
+									"debit_in_transaction_currency": item.net_amount,
 								},
 								warehouse_account[item.from_warehouse]["account_currency"],
 								item=item,
@@ -1028,6 +1033,7 @@ class PurchaseInvoice(BuyingController):
 										"account": item.expense_account,
 										"against": self.supplier,
 										"debit": flt(item.base_net_amount, item.precision("base_net_amount")),
+										"debit_in_transaction_currency": item.net_amount,
 										"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
 										"cost_center": item.cost_center,
 										"project": item.project,
@@ -1045,6 +1051,10 @@ class PurchaseInvoice(BuyingController):
 										"account": item.expense_account,
 										"against": self.supplier,
 										"debit": warehouse_debit_amount,
+										"debit_in_transaction_currency": flt(
+											warehouse_debit_amount / self.conversion_rate,
+											item.precision("net_amount"),
+										),
 										"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
 										"cost_center": item.cost_center,
 										"project": item.project or self.project,
@@ -1057,7 +1067,9 @@ class PurchaseInvoice(BuyingController):
 					# Amount added through landed-cost-voucher
 					if landed_cost_entries:
 						if (item.item_code, item.name) in landed_cost_entries:
-							for account, amount in landed_cost_entries[(item.item_code, item.name)].items():
+							for account, base_amount in landed_cost_entries[
+								(item.item_code, item.name)
+							].items():
 								gl_entries.append(
 									self.get_gl_dict(
 										{
@@ -1065,8 +1077,9 @@ class PurchaseInvoice(BuyingController):
 											"against": item.expense_account,
 											"cost_center": item.cost_center,
 											"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-											"credit": flt(amount["base_amount"]),
-											"credit_in_account_currency": flt(amount["amount"]),
+											"credit": flt(base_amount["base_amount"]),
+											"credit_in_account_currency": flt(base_amount["amount"]),
+											"credit_in_transaction_currency": item.net_amount,
 											"project": item.project or self.project,
 										},
 										item=item,
@@ -1089,6 +1102,7 @@ class PurchaseInvoice(BuyingController):
 									"project": item.project or self.project,
 									"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
 									"credit": flt(item.rm_supp_cost),
+									"credit_in_transaction_currency": item.net_amount,
 								},
 								warehouse_account[self.supplier_warehouse]["account_currency"],
 								item=item,
@@ -1102,7 +1116,8 @@ class PurchaseInvoice(BuyingController):
 						else item.deferred_expense_account
 					)
 
-					dummy, amount = self.get_amount_and_base_amount(item, None)
+					account_currency = get_account_currency(expense_account)
+					amount, base_amount = self.get_amount_and_base_amount(item, None)
 
 					if provisional_accounting_for_non_stock_items:
 						self.make_provisional_gl_entry(gl_entries, item)
@@ -1113,7 +1128,8 @@ class PurchaseInvoice(BuyingController):
 								{
 									"account": expense_account,
 									"against": self.supplier,
-									"debit": amount,
+									"debit": base_amount,
+									"debit_in_transaction_currency": amount,
 									"cost_center": item.cost_center,
 									"project": item.project or self.project,
 								},
@@ -1128,6 +1144,7 @@ class PurchaseInvoice(BuyingController):
 								exchange_rate_map[item.purchase_receipt]
 								and self.conversion_rate != exchange_rate_map[item.purchase_receipt]
 								and item.net_rate == net_rate_map[item.pr_detail]
+								and item.item_code in stock_items
 							):
 								discrepancy_caused_by_exchange_rate_difference = (
 									item.qty * item.net_rate
@@ -1186,6 +1203,10 @@ class PurchaseInvoice(BuyingController):
 									"account": self.stock_received_but_not_billed,
 									"against": self.supplier,
 									"debit": flt(item.item_tax_amount, item.precision("item_tax_amount")),
+									"debit_in_transaction_currency": flt(
+										item.item_tax_amount / self.conversion_rate,
+										item.precision("item_tax_amount"),
+									),
 									"remarks": self.remarks or _("Accounting Entry for Stock"),
 									"cost_center": self.cost_center,
 									"project": item.project or self.project,
@@ -1305,6 +1326,7 @@ class PurchaseInvoice(BuyingController):
 						"account": cost_of_goods_sold_account,
 						"against": item.expense_account,
 						"debit": stock_adjustment_amt,
+						"debit_in_transaction_currency": stock_adjustment_amt / self.conversion_rate,
 						"remarks": self.get("remarks") or _("Stock Adjustment"),
 						"cost_center": item.cost_center,
 						"project": item.project or self.project,
@@ -1315,6 +1337,38 @@ class PurchaseInvoice(BuyingController):
 			)
 
 			warehouse_debit_amount = stock_amount
+
+		elif self.is_return and self.update_stock and self.is_internal_supplier and warehouse_debit_amount:
+			net_rate = item.base_net_amount
+			if item.sales_incoming_rate:  # for internal transfer
+				net_rate = item.qty * item.sales_incoming_rate
+
+			stock_amount = (
+				net_rate
+				+ item.item_tax_amount
+				+ flt(item.landed_cost_voucher_amount)
+				+ flt(item.get("amount_difference_with_purchase_invoice"))
+			)
+
+			if flt(stock_amount, net_amt_precision) != flt(warehouse_debit_amount, net_amt_precision):
+				cost_of_goods_sold_account = self.get_company_default("default_expense_account")
+				stock_adjustment_amt = stock_amount - warehouse_debit_amount
+
+				gl_entries.append(
+					self.get_gl_dict(
+						{
+							"account": cost_of_goods_sold_account,
+							"against": item.expense_account,
+							"debit": stock_adjustment_amt,
+							"debit_in_transaction_currency": stock_adjustment_amt / self.conversion_rate,
+							"remarks": self.get("remarks") or _("Stock Adjustment"),
+							"cost_center": item.cost_center,
+							"project": item.project or self.project,
+						},
+						account_currency,
+						item=item,
+					)
+				)
 
 		return warehouse_debit_amount
 
@@ -1338,6 +1392,7 @@ class PurchaseInvoice(BuyingController):
 							dr_or_cr + "_in_account_currency": base_amount
 							if account_currency == self.company_currency
 							else amount,
+							dr_or_cr + "_in_transaction_currency": amount,
 							"cost_center": tax.cost_center,
 						},
 						account_currency,
@@ -1384,6 +1439,10 @@ class PurchaseInvoice(BuyingController):
 								"cost_center": tax.cost_center,
 								"against": self.supplier,
 								"credit": applicable_amount,
+								"credit_in_transaction_currency": flt(
+									applicable_amount / self.conversion_rate,
+									frappe.get_precision("Purchase Invoice Item", "item_tax_amount"),
+								),
 								"remarks": self.remarks or _("Accounting Entry for Stock"),
 							},
 							item=tax,
@@ -1402,6 +1461,10 @@ class PurchaseInvoice(BuyingController):
 								"cost_center": tax.cost_center,
 								"against": self.supplier,
 								"credit": valuation_tax[tax.name],
+								"credit_in_transaction_currency": flt(
+									valuation_tax[tax.name] / self.conversion_rate,
+									frappe.get_precision("Purchase Invoice Item", "item_tax_amount"),
+								),
 								"remarks": self.remarks or _("Accounting Entry for Stock"),
 							},
 							item=tax,
@@ -1417,6 +1480,7 @@ class PurchaseInvoice(BuyingController):
 						"account": self.unrealized_profit_loss_account,
 						"against": self.supplier,
 						"credit": flt(self.total_taxes_and_charges),
+						"credit_in_transaction_currency": flt(self.total_taxes_and_charges),
 						"credit_in_account_currency": flt(self.base_total_taxes_and_charges),
 						"cost_center": self.cost_center,
 					},
@@ -1466,6 +1530,7 @@ class PurchaseInvoice(BuyingController):
 						"debit_in_account_currency": self.base_paid_amount
 						if self.party_account_currency == self.company_currency
 						else self.paid_amount,
+						"debit_in_transaction_currency": self.paid_amount,
 						"against_voucher": self.return_against
 						if cint(self.is_return) and self.return_against
 						else self.name,
@@ -1487,6 +1552,7 @@ class PurchaseInvoice(BuyingController):
 						"credit_in_account_currency": self.base_paid_amount
 						if bank_account_currency == self.company_currency
 						else self.paid_amount,
+						"credit_in_transaction_currency": self.paid_amount,
 						"cost_center": self.cost_center,
 					},
 					bank_account_currency,
@@ -1511,6 +1577,7 @@ class PurchaseInvoice(BuyingController):
 						"debit_in_account_currency": self.base_write_off_amount
 						if self.party_account_currency == self.company_currency
 						else self.write_off_amount,
+						"debit_in_transaction_currency": self.write_off_amount,
 						"against_voucher": self.return_against
 						if cint(self.is_return) and self.return_against
 						else self.name,
@@ -1531,6 +1598,7 @@ class PurchaseInvoice(BuyingController):
 						"credit_in_account_currency": self.base_write_off_amount
 						if write_off_account_currency == self.company_currency
 						else self.write_off_amount,
+						"credit_in_transaction_currency": self.write_off_amount,
 						"cost_center": self.cost_center or self.write_off_cost_center,
 					},
 					item=self,
@@ -1802,13 +1870,13 @@ class PurchaseInvoice(BuyingController):
 			self.remove(d)
 
 		## Add pending vouchers on which tax was withheld
-		for voucher_no, voucher_details in voucher_wise_amount.items():
+		for row in voucher_wise_amount:
 			self.append(
 				"tax_withheld_vouchers",
 				{
-					"voucher_name": voucher_no,
-					"voucher_type": voucher_details.get("voucher_type"),
-					"taxable_amount": voucher_details.get("amount"),
+					"voucher_name": row.voucher_name,
+					"voucher_type": row.voucher_type,
+					"taxable_amount": row.taxable_amount,
 				},
 			)
 

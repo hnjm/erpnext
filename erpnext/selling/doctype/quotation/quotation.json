@@ -10,7 +10,6 @@
  "engine": "InnoDB",
  "field_order": [
   "customer_section",
-  "title",
   "naming_series",
   "quotation_to",
   "party_name",
@@ -21,6 +20,7 @@
   "column_break1",
   "order_type",
   "company",
+  "has_unit_price_items",
   "amended_from",
   "currency_and_price_list",
   "currency",
@@ -141,16 +141,6 @@
    "fieldname": "customer_section",
    "fieldtype": "Section Break",
    "options": "fa fa-user"
-  },
-  {
-   "allow_on_submit": 1,
-   "default": "{customer_name}",
-   "fieldname": "title",
-   "fieldtype": "Data",
-   "hidden": 1,
-   "label": "Title",
-   "no_copy": 1,
-   "print_hide": 1
   },
   {
    "fieldname": "naming_series",
@@ -1100,13 +1090,21 @@
    "label": "Company Contact Person",
    "options": "Contact",
    "print_hide": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "has_unit_price_items",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Has Unit Price Items",
+   "no_copy": 1
   }
  ],
  "icon": "fa fa-shopping-cart",
  "idx": 82,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-11-26 12:43:29.293637",
+ "modified": "2025-03-03 16:49:20.050303",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Quotation",
@@ -1197,11 +1195,12 @@
    "role": "Maintenance User"
   }
  ],
+ "row_format": "Dynamic",
  "search_fields": "status,transaction_date,party_name,order_type",
  "show_name_in_global_search": 1,
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "party_name",
- "title_field": "title"
+ "title_field": "customer_name"
 }

@@ -40,14 +40,17 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 
 			pos_inv = create_pos_invoice(rate=300, do_not_submit=1)
 			pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 300})
+			pos_inv.save()
 			pos_inv.submit()
 
 			pos_inv2 = create_pos_invoice(rate=3200, do_not_submit=1)
 			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200})
+			pos_inv2.save()
 			pos_inv2.submit()
 
 			pos_inv3 = create_pos_invoice(customer="_Test Customer 2", rate=2300, do_not_submit=1)
 			pos_inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300})
+			pos_inv3.save()
 			pos_inv3.submit()
 
 			consolidate_pos_invoices()
@@ -73,14 +76,17 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 
 			pos_inv = create_pos_invoice(rate=300, do_not_submit=1)
 			pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 300})
+			pos_inv.save()
 			pos_inv.submit()
 
 			pos_inv2 = create_pos_invoice(rate=3200, do_not_submit=1)
 			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200})
+			pos_inv2.save()
 			pos_inv2.submit()
 
 			pos_inv3 = create_pos_invoice(customer="_Test Customer 2", rate=2300, do_not_submit=1)
 			pos_inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300})
+			pos_inv3.save()
 			pos_inv3.submit()
 
 			pos_inv_cn = make_sales_return(pos_inv.name)
@@ -135,6 +141,7 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 			)
 			inv.insert()
 			inv.payments[0].amount = inv.grand_total
+			inv.save()
 			inv.submit()
 
 			inv2 = create_pos_invoice(qty=1, rate=100, do_not_save=True)
@@ -152,6 +159,7 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 			)
 			inv2.insert()
 			inv2.payments[0].amount = inv.grand_total
+			inv2.save()
 			inv2.submit()
 
 			consolidate_pos_invoices()
@@ -291,7 +299,7 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 			inv2.submit()
 
 			inv3 = create_pos_invoice(qty=3, rate=600, do_not_save=True)
-			inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 1000})
+			inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 1800})
 			inv3.insert()
 			inv3.submit()
 
@@ -299,8 +307,8 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 
 			inv.load_from_db()
 			consolidated_invoice = frappe.get_doc("Sales Invoice", inv.consolidated_invoice)
-			self.assertEqual(consolidated_invoice.outstanding_amount, 800)
-			self.assertNotEqual(consolidated_invoice.status, "Paid")
+			self.assertNotEqual(consolidated_invoice.outstanding_amount, 800)
+			self.assertEqual(consolidated_invoice.status, "Paid")
 
 		finally:
 			frappe.set_user("Administrator")
@@ -435,6 +443,7 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 				do_not_submit=1,
 			)
 			pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 100})
+			pos_inv.save()
 			pos_inv.submit()
 
 			pos_inv_cn = make_sales_return(pos_inv.name)
@@ -449,6 +458,7 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 				do_not_submit=1,
 			)
 			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 100})
+			pos_inv2.save()
 			pos_inv2.submit()
 
 			consolidate_pos_invoices()
@@ -457,6 +467,61 @@ class TestPOSInvoiceMergeLog(IntegrationTestCase):
 			pos_inv2.load_from_db()
 
 			self.assertNotEqual(pos_inv.consolidated_invoice, pos_inv2.consolidated_invoice)
+
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.sql("delete from `tabPOS Profile`")
+			frappe.db.sql("delete from `tabPOS Invoice`")
+
+	def test_separate_consolidated_invoice_for_different_accounting_dimensions(self):
+		"""
+		Creating 3 POS Invoices where first POS Invoice has different Cost Center than the other two.
+		Consolidate the Invoices.
+		Check whether the first POS Invoice is consolidated with a separate Sales Invoice than the other two.
+		Check whether the second and third POS Invoice are consolidated with the same Sales Invoice.
+		"""
+		from erpnext.accounts.doctype.cost_center.test_cost_center import create_cost_center
+
+		frappe.db.sql("delete from `tabPOS Invoice`")
+
+		create_cost_center(cost_center_name="_Test POS Cost Center 1", is_group=0)
+		create_cost_center(cost_center_name="_Test POS Cost Center 2", is_group=0)
+
+		try:
+			test_user, pos_profile = init_user_and_profile()
+
+			pos_inv = create_pos_invoice(rate=300, do_not_submit=1)
+			pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 300})
+			pos_inv.cost_center = "_Test POS Cost Center 1 - _TC"
+			pos_inv.save()
+			pos_inv.submit()
+
+			pos_inv2 = create_pos_invoice(rate=3200, do_not_submit=1)
+			pos_inv2.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 3200})
+			pos_inv.cost_center = "_Test POS Cost Center 2 - _TC"
+			pos_inv2.save()
+			pos_inv2.submit()
+
+			pos_inv3 = create_pos_invoice(rate=2300, do_not_submit=1)
+			pos_inv3.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 2300})
+			pos_inv.cost_center = "_Test POS Cost Center 2 - _TC"
+			pos_inv3.save()
+			pos_inv3.submit()
+
+			consolidate_pos_invoices()
+
+			pos_inv.load_from_db()
+			self.assertTrue(frappe.db.exists("Sales Invoice", pos_inv.consolidated_invoice))
+
+			pos_inv2.load_from_db()
+			self.assertTrue(frappe.db.exists("Sales Invoice", pos_inv2.consolidated_invoice))
+
+			self.assertFalse(pos_inv.consolidated_invoice == pos_inv3.consolidated_invoice)
+
+			pos_inv3.load_from_db()
+			self.assertTrue(frappe.db.exists("Sales Invoice", pos_inv3.consolidated_invoice))
+
+			self.assertTrue(pos_inv2.consolidated_invoice == pos_inv3.consolidated_invoice)
 
 		finally:
 			frappe.set_user("Administrator")

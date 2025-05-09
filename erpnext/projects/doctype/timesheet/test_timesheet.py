@@ -10,9 +10,15 @@ from frappe.utils import add_to_date, now_datetime, nowdate
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.projects.doctype.timesheet.timesheet import OverlapError, make_sales_invoice
 from erpnext.setup.doctype.employee.test_employee import make_employee
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestTimesheet(IntegrationTestCase):
+class TestTimesheet(ERPNextTestSuite):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		cls.make_projects()
+
 	def setUp(self):
 		frappe.db.delete("Timesheet")
 
@@ -53,6 +59,7 @@ class TestTimesheet(IntegrationTestCase):
 		self.assertEqual(item.qty, 2.00)
 		self.assertEqual(item.rate, 50.00)
 
+	@IntegrationTestCase.change_settings("Projects Settings", {"fetch_timesheet_in_sales_invoice": 1})
 	def test_timesheet_billing_based_on_project(self):
 		emp = make_employee("test_employee_6@salary.com")
 		project = frappe.get_value("Project", {"project_name": "_Test Project"})
@@ -62,6 +69,7 @@ class TestTimesheet(IntegrationTestCase):
 		)
 		sales_invoice = create_sales_invoice(do_not_save=True)
 		sales_invoice.project = project
+		sales_invoice.add_timesheet_data()
 		sales_invoice.submit()
 
 		ts = frappe.get_doc("Timesheet", timesheet.name)

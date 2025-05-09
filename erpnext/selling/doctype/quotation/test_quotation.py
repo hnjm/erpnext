@@ -2,7 +2,7 @@
 # License: GNU General Public License v3. See license.txt
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase, change_settings
 from frappe.utils import add_days, add_months, flt, getdate, nowdate
 
 from erpnext.controllers.accounts_controller import InvalidQtyError
@@ -30,6 +30,15 @@ class TestQuotation(IntegrationTestCase):
 		qo.save()
 		self.assertEqual(qo.items[0].qty, 1)
 
+	def test_quotation_zero_qty(self):
+		"""
+		Test if Quote with zero qty (Unit Price Item) is conditionally allowed.
+		"""
+		qo = make_quotation(qty=0, do_not_save=True)
+		with change_settings("Selling Settings", {"allow_zero_qty_in_quotation": 1}):
+			qo.save()
+			self.assertEqual(qo.items[0].qty, 0)
+
 	def test_make_quotation_without_terms(self):
 		quotation = make_quotation(do_not_save=1)
 		self.assertFalse(quotation.get("payment_schedule"))
@@ -50,6 +59,38 @@ class TestQuotation(IntegrationTestCase):
 		sales_order = make_sales_order(quotation.name)
 
 		self.assertTrue(sales_order.get("payment_schedule"))
+
+	def test_do_not_add_ordered_items_in_new_sales_order(self):
+		from erpnext.selling.doctype.quotation.quotation import make_sales_order
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		item = make_item("_Test Item for Quotation for SO", {"is_stock_item": 1})
+
+		quotation = make_quotation(qty=5, do_not_submit=True)
+		quotation.append(
+			"items",
+			{
+				"item_code": item.name,
+				"qty": 5,
+				"rate": 100,
+				"conversion_factor": 1,
+				"uom": item.stock_uom,
+				"warehouse": "_Test Warehouse - _TC",
+				"stock_uom": item.stock_uom,
+			},
+		)
+		quotation.submit()
+
+		sales_order = make_sales_order(quotation.name)
+		sales_order.delivery_date = nowdate()
+		self.assertEqual(len(sales_order.items), 2)
+		sales_order.remove(sales_order.items[1])
+		sales_order.submit()
+
+		sales_order = make_sales_order(quotation.name)
+		self.assertEqual(len(sales_order.items), 1)
+		self.assertEqual(sales_order.items[0].item_code, item.name)
+		self.assertEqual(sales_order.items[0].qty, 5.0)
 
 	def test_gross_profit(self):
 		from erpnext.stock.doctype.item.test_item import make_item
@@ -751,6 +792,39 @@ class TestQuotation(IntegrationTestCase):
 		self.assertEqual(quotation.grand_total, 73.8)
 		self.assertEqual(quotation.rounding_adjustment, 0)
 		self.assertEqual(quotation.rounded_total, 0)
+
+	@IntegrationTestCase.change_settings("Selling Settings", {"allow_zero_qty_in_quotation": 1})
+	def test_so_from_zero_qty_quotation(self):
+		from erpnext.selling.doctype.quotation.quotation import make_sales_order
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		make_item("_Test Item 2", {"is_stock_item": 1})
+		quotation = make_quotation(qty=0, do_not_save=1)
+		quotation.append("items", {"item_code": "_Test Item 2", "qty": 10, "rate": 100})
+		quotation.submit()
+
+		sales_order = make_sales_order(quotation.name)
+		sales_order.delivery_date = nowdate()
+		self.assertEqual(sales_order.items[0].qty, 0)
+		self.assertEqual(sales_order.items[1].qty, 10)
+
+		sales_order.items[0].qty = 10
+		sales_order.items[1].qty = 5
+		sales_order.submit()
+
+		quotation.reload()
+		self.assertEqual(quotation.status, "Partially Ordered")
+
+		sales_order_2 = make_sales_order(quotation.name)
+		sales_order_2.delivery_date = nowdate()
+		self.assertEqual(sales_order_2.items[0].qty, 0)
+		self.assertEqual(sales_order_2.items[1].qty, 5)
+
+		del sales_order_2.items[0]
+		sales_order_2.submit()
+
+		quotation.reload()
+		self.assertEqual(quotation.status, "Ordered")
 
 
 def enable_calculate_bundle_price(enable=1):

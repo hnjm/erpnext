@@ -10,6 +10,14 @@ from frappe.model.document import Document
 from frappe.utils import cint, comma_and, create_batch, get_link_to_form
 from frappe.utils.background_jobs import get_job, is_job_enqueued
 
+LEDGER_ENTRY_DOCTYPES = frozenset(
+	(
+		"GL Entry",
+		"Payment Ledger Entry",
+		"Stock Ledger Entry",
+	)
+)
+
 
 class TransactionDeletionRecord(Document):
 	# begin: auto-generated types
@@ -220,35 +228,42 @@ class TransactionDeletionRecord(Document):
 		"""Delete addresses to which leads are linked"""
 		self.validate_doc_status()
 		if not self.delete_leads_and_addresses:
-			leads = frappe.get_all("Lead", filters={"company": self.company})
-			leads = ["'%s'" % row.get("name") for row in leads]
+			leads = frappe.db.get_all("Lead", filters={"company": self.company}, pluck="name")
 			addresses = []
 			if leads:
-				addresses = frappe.db.sql_list(
-					"""select parent from `tabDynamic Link` where link_name
-					in ({leads})""".format(leads=",".join(leads))
+				addresses = frappe.db.get_all(
+					"Dynamic Link", filters={"link_name": ("in", leads)}, pluck="parent"
 				)
-
 				if addresses:
 					addresses = ["%s" % frappe.db.escape(addr) for addr in addresses]
 
-					frappe.db.sql(
-						"""delete from `tabAddress` where name in ({addresses}) and
-						name not in (select distinct dl1.parent from `tabDynamic Link` dl1
-						inner join `tabDynamic Link` dl2 on dl1.parent=dl2.parent
-						and dl1.link_doctype<>dl2.link_doctype)""".format(addresses=",".join(addresses))
-					)
+					address = qb.DocType("Address")
+					dl1 = qb.DocType("Dynamic Link")
+					dl2 = qb.DocType("Dynamic Link")
 
-					frappe.db.sql(
-						"""delete from `tabDynamic Link` where link_doctype='Lead'
-						and parenttype='Address' and link_name in ({leads})""".format(leads=",".join(leads))
-					)
+					qb.from_(address).delete().where(
+						(address.name.isin(addresses))
+						& (
+							address.name.notin(
+								qb.from_(dl1)
+								.join(dl2)
+								.on((dl1.parent == dl2.parent) & (dl1.link_doctype != dl2.link_doctype))
+								.select(dl1.parent)
+								.distinct()
+							)
+						)
+					).run()
 
-				frappe.db.sql(
-					"""update `tabCustomer` set lead_name=NULL where lead_name in ({leads})""".format(
-						leads=",".join(leads)
-					)
-				)
+					dynamic_link = qb.DocType("Dynamic Link")
+					qb.from_(dynamic_link).delete().where(
+						(dynamic_link.link_doctype == "Lead")
+						& (dynamic_link.parenttype == "Address")
+						& (dynamic_link.link_name.isin(leads))
+					).run()
+
+				customer = qb.DocType("Customer")
+				qb.update(customer).set(customer.lead_name, None).where(customer.lead_name.isin(leads)).run()
+
 			self.db_set("delete_leads_and_addresses", 1)
 		self.enqueue_task(task="Reset Company Values")
 
@@ -468,31 +483,31 @@ def get_doctypes_to_be_ignored():
 
 @frappe.whitelist()
 def is_deletion_doc_running(company: str | None = None, err_msg: str | None = None):
-	if company:
-		if running_deletion_jobs := frappe.db.get_all(
-			"Transaction Deletion Record",
-			filters={"docstatus": 1, "company": company, "status": "Running"},
-		):
-			if not err_msg:
-				err_msg = ""
-			frappe.throw(
-				title=_("Deletion in Progress!"),
-				msg=_("Transaction Deletion Document: {0} is running for this Company. {1}").format(
-					get_link_to_form("Transaction Deletion Record", running_deletion_jobs[0].name), err_msg
-				),
-			)
+	if not company:
+		return
+
+	running_deletion_job = frappe.db.get_value(
+		"Transaction Deletion Record",
+		{"docstatus": 1, "company": company, "status": "Running"},
+		"name",
+	)
+
+	if not running_deletion_job:
+		return
+
+	frappe.throw(
+		title=_("Deletion in Progress!"),
+		msg=_("Transaction Deletion Document: {0} is running for this Company. {1}").format(
+			get_link_to_form("Transaction Deletion Record", running_deletion_job), err_msg or ""
+		),
+	)
 
 
 def check_for_running_deletion_job(doc, method=None):
 	# Check if DocType has 'company' field
-	if doc.doctype not in ("GL Entry", "Payment Ledger Entry", "Stock Ledger Entry"):
-		df = qb.DocType("DocField")
-		if (
-			qb.from_(df)
-			.select(df.parent)
-			.where((df.fieldname == "company") & (df.parent == doc.doctype))
-			.run()
-		):
-			is_deletion_doc_running(
-				doc.company, _("Cannot make any transactions until the deletion job is completed")
-			)
+	if doc.doctype in LEDGER_ENTRY_DOCTYPES or not doc.meta.has_field("company"):
+		return
+
+	is_deletion_doc_running(
+		doc.company, _("Cannot make any transactions until the deletion job is completed")
+	)

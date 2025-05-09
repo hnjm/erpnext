@@ -1,7 +1,10 @@
 # Copyright (c) 2017, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+from collections import Counter
 
+import frappe
+from frappe import _
 from frappe.model.document import Document
 
 
@@ -22,4 +25,14 @@ class POSSettings(Document):
 	# end: auto-generated types
 
 	def validate(self):
-		pass
+		self.validate_invoice_fields()
+
+	def validate_invoice_fields(self):
+		invoice_fields = [field.fieldname for field in self.invoice_fields]
+		duplicate_invoice_fields = {key for key, value in Counter(invoice_fields).items() if value > 1}
+
+		if len(duplicate_invoice_fields):
+			for field in duplicate_invoice_fields:
+				frappe.throw(
+					title=_("Duplicate POS Fields"), msg=_("'{0}' has been already added.").format(field)
+				)

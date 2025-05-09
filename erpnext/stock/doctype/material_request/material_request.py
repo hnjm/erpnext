@@ -159,6 +159,29 @@ class MaterialRequest(BuyingController):
 		self.reset_default_field_value("set_warehouse", "items", "warehouse")
 		self.reset_default_field_value("set_from_warehouse", "items", "from_warehouse")
 
+		self.validate_pp_qty()
+
+	def validate_pp_qty(self):
+		items_from_pp = [item for item in self.items if item.material_request_plan_item]
+		if items_from_pp:
+			items_mr_plan_items = [item.material_request_plan_item for item in items_from_pp]
+			table = frappe.qb.DocType("Material Request Plan Item")
+			query = (
+				frappe.qb.from_(table)
+				.select(table.name, (table.quantity - table.requested_qty).as_("available_qty"))
+				.where(table.name.isin(items_mr_plan_items))
+			)
+			result = query.run(as_dict=True)
+
+			for item in items_from_pp:
+				row = next(r for r in result if r.name == item.material_request_plan_item)
+				if item.qty > row.available_qty:
+					frappe.throw(
+						_("Quantity cannot be greater than {0} for Item {1}").format(
+							row.available_qty, item.item_code
+						)
+					)
+
 	def before_update_after_submit(self):
 		self.validate_schedule_date()
 
@@ -233,7 +256,7 @@ class MaterialRequest(BuyingController):
 				)
 
 	def on_cancel(self):
-		self.update_requested_qty_in_production_plan()
+		self.update_requested_qty_in_production_plan(cancel=True)
 		self.update_requested_qty()
 
 	def get_mr_items_ordered_qty(self, mr_items):
@@ -337,11 +360,14 @@ class MaterialRequest(BuyingController):
 				},
 			)
 
-	def update_requested_qty_in_production_plan(self):
+	def update_requested_qty_in_production_plan(self, cancel=False):
 		production_plans = []
 		for d in self.get("items"):
 			if d.production_plan and d.material_request_plan_item:
-				qty = d.qty if self.docstatus == 1 else 0
+				requested_qty = frappe.get_value(
+					"Material Request Plan Item", d.material_request_plan_item, "requested_qty"
+				)
+				qty = (requested_qty + d.qty) if not cancel else (requested_qty - d.qty)
 				frappe.db.set_value(
 					"Material Request Plan Item", d.material_request_plan_item, "requested_qty", qty
 				)
@@ -387,7 +413,7 @@ def set_missing_values(source, target_doc):
 def update_item(obj, target, source_parent):
 	target.conversion_factor = obj.conversion_factor
 
-	qty = obj.received_qty or obj.ordered_qty
+	qty = obj.ordered_qty or obj.received_qty
 	target.qty = flt(flt(obj.stock_qty) - flt(qty)) / target.conversion_factor
 	target.stock_qty = target.qty * target.conversion_factor
 	if getdate(target.schedule_date) < getdate(nowdate()):
@@ -463,7 +489,7 @@ def make_purchase_order(source_name, target_doc=None, args=None):
 		filtered_items = args.get("filtered_children", [])
 		child_filter = d.name in filtered_items if filtered_items else True
 
-		qty = d.received_qty or d.ordered_qty
+		qty = d.ordered_qty or d.received_qty
 
 		return qty < d.stock_qty and child_filter
 
@@ -525,7 +551,7 @@ def make_request_for_quotation(source_name, target_doc=None):
 				"field_map": [
 					["name", "material_request_item"],
 					["parent", "material_request"],
-					["uom", "uom"],
+					["project", "project_name"],
 				],
 			},
 		},
@@ -764,6 +790,7 @@ def make_stock_entry(source_name, target_doc=None):
 					"uom": "stock_uom",
 					"job_card_item": "job_card_item",
 				},
+				"field_no_map": ["expense_account"],
 				"postprocess": update_item,
 				"condition": lambda doc: (
 					flt(doc.ordered_qty, doc.precision("ordered_qty"))
@@ -858,7 +885,7 @@ def create_pick_list(source_name, target_doc=None):
 			},
 			"Material Request Item": {
 				"doctype": "Pick List Item",
-				"field_map": {"name": "material_request_item", "qty": "stock_qty"},
+				"field_map": {"name": "material_request_item", "stock_qty": "stock_qty"},
 			},
 		},
 		target_doc,

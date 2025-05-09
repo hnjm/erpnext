@@ -13,7 +13,6 @@ from pypika import functions as fn
 import erpnext
 from erpnext.accounts.utils import get_account_currency
 from erpnext.assets.doctype.asset.asset import get_asset_account, is_cwip_accounting_enabled
-from erpnext.assets.doctype.asset_category.asset_category import get_asset_category_account
 from erpnext.buying.utils import check_on_hold_or_closed_status
 from erpnext.controllers.accounts_controller import merge_taxes
 from erpnext.controllers.buying_controller import BuyingController
@@ -70,6 +69,8 @@ class PurchaseReceipt(BuyingController):
 		currency: DF.Link
 		disable_rounded_total: DF.Check
 		discount_amount: DF.Currency
+		dispatch_address: DF.Link | None
+		dispatch_address_display: DF.TextEditor | None
 		grand_total: DF.Currency
 		group_same_items: DF.Check
 		ignore_pricing_rule: DF.Check
@@ -383,6 +384,39 @@ class PurchaseReceipt(BuyingController):
 		self.repost_future_sle_and_gle()
 		self.set_consumed_qty_in_subcontract_order()
 		self.reserve_stock_for_sales_order()
+		self.update_received_qty_if_from_pp()
+
+	def update_received_qty_if_from_pp(self):
+		from frappe.query_builder.functions import Sum
+
+		items_from_po = [item.purchase_order_item for item in self.items if item.purchase_order_item]
+		if items_from_po:
+			table = frappe.qb.DocType("Purchase Order Item")
+			subquery = (
+				frappe.qb.from_(table)
+				.select(table.production_plan_sub_assembly_item)
+				.distinct()
+				.where(table.name.isin(items_from_po) & table.production_plan_sub_assembly_item.isnotnull())
+			)
+			result = subquery.run(as_dict=True)
+			if result:
+				result = [item.production_plan_sub_assembly_item for item in result]
+				query = (
+					frappe.qb.from_(table)
+					.select(
+						table.production_plan_sub_assembly_item,
+						Sum(table.received_qty / (table.qty / table.fg_item_qty)).as_("received_qty"),
+					)
+					.where(table.production_plan_sub_assembly_item.isin(result))
+					.groupby(table.production_plan_sub_assembly_item)
+				)
+				for row in query.run(as_dict=True):
+					frappe.set_value(
+						"Production Plan Sub Assembly Item",
+						row.production_plan_sub_assembly_item,
+						"received_qty",
+						row.received_qty,
+					)
 
 	def check_next_docstatus(self):
 		submit_rv = frappe.db.sql(
@@ -424,6 +458,15 @@ class PurchaseReceipt(BuyingController):
 		)
 		self.delete_auto_created_batches()
 		self.set_consumed_qty_in_subcontract_order()
+		self.update_received_qty_if_from_pp()
+
+	def before_cancel(self):
+		super().before_cancel()
+		self.remove_amount_difference_with_purchase_invoice()
+
+	def remove_amount_difference_with_purchase_invoice(self):
+		for item in self.items:
+			item.amount_difference_with_purchase_invoice = 0
 
 	def get_gl_entries(self, warehouse_account=None, via_landed_cost_voucher=False):
 		from erpnext.accounts.general_ledger import process_gl_map
@@ -572,15 +615,15 @@ class PurchaseReceipt(BuyingController):
 							item=item,
 						)
 
-		def make_rate_difference_entry(item):
-			if item.rate_difference_with_purchase_invoice and stock_asset_rbnb:
+		def make_amount_difference_entry(item):
+			if item.amount_difference_with_purchase_invoice and stock_asset_rbnb:
 				account_currency = get_account_currency(stock_asset_rbnb)
 				self.add_gl_entry(
 					gl_entries=gl_entries,
 					account=stock_asset_rbnb,
 					cost_center=item.cost_center,
 					debit=0.0,
-					credit=flt(item.rate_difference_with_purchase_invoice),
+					credit=flt(item.amount_difference_with_purchase_invoice),
 					remarks=_("Adjustment based on Purchase Invoice rate"),
 					against_account=stock_asset_account_name,
 					account_currency=account_currency,
@@ -613,7 +656,7 @@ class PurchaseReceipt(BuyingController):
 				+ flt(item.landed_cost_voucher_amount)
 				+ flt(item.rm_supp_cost)
 				+ flt(item.item_tax_amount)
-				+ flt(item.rate_difference_with_purchase_invoice)
+				+ flt(item.amount_difference_with_purchase_invoice)
 			)
 
 			divisional_loss = flt(
@@ -703,7 +746,7 @@ class PurchaseReceipt(BuyingController):
 					make_item_asset_inward_gl_entry(d, stock_value_diff, stock_asset_account_name)
 					outgoing_amount = make_stock_received_but_not_billed_entry(d)
 					make_landed_cost_gl_entries(d)
-					make_rate_difference_entry(d)
+					make_amount_difference_entry(d)
 					make_sub_contracting_gl_entries(d)
 					make_divisional_loss_gl_entry(d, outgoing_amount)
 			elif (d.warehouse and d.warehouse not in warehouse_with_no_account) or (
@@ -1039,15 +1082,19 @@ def get_billed_amount_against_po(po_items):
 	if not po_items:
 		return {}
 
+	purchase_invoice = frappe.qb.DocType("Purchase Invoice")
 	purchase_invoice_item = frappe.qb.DocType("Purchase Invoice Item")
 
 	query = (
 		frappe.qb.from_(purchase_invoice_item)
+		.inner_join(purchase_invoice)
+		.on(purchase_invoice_item.parent == purchase_invoice.name)
 		.select(fn.Sum(purchase_invoice_item.amount).as_("billed_amt"), purchase_invoice_item.po_detail)
 		.where(
 			(purchase_invoice_item.po_detail.isin(po_items))
-			& (purchase_invoice_item.docstatus == 1)
+			& (purchase_invoice.docstatus == 1)
 			& (purchase_invoice_item.pr_detail.isnull())
+			& (purchase_invoice.update_stock == 0)
 		)
 		.groupby(purchase_invoice_item.po_detail)
 	).run(as_dict=1)
@@ -1061,6 +1108,9 @@ def update_billing_percentage(pr_doc, update_modified=True, adjust_incoming_rate
 
 	total_amount, total_billed_amount = 0, 0
 	item_wise_returned_qty = get_item_wise_returned_qty(pr_doc)
+
+	if adjust_incoming_rate:
+		item_wise_billed_qty = get_billed_qty_against_purchase_receipt(pr_doc)
 
 	for item in pr_doc.items:
 		returned_qty = flt(item_wise_returned_qty.get(item.name))
@@ -1081,11 +1131,18 @@ def update_billing_percentage(pr_doc, update_modified=True, adjust_incoming_rate
 
 		if adjust_incoming_rate:
 			adjusted_amt = 0.0
-			if item.billed_amt is not None and item.amount is not None:
-				adjusted_amt = flt(item.billed_amt) - flt(item.amount)
 
-			adjusted_amt = adjusted_amt * flt(pr_doc.conversion_rate)
-			item.db_set("rate_difference_with_purchase_invoice", adjusted_amt, update_modified=False)
+			if (
+				item.billed_amt is not None
+				and item.amount is not None
+				and item_wise_billed_qty.get(item.name)
+			):
+				adjusted_amt = (
+					flt(item.billed_amt / item_wise_billed_qty.get(item.name)) - flt(item.rate)
+				) * item.qty
+
+			adjusted_amt = flt(adjusted_amt * flt(pr_doc.conversion_rate), item.precision("amount"))
+			item.db_set("amount_difference_with_purchase_invoice", adjusted_amt, update_modified=False)
 
 	percent_billed = round(100 * (total_billed_amount / (total_amount or 1)), 6)
 	pr_doc.db_set("per_billed", percent_billed)
@@ -1096,6 +1153,22 @@ def update_billing_percentage(pr_doc, update_modified=True, adjust_incoming_rate
 
 	if adjust_incoming_rate:
 		adjust_incoming_rate_for_pr(pr_doc)
+
+
+def get_billed_qty_against_purchase_receipt(pr_doc):
+	pr_names = [d.name for d in pr_doc.items]
+	table = frappe.qb.DocType("Purchase Invoice Item")
+	query = (
+		frappe.qb.from_(table)
+		.select(table.pr_detail, fn.Sum(table.qty).as_("qty"))
+		.where((table.pr_detail.isin(pr_names)) & (table.docstatus == 1))
+		.groupby(table.pr_detail)
+	)
+	invoice_data = query.run(as_list=1)
+
+	if not invoice_data:
+		return frappe._dict()
+	return frappe._dict(invoice_data)
 
 
 def adjust_incoming_rate_for_pr(doc):
@@ -1351,26 +1424,25 @@ def get_item_account_wise_additional_cost(purchase_document):
 		for item in landed_cost_voucher_doc.items:
 			if item.receipt_document == purchase_document:
 				for account in landed_cost_voucher_doc.taxes:
+					exchange_rate = account.exchange_rate or 1
 					item_account_wise_cost.setdefault((item.item_code, item.purchase_receipt_item), {})
 					item_account_wise_cost[(item.item_code, item.purchase_receipt_item)].setdefault(
 						account.expense_account, {"amount": 0.0, "base_amount": 0.0}
 					)
 
-					if total_item_cost > 0:
-						item_account_wise_cost[(item.item_code, item.purchase_receipt_item)][
-							account.expense_account
-						]["amount"] += account.amount * item.get(based_on_field) / total_item_cost
+					item_row = item_account_wise_cost[(item.item_code, item.purchase_receipt_item)][
+						account.expense_account
+					]
 
-						item_account_wise_cost[(item.item_code, item.purchase_receipt_item)][
-							account.expense_account
-						]["base_amount"] += account.base_amount * item.get(based_on_field) / total_item_cost
+					if total_item_cost > 0:
+						item_row["amount"] += account.amount * item.get(based_on_field) / total_item_cost
+
+						item_row["base_amount"] += (
+							account.base_amount * item.get(based_on_field) / total_item_cost
+						)
 					else:
-						item_account_wise_cost[(item.item_code, item.purchase_receipt_item)][
-							account.expense_account
-						]["amount"] += item.applicable_charges
-						item_account_wise_cost[(item.item_code, item.purchase_receipt_item)][
-							account.expense_account
-						]["base_amount"] += item.applicable_charges
+						item_row["amount"] += item.applicable_charges / exchange_rate
+						item_row["base_amount"] += item.applicable_charges
 
 	return item_account_wise_cost
 

@@ -9,7 +9,7 @@ from frappe.desk.reportview import get_match_cond
 from frappe.model.document import Document
 from frappe.query_builder import Interval
 from frappe.query_builder.functions import Count, CurDate, Date, Sum, UnixTimestamp
-from frappe.utils import add_days, flt, get_datetime, get_time, get_url, nowtime, today
+from frappe.utils import add_days, flt, get_datetime, get_link_to_form, get_time, get_url, nowtime, today
 from frappe.utils.user import is_website_user
 
 from erpnext import get_default_company
@@ -85,8 +85,6 @@ class Project(Document):
 				as_dict=True,
 			),
 		)
-
-		self.update_costing()
 
 	def before_print(self, settings=None):
 		self.onload()
@@ -324,41 +322,50 @@ class Project(Document):
 		self.total_sales_amount = total_sales_amount and total_sales_amount[0][0] or 0
 
 	def update_billed_amount(self):
-		# nosemgrep
+		self.total_billed_amount = self.get_billed_amount_from_parent() + self.get_billed_amount_from_child()
+
+	def get_billed_amount_from_parent(self):
 		total_billed_amount = frappe.db.sql(
 			"""select sum(base_net_amount)
-			from `tabSales Invoice Item` si_item, `tabSales Invoice` si
-			where si_item.parent = si.name
-				and if(si_item.project, si_item.project, si.project) = %s
-				and si.docstatus=1""",
+			from `tabSales Invoice` si join `tabSales Invoice Item` si_item on si_item.parent = si.name
+				where si_item.project is null
+				and si.project is not null
+				and si.project = %s
+				and si.docstatus = 1""",
 			self.name,
 		)
 
-		self.total_billed_amount = total_billed_amount and total_billed_amount[0][0] or 0
+		return total_billed_amount and total_billed_amount[0][0] or 0
+
+	def get_billed_amount_from_child(self):
+		total_billed_amount = frappe.db.sql(
+			"""select sum(base_net_amount)
+			from `tabSales Invoice Item`
+				where project = %s
+				and docstatus = 1""",
+			self.name,
+		)
+
+		return total_billed_amount and total_billed_amount[0][0] or 0
 
 	def after_rename(self, old_name, new_name, merge=False):
 		if old_name == self.copied_from:
 			frappe.db.set_value("Project", new_name, "copied_from", new_name)
 
 	def send_welcome_email(self):
-		url = get_url(f"/project/?name={self.name}")
-		messages = (
-			_("You have been invited to collaborate on the project: {0}").format(self.name),
-			url,
-			_("Join"),
-		)
+		label = f"{self.project_name} ({self.name})"
+		url = get_link_to_form(self.doctype, self.name, label)
 
-		content = """
-		<p>{0}.</p>
-		<p><a href="{1}">{2}</a></p>
-		"""
+		content = "<p>{}</p>".format(
+			_("You have been invited to collaborate on the project {0}.").format(url)
+		)
 
 		for user in self.users:
 			if user.welcome_email_sent == 0:
 				frappe.sendmail(
 					user.user,
 					subject=_("Project Collaboration Invitation"),
-					content=content.format(*messages),
+					content=content,
 				)
 				user.welcome_email_sent = 1
 
