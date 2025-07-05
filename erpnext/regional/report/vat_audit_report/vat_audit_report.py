@@ -49,7 +49,7 @@ class VATAuditReport:
 		self.sa_vat_accounts = frappe.get_all(
 			"South Africa VAT Account", filters={"parent": self.filters.company}, pluck="account"
 		)
-		if not self.sa_vat_accounts and not frappe.flags.in_test and not frappe.flags.in_migrate:
+		if not self.sa_vat_accounts and not frappe.in_test and not frappe.flags.in_migrate:
 			link_to_settings = get_link_to_form(
 				"South Africa VAT Settings", "", label="South Africa VAT Settings"
 			)

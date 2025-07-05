@@ -6,7 +6,7 @@ from collections import deque
 from functools import partial
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase, timeout
+from frappe.tests import IntegrationTestCase, timeout
 from frappe.utils import cstr, flt
 
 from erpnext.controllers.tests.test_subcontracting_controller import (
@@ -22,15 +22,6 @@ from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import
 )
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Item", "Quality Inspection Template"]
-
-
-class UnitTestBom(UnitTestCase):
-	"""
-	Unit tests for Bom.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestBOM(IntegrationTestCase):

@@ -49,7 +49,7 @@
   {
    "fieldname": "purchase_receipts",
    "fieldtype": "Table",
-   "label": "Purchase Receipts",
+   "label": "Receipts",
    "options": "Landed Cost Purchase Receipt",
    "reqd": 1
   },
@@ -61,12 +61,12 @@
   {
    "fieldname": "get_items_from_purchase_receipts",
    "fieldtype": "Button",
-   "label": "Get Items From Purchase Receipts"
+   "label": "Get Items From Receipts"
   },
   {
    "fieldname": "items",
    "fieldtype": "Table",
-   "label": "Purchase Receipt Items",
+   "label": "Receipt Items",
    "no_copy": 1,
    "options": "Landed Cost Item",
    "reqd": 1
@@ -141,14 +141,16 @@
    "hide_border": 1
   }
  ],
+ "grid_page_length": 50,
  "icon": "icon-usd",
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-03-27 13:09:59.624249",
+ "modified": "2025-06-09 10:08:39.574009",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Landed Cost Voucher",
+ "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
   {
@@ -165,6 +167,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "show_name_in_global_search": 1,
  "sort_field": "creation",
  "sort_order": "DESC",

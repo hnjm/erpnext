@@ -27,7 +27,10 @@ class LandedCostItem(Document):
 		qty: DF.Float
 		rate: DF.Currency
 		receipt_document: DF.DynamicLink | None
-		receipt_document_type: DF.Literal["Purchase Invoice", "Purchase Receipt"]
+		receipt_document_type: DF.Literal[
+			"Purchase Invoice", "Purchase Receipt", "Stock Entry", "Subcontracting Receipt"
+		]
+		stock_entry_item: DF.Data | None
 	# end: auto-generated types
 
 	pass

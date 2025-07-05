@@ -92,7 +92,7 @@ class Account(NestedSet):
 			super().on_update()
 
 	def onload(self):
-		frozen_accounts_modifier = frappe.db.get_single_value("Accounts Settings", "frozen_accounts_modifier")
+		frozen_accounts_modifier = frappe.get_single_value("Accounts Settings", "frozen_accounts_modifier")
 		if not frozen_accounts_modifier or frozen_accounts_modifier in frappe.get_roles():
 			self.set_onload("can_freeze_account", True)
 
@@ -602,7 +602,7 @@ def _ensure_idle_system():
 	# 1. Correctness: It's next to impossible to ensure that renamed account is not being used *right now*.
 	# 2. Performance: Renaming requires locking out many tables entirely and severely degrades performance.
 
-	if frappe.flags.in_test:
+	if frappe.in_test:
 		return
 
 	last_gl_update = None

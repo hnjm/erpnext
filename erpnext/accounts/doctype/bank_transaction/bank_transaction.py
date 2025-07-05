@@ -121,7 +121,7 @@ class BankTransaction(Document):
 		self.allocate_payment_entries()
 		self.set_status()
 
-		if frappe.db.get_single_value("Accounts Settings", "enable_party_matching"):
+		if frappe.get_single_value("Accounts Settings", "enable_party_matching"):
 			self.auto_set_party()
 
 	def before_update_after_submit(self):

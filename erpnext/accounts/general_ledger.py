@@ -8,6 +8,7 @@ import frappe
 from frappe import _
 from frappe.model.meta import get_field_precision
 from frappe.utils import cint, flt, formatdate, get_link_to_form, getdate, now
+from frappe.utils.caching import request_cache
 from frappe.utils.dashboard import cache_source
 
 import erpnext
@@ -20,6 +21,7 @@ from erpnext.accounts.doctype.accounting_dimension_filter.accounting_dimension_f
 from erpnext.accounts.doctype.accounting_period.accounting_period import ClosedAccountingPeriod
 from erpnext.accounts.doctype.budget.budget import validate_expense_against_budget
 from erpnext.accounts.utils import create_payment_ledger_entry
+from erpnext.controllers.budget_controller import BudgetValidation
 from erpnext.exceptions import InvalidAccountDimensionError, MandatoryAccountDimensionError
 
 
@@ -32,6 +34,13 @@ def make_gl_entries(
 	from_repost=False,
 ):
 	if gl_map:
+		if (
+			frappe.get_single_value("Accounts Settings", "use_new_budget_controller")
+			and gl_map[0].voucher_type != "Period Closing Voucher"
+		):
+			bud_val = BudgetValidation(gl_map=gl_map)
+			bud_val.validate()
+
 		if not cancel:
 			make_acc_dimensions_offsetting_entry(gl_map)
 			validate_accounting_period(gl_map)
@@ -214,6 +223,7 @@ def distribute_gl_based_on_cost_center_allocation(gl_map, precision=None, from_r
 	return new_gl_map
 
 
+@request_cache
 def get_cost_center_allocation_data(company, posting_date, cost_center):
 	cost_center_allocation = frappe.db.get_value(
 		"Cost Center Allocation",
@@ -223,7 +233,7 @@ def get_cost_center_allocation_data(company, posting_date, cost_center):
 			"valid_from": ("<=", posting_date),
 			"main_cost_center": cost_center,
 		},
-		pluck="name",
+		pluck=True,
 		order_by="valid_from desc",
 	)
 
@@ -733,9 +743,9 @@ def check_freezing_date(posting_date, adv_adj=False):
 	Hence stop admin to bypass if accounts are freezed
 	"""
 	if not adv_adj:
-		acc_frozen_upto = frappe.db.get_single_value("Accounts Settings", "acc_frozen_upto")
+		acc_frozen_upto = frappe.get_single_value("Accounts Settings", "acc_frozen_upto")
 		if acc_frozen_upto:
-			frozen_accounts_modifier = frappe.db.get_single_value(
+			frozen_accounts_modifier = frappe.get_single_value(
 				"Accounts Settings", "frozen_accounts_modifier"
 			)
 			if getdate(posting_date) <= getdate(acc_frozen_upto) and (
@@ -756,7 +766,7 @@ def validate_against_pcv(is_opening, posting_date, company):
 		)
 
 	last_pcv_date = frappe.db.get_value(
-		"Period Closing Voucher", {"docstatus": 1, "company": company}, "max(period_end_date)"
+		"Period Closing Voucher", {"docstatus": 1, "company": company}, [{"MAX": "period_end_date"}]
 	)
 
 	if last_pcv_date and getdate(posting_date) <= getdate(last_pcv_date):
@@ -815,4 +825,4 @@ def validate_allowed_dimensions(gl_entry, dimension_filter_map):
 
 
 def is_immutable_ledger_enabled():
-	return frappe.db.get_single_value("Accounts Settings", "enable_immutable_ledger")
+	return frappe.get_single_value("Accounts Settings", "enable_immutable_ledger")

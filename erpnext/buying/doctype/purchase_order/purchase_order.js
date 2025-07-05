@@ -59,6 +59,19 @@ frappe.ui.form.on("Purchase Order", {
 		erpnext.accounts.dimensions.update_dimension(frm, frm.doctype);
 	},
 
+	schedule_date(frm) {
+		if (frm.doc.schedule_date) {
+			frm.doc.items.forEach((d) => {
+				frappe.model.set_value(d.doctype, d.name, "schedule_date", frm.doc.schedule_date);
+			});
+		}
+	},
+
+	transaction_date(frm) {
+		prevent_past_schedule_dates(frm);
+		frm.set_value("schedule_date", "");
+	},
+
 	refresh: function (frm) {
 		if (frm.doc.is_old_subcontracting_flow) {
 			frm.trigger("get_materials_from_supplier");
@@ -75,6 +88,7 @@ frappe.ui.form.on("Purchase Order", {
 		if (frm.doc.docstatus == 0) {
 			erpnext.set_unit_price_items_note(frm);
 		}
+		prevent_past_schedule_dates(frm);
 	},
 
 	supplier: function (frm) {
@@ -776,10 +790,6 @@ erpnext.buying.PurchaseOrderController = class PurchaseOrderController extends (
 	items_on_form_rendered() {
 		set_schedule_date(this.frm);
 	}
-
-	schedule_date() {
-		set_schedule_date(this.frm);
-	}
 };
 
 // for backward compatibility: combine new and previous states
@@ -835,3 +845,11 @@ frappe.ui.form.on("Purchase Order", "is_subcontracted", function (frm) {
 		erpnext.buying.get_default_bom(frm);
 	}
 });
+
+function prevent_past_schedule_dates(frm) {
+	if (frm.doc.transaction_date) {
+		frm.fields_dict["schedule_date"].datepicker.update({
+			minDate: new Date(frm.doc.transaction_date),
+		});
+	}
+}

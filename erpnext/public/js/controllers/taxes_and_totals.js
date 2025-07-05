@@ -64,7 +64,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 			&& this.frm.doc.is_pos
 			&& this.frm.doc.is_return
 		) {
-			this.set_total_amount_to_default_mop();
+			await this.set_total_amount_to_default_mop();
 			this.calculate_paid_amount();
 		}
 
@@ -911,23 +911,25 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 		it should set the return to that mode of payment only.
 		*/
 
-		let return_against_mop = await frappe.call({
-			method: 'erpnext.controllers.sales_and_purchase_return.get_payment_data',
-			args: {
-				invoice: this.frm.doc.return_against
-			}
-		});
-
-		if (return_against_mop.message.length === 1) {
-			this.frm.doc.payments.forEach(payment => {
-				if (payment.mode_of_payment == return_against_mop.message[0].mode_of_payment) {
-					payment.amount = total_amount_to_pay;
-				} else {
-					payment.amount = 0;
+		if(this.frm.doc.return_against){
+			let {message : return_against_mop } = await frappe.call({
+				method: 'erpnext.controllers.sales_and_purchase_return.get_payment_data',
+				args: {
+					invoice: this.frm.doc.return_against
 				}
 			});
-			this.frm.refresh_fields();
-			return;
+
+			if (return_against_mop.length === 1) {
+				this.frm.doc.payments.forEach(payment => {
+					if (payment.mode_of_payment == return_against_mop[0].mode_of_payment) {
+						payment.amount = total_amount_to_pay;
+					} else {
+						payment.amount = 0;
+					}
+				});
+				this.frm.refresh_fields();
+				return;
+			}
 		}
 
 		this.frm.doc.payments.find(payment => {
@@ -945,9 +947,9 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 		var me = this;
 		var payment_status = true;
 		if(this.frm.doc.is_pos && (update_paid_amount===undefined || update_paid_amount)) {
-			let r = await frappe.db.get_value("POS Profile", this.frm.doc.pos_profile, "disable_grand_total_to_default_mop");
+			let r = await frappe.db.get_value("POS Profile", this.frm.doc.pos_profile, "set_grand_total_to_default_mop");
 
-			if (r.message.disable_grand_total_to_default_mop) {
+			if (!r.message.set_grand_total_to_default_mop) {
 				return;
 			}
 

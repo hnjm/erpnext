@@ -5,7 +5,7 @@
 import json
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import flt
 
 from erpnext.accounts.party import get_due_date
@@ -19,15 +19,6 @@ from erpnext.tests.utils import create_test_contact_and_address
 
 IGNORE_TEST_RECORD_DEPENDENCIES = ["Price List"]
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Payment Term", "Payment Terms Template"]
-
-
-class UnitTestCustomer(UnitTestCase):
-	"""
-	Unit tests for Customer.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestCustomer(IntegrationTestCase):

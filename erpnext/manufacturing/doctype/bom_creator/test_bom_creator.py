@@ -4,22 +4,13 @@
 import random
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 
 from erpnext.manufacturing.doctype.bom_creator.bom_creator import (
 	add_item,
 	add_sub_assembly,
 )
 from erpnext.stock.doctype.item.test_item import make_item
-
-
-class UnitTestBomCreator(UnitTestCase):
-	"""
-	Unit tests for BomCreator.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestBOMCreator(IntegrationTestCase):

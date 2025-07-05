@@ -188,7 +188,7 @@ erpnext.PointOfSale.ItemSelector = class {
 
 	attach_clear_btn() {
 		this.search_field.$wrapper.find(".control-input").append(
-			`<span class="link-btn" style="top: 2px;">
+			`<span class="link-btn">
 				<a class="btn-open no-decoration" title="${__("Clear")}">
 					${frappe.utils.icon("close", "sm")}
 				</a>
@@ -365,28 +365,6 @@ erpnext.PointOfSale.ItemSelector = class {
 	add_filtered_item_to_cart() {
 		this.$items_container.find(".item-wrapper").click();
 		this.set_search_value("");
-	}
-
-	resize_selector(minimize) {
-		minimize
-			? this.$component
-					.find(".filter-section")
-					.css("grid-template-columns", "repeat(1, minmax(0, 1fr))")
-			: this.$component
-					.find(".filter-section")
-					.css("grid-template-columns", "repeat(12, minmax(0, 1fr))");
-
-		minimize
-			? this.$component.find(".search-field").css("margin", "var(--margin-sm) 0px")
-			: this.$component.find(".search-field").css("margin", "0px var(--margin-sm)");
-
-		minimize
-			? this.$component.css("grid-column", "span 2 / span 2")
-			: this.$component.css("grid-column", "span 6 / span 6");
-
-		minimize
-			? this.$items_container.css("grid-template-columns", "repeat(1, minmax(0, 1fr))")
-			: this.$items_container.css("grid-template-columns", "repeat(4, minmax(0, 1fr))");
 	}
 
 	toggle_component(show) {

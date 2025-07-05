@@ -29,6 +29,7 @@ class SubcontractingReceiptItem(Document):
 		item_code: DF.Link
 		item_name: DF.Data | None
 		job_card: DF.Link | None
+		landed_cost_voucher_amount: DF.Currency
 		manufacturer: DF.Link | None
 		manufacturer_part_no: DF.Data | None
 		page_break: DF.Check

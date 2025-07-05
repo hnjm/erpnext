@@ -29,6 +29,7 @@ class TestPOSInvoice(IntegrationTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		cls.enterClassContext(cls.change_settings("Selling Settings", validate_selling_price=0))
+		cls.enterClassContext(cls.change_settings("POS Settings", invoice_type="POS Invoice"))
 		make_stock_entry(target="_Test Warehouse - _TC", item_code="_Test Item", qty=800, basic_rate=100)
 		frappe.db.sql("delete from `tabTax Rule`")
 
@@ -36,9 +37,15 @@ class TestPOSInvoice(IntegrationTestCase):
 		from erpnext.accounts.doctype.pos_opening_entry.test_pos_opening_entry import create_opening_entry
 
 		cls.test_user, cls.pos_profile = init_user_and_profile()
-		create_opening_entry(cls.pos_profile, cls.test_user)
+		cls.opening_entry = create_opening_entry(cls.pos_profile, cls.test_user.name)
 		mode_of_payment = frappe.get_doc("Mode of Payment", "Bank Draft")
 		set_default_account_for_mode_of_payment(mode_of_payment, "_Test Company", "_Test Bank - _TC")
+
+	@classmethod
+	def tearDownClass(cls):
+		frappe.db.sql("delete from `tabPOS Invoice`")
+		opening_entry_doc = frappe.get_doc("POS Opening Entry", cls.opening_entry.name)
+		opening_entry_doc.cancel()
 
 	def tearDown(self):
 		if frappe.session.user != "Administrator":
@@ -393,6 +400,50 @@ class TestPOSInvoice(IntegrationTestCase):
 		)
 		pos_inv.insert()
 		self.assertRaises(PartialPaymentValidationError, pos_inv.submit)
+
+	def test_partly_paid_invoices(self):
+		set_allow_partial_payment(self.pos_profile, 1)
+
+		pos_inv = create_pos_invoice(pos_profile=self.pos_profile.name, rate=100, do_not_save=1)
+		pos_inv.append(
+			"payments",
+			{"mode_of_payment": "Cash", "amount": 90},
+		)
+		pos_inv.save()
+		pos_inv.submit()
+
+		self.assertEqual(pos_inv.paid_amount, 90)
+		self.assertEqual(pos_inv.status, "Partly Paid")
+
+		pos_inv.update_payments(payments=[{"mode_of_payment": "Cash", "amount": 10}])
+		self.assertEqual(pos_inv.paid_amount, 100)
+		self.assertEqual(pos_inv.status, "Paid")
+
+		set_allow_partial_payment(self.pos_profile, 0)
+
+	def test_multi_payment_for_partly_paid_invoices(self):
+		set_allow_partial_payment(self.pos_profile, 1)
+
+		pos_inv = create_pos_invoice(pos_profile=self.pos_profile.name, rate=100, do_not_save=1)
+		pos_inv.append(
+			"payments",
+			{"mode_of_payment": "Cash", "amount": 90},
+		)
+		pos_inv.save()
+		pos_inv.submit()
+
+		self.assertEqual(pos_inv.paid_amount, 90)
+		self.assertEqual(pos_inv.status, "Partly Paid")
+
+		pos_inv.update_payments(payments=[{"mode_of_payment": "Cash", "amount": 5}])
+		self.assertEqual(pos_inv.paid_amount, 95)
+		self.assertEqual(pos_inv.status, "Partly Paid")
+
+		pos_inv.update_payments(payments=[{"mode_of_payment": "Cash", "amount": 5}])
+		self.assertEqual(pos_inv.paid_amount, 100)
+		self.assertEqual(pos_inv.status, "Paid")
+
+		set_allow_partial_payment(self.pos_profile, 0)
 
 	def test_serialized_item_transaction(self):
 		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_serialized_item
@@ -1087,3 +1138,9 @@ def make_batch_item(item_name):
 
 	if not frappe.db.exists(item_name):
 		return make_item(item_name, dict(has_batch_no=1, create_new_batch=1, is_stock_item=1))
+
+
+def set_allow_partial_payment(pos_profile, value):
+	pos_profile.reload()
+	pos_profile.allow_partial_payment = value
+	pos_profile.save()

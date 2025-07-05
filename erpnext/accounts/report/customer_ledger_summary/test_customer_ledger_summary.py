@@ -7,6 +7,7 @@ from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_ent
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.accounts.report.customer_ledger_summary.customer_ledger_summary import execute
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
+from erpnext.controllers.sales_and_purchase_return import make_return_doc
 
 
 class TestCustomerLedgerSummary(AccountsTestMixin, IntegrationTestCase):
@@ -150,3 +151,86 @@ class TestCustomerLedgerSummary(AccountsTestMixin, IntegrationTestCase):
 		for field in expected_after_cr_and_payment:
 			with self.subTest(field=field):
 				self.assertEqual(report[0].get(field), expected_after_cr_and_payment.get(field))
+
+	def test_customer_ledger_ignore_cr_dr_filter(self):
+		si = create_sales_invoice()
+
+		cr_note = make_return_doc(si.doctype, si.name)
+		cr_note.submit()
+
+		pr = frappe.get_doc("Payment Reconciliation")
+		pr.company = si.company
+		pr.party_type = "Customer"
+		pr.party = si.customer
+		pr.receivable_payable_account = si.debit_to
+
+		pr.get_unreconciled_entries()
+
+		invoices = [invoice.as_dict() for invoice in pr.invoices if invoice.invoice_number == si.name]
+		payments = [payment.as_dict() for payment in pr.payments if payment.reference_name == cr_note.name]
+		pr.allocate_entries(frappe._dict({"invoices": invoices, "payments": payments}))
+		pr.reconcile()
+
+		system_generated_journal = frappe.db.get_all(
+			"Journal Entry",
+			filters={
+				"docstatus": 1,
+				"reference_type": si.doctype,
+				"reference_name": si.name,
+				"voucher_type": "Credit Note",
+				"is_system_generated": True,
+			},
+			fields=["name"],
+		)
+		self.assertEqual(len(system_generated_journal), 1)
+		expected = {
+			"party": "_Test Customer",
+			"customer_name": "_Test Customer",
+			"party_name": "_Test Customer",
+			"opening_balance": 0,
+			"invoiced_amount": 200.0,
+			"paid_amount": 100.0,
+			"return_amount": 100.0,
+			"closing_balance": 0.0,
+			"currency": "INR",
+			"dr_or_cr": "",
+		}
+		# Without ignore_cr_dr_notes
+		columns, data = execute(
+			frappe._dict(
+				{
+					"company": si.company,
+					"from_date": si.posting_date,
+					"to_date": si.posting_date,
+					"ignore_cr_dr_notes": False,
+				}
+			)
+		)
+		self.assertEqual(len(data), 1)
+		self.assertDictEqual(expected, data[0])
+
+		# With ignore_cr_dr_notes
+		expected = {
+			"party": "_Test Customer",
+			"customer_name": "_Test Customer",
+			"party_name": "_Test Customer",
+			"opening_balance": 0,
+			"invoiced_amount": 100.0,
+			"paid_amount": 0.0,
+			"return_amount": 100.0,
+			"closing_balance": 0.0,
+			"currency": "INR",
+			"dr_or_cr": "",
+		}
+		columns, data = execute(
+			frappe._dict(
+				{
+					"company": si.company,
+					"from_date": si.posting_date,
+					"to_date": si.posting_date,
+					"ignore_cr_dr_notes": True,
+				}
+			)
+		)
+		self.assertEqual(len(data), 1)
+		self.assertEqual(expected, data[0])

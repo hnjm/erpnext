@@ -712,7 +712,7 @@ class TestAccountsReceivable(AccountsTestMixin, IntegrationTestCase):
 
 		si2 = self.create_sales_invoice(do_not_submit=True)
 		si2.posting_date = add_days(today(), -1)
-		si2.customer = self.customer2
+		si2.customer = self.customer2.name
 		si2.currency = "USD"
 		si2.conversion_rate = 80
 		si2.debit_to = self.debtors_usd
@@ -935,7 +935,7 @@ class TestAccountsReceivable(AccountsTestMixin, IntegrationTestCase):
 
 		si = self.create_sales_invoice(do_not_submit=True)
 		si.posting_date = add_days(today(), -1)
-		si.customer = self.customer2
+		si.customer = self.customer2.name
 		si.currency = "USD"
 		si.conversion_rate = 80
 		si.debit_to = self.debtors_usd

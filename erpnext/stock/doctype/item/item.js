@@ -16,11 +16,11 @@ frappe.ui.form.on("Item", {
 				let msg = __(
 					"Changing the valuation method to Moving Average will affect new transactions. If backdated entries are added, earlier FIFO-based entries will be reposted, which may change closing balances."
 				);
-				msg += "<br>";
+				msg += "<br><br>";
 				msg += __(
 					"Also you can't switch back to FIFO after setting the valuation method to Moving Average for this item."
 				);
-				msg += "<br>";
+				msg += "<br><br>";
 				msg += __("Do you want to change valuation method?");
 
 				frappe.confirm(

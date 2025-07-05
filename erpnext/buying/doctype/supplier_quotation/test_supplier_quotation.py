@@ -3,20 +3,11 @@
 
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase, change_settings
+from frappe.tests import IntegrationTestCase, change_settings
 from frappe.utils import add_days, today
 
 from erpnext.buying.doctype.supplier_quotation.supplier_quotation import make_purchase_order
 from erpnext.controllers.accounts_controller import InvalidQtyError
-
-
-class UnitTestSupplierQuotation(UnitTestCase):
-	"""
-	Unit tests for SupplierQuotation.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestPurchaseOrder(IntegrationTestCase):

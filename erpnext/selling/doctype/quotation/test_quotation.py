@@ -2,21 +2,13 @@
 # License: GNU General Public License v3. See license.txt
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase, change_settings
+from frappe.tests import IntegrationTestCase, change_settings
 from frappe.utils import add_days, add_months, flt, getdate, nowdate
 
 from erpnext.controllers.accounts_controller import InvalidQtyError
+from erpnext.setup.utils import get_exchange_rate
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Product Bundle"]
-
-
-class UnitTestQuotation(UnitTestCase):
-	"""
-	Unit tests for Quotation.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestQuotation(IntegrationTestCase):
@@ -187,6 +179,10 @@ class TestQuotation(IntegrationTestCase):
 		sales_order.delivery_date = nowdate()
 		sales_order.insert()
 
+	@IntegrationTestCase.change_settings(
+		"Accounts Settings",
+		{"add_taxes_from_item_tax_template": 0, "add_taxes_from_taxes_and_charges_template": 0},
+	)
 	def test_make_sales_order_with_terms(self):
 		from erpnext.selling.doctype.quotation.quotation import make_sales_order
 
@@ -726,6 +722,10 @@ class TestQuotation(IntegrationTestCase):
 		quotation.items[0].conversion_factor = 2.23
 		self.assertRaises(frappe.ValidationError, quotation.save)
 
+	@IntegrationTestCase.change_settings(
+		"Accounts Settings",
+		{"add_taxes_from_item_tax_template": 1, "add_taxes_from_taxes_and_charges_template": 0},
+	)
 	def test_item_tax_template_for_quotation(self):
 		from erpnext.stock.doctype.item.test_item import make_item
 
@@ -767,10 +767,7 @@ class TestQuotation(IntegrationTestCase):
 			item_doc.save()
 
 		quotation = make_quotation(item_code="_Test Item Tax Template QTN", qty=1, rate=100, do_not_submit=1)
-		self.assertFalse(quotation.taxes)
 
-		quotation.append_taxes_from_item_tax_template()
-		quotation.save()
 		self.assertTrue(quotation.taxes)
 		for row in quotation.taxes:
 			self.assertEqual(row.account_head, "_Test Vat - _TC")
@@ -825,6 +822,70 @@ class TestQuotation(IntegrationTestCase):
 
 		quotation.reload()
 		self.assertEqual(quotation.status, "Ordered")
+
+	def test_duplicate_items_in_quotation(self):
+		from erpnext.selling.doctype.quotation.quotation import make_sales_order
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		# item code same but description different
+		make_item("_Test Item 2", {"is_stock_item": 1})
+
+		quotation = make_quotation(qty=1, rate=100, do_not_submit=1)
+
+		# duplicate items
+		for qty in [1, 1, 2, 3]:
+			quotation.append("items", {"item_code": "_Test Item", "qty": qty, "rate": 100})
+
+		quotation.append("items", {"item_code": "_Test Item 2", "qty": 5, "rate": 100})
+
+		quotation.submit()
+
+		sales_order = make_sales_order(quotation.name)
+		sales_order.delivery_date = nowdate()
+
+		self.assertEqual(len(sales_order.items), 6)
+		self.assertEqual(sales_order.items[0].qty, 1)
+		self.assertEqual(sales_order.items[-1].qty, 5)
+
+		# Row 1: 10, Row 4: 1, Row 5: 1
+		sales_order.items[0].qty = 10
+		sales_order.items[3].qty = 1
+		sales_order.items[4].qty = 1
+		sales_order.submit()
+
+		quotation.reload()
+		self.assertEqual(quotation.status, "Partially Ordered")
+
+		sales_order_2 = make_sales_order(quotation.name)
+		sales_order_2.delivery_date = nowdate()
+		self.assertEqual(len(sales_order_2.items), 2)
+		self.assertEqual(sales_order_2.items[0].qty, 1)
+		self.assertEqual(sales_order_2.items[1].qty, 2)
+
+		self.assertEqual(sales_order_2.items[0].quotation_item, quotation.items[3].name)
+		self.assertEqual(sales_order_2.items[1].quotation_item, quotation.items[4].name)
+
+		sales_order_2.submit()
+		quotation.reload()
+		self.assertEqual(quotation.status, "Ordered")
+
+	@change_settings("Accounts Settings", {"allow_pegged_currencies_exchange_rates": True})
+	def test_make_quotation_qar_to_inr(self):
+		quotation = make_quotation(
+			currency="QAR",
+			transaction_date="2026-06-04",
+		)
+
+		cache = frappe.cache()
+		key = "currency_exchange_rate_{}:{}:{}".format("2026-06-04", "QAR", "INR")
+		value = cache.get(key)
+		expected_rate = flt(value) / 3.64
+
+		self.assertEqual(
+			quotation.conversion_rate,
+			expected_rate,
+			f"Expected conversion rate {expected_rate}, got {quotation.conversion_rate}",
+		)
 
 
 def enable_calculate_bundle_price(enable=1):

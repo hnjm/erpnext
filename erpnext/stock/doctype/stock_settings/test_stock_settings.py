@@ -3,16 +3,7 @@
 
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
-
-
-class UnitTestStockSettings(UnitTestCase):
-	"""
-	Unit tests for StockSettings.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
+from frappe.tests import IntegrationTestCase
 
 
 class TestStockSettings(IntegrationTestCase):

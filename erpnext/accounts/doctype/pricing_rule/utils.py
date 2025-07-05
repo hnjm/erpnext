@@ -28,7 +28,7 @@ def get_pricing_rules(args, doc=None):
 	pricing_rules = []
 	values = {}
 
-	if not frappe.db.exists("Pricing Rule", {"disable": 0, args.transaction_type: 1}):
+	if not frappe.db.count("Pricing Rule", cache=True):
 		return
 
 	for apply_on in ["Item Code", "Item Group", "Brand"]:
@@ -115,8 +115,8 @@ def _get_pricing_rules(apply_on, args, values):
 		if apply_on_field == "item_code":
 			if args.get("uom", None):
 				item_conditions += (
-					" and ({child_doc}.uom='{item_uom}' or IFNULL({child_doc}.uom, '')='')".format(
-						child_doc=child_doc, item_uom=args.get("uom")
+					" and ({child_doc}.uom={item_uom} or IFNULL({child_doc}.uom, '')='')".format(
+						child_doc=child_doc, item_uom=frappe.db.escape(args.get("uom"))
 					)
 				)
 			if "variant_of" not in args:
@@ -128,8 +128,8 @@ def _get_pricing_rules(apply_on, args, values):
 	elif apply_on_field == "item_group":
 		item_conditions = _get_tree_conditions(args, "Item Group", child_doc, False)
 		if args.get("uom", None):
-			item_conditions += " and ({child_doc}.uom='{item_uom}' or IFNULL({child_doc}.uom, '')='')".format(
-				child_doc=child_doc, item_uom=args.get("uom")
+			item_conditions += " and ({child_doc}.uom={item_uom} or IFNULL({child_doc}.uom, '')='')".format(
+				child_doc=child_doc, item_uom=frappe.db.escape(args.get("uom"))
 			)
 
 	conditions += get_other_conditions(conditions, values, args)

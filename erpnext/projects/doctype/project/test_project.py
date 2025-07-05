@@ -2,7 +2,7 @@
 # License: GNU General Public License v3. See license.txt
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, nowdate
 
 from erpnext.projects.doctype.project_template.test_project_template import make_project_template
@@ -12,15 +12,6 @@ from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_orde
 from erpnext.tests.utils import ERPNextTestSuite
 
 IGNORE_TEST_RECORD_DEPENDENCIES = ["Sales Order"]
-
-
-class UnitTestProject(UnitTestCase):
-	"""
-	Unit tests for Project.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestProject(ERPNextTestSuite):

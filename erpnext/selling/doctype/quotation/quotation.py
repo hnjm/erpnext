@@ -167,7 +167,7 @@ class Quotation(SellingController):
 		"""
 		If permitted in settings and any item has 0 qty, the SO has unit price items.
 		"""
-		if not frappe.db.get_single_value("Selling Settings", "allow_zero_qty_in_quotation"):
+		if not frappe.get_single_value("Selling Settings", "allow_zero_qty_in_quotation"):
 			return
 
 		self.has_unit_price_items = any(
@@ -175,29 +175,22 @@ class Quotation(SellingController):
 		)
 
 	def get_ordered_status(self):
-		status = "Open"
-		ordered_items = frappe._dict(
-			frappe.db.get_all(
-				"Sales Order Item",
-				{"prevdoc_docname": self.name, "docstatus": 1},
-				["item_code", "sum(qty)"],
-				group_by="item_code",
-				as_list=1,
-			)
-		)
+		ordered_items = get_ordered_items(self.name)
 
 		if not ordered_items:
-			return status
+			return "Open"
 
-		has_alternatives = any(row.is_alternative for row in self.get("items"))
-		self._items = self.get_valid_items() if has_alternatives else self.get("items")
+		self._items = (
+			self.get_valid_items()
+			if any(row.is_alternative for row in self.get("items"))
+			else self.get("items")
+		)
 
-		if any(row.qty > ordered_items.get(row.item_code, 0.0) for row in self._items):
-			status = "Partially Ordered"
-		else:
-			status = "Ordered"
+		for row in self._items:
+			if row.name not in ordered_items or row.qty > ordered_items[row.name]:
+				return "Partially Ordered"
 
-		return status
+		return "Ordered"
 
 	def get_valid_items(self):
 		"""
@@ -291,7 +284,7 @@ class Quotation(SellingController):
 
 	def on_submit(self):
 		# Check for Approving Authority
-		frappe.get_doc("Authorization Control").validate_approving_authority(
+		frappe.get_cached_doc("Authorization Control").validate_approving_authority(
 			self.doctype, self.company, self.base_grand_total, self
 		)
 
@@ -372,15 +365,7 @@ def make_sales_order(source_name: str, target_doc=None):
 
 def _make_sales_order(source_name, target_doc=None, ignore_permissions=False):
 	customer = _make_customer(source_name, ignore_permissions)
-	ordered_items = frappe._dict(
-		frappe.db.get_all(
-			"Sales Order Item",
-			{"prevdoc_docname": source_name, "docstatus": 1},
-			["item_code", "sum(qty)"],
-			group_by="item_code",
-			as_list=1,
-		)
-	)
+	ordered_items = get_ordered_items(source_name)
 
 	selected_rows = [x.get("name") for x in frappe.flags.get("args", {}).get("selected_items", [])]
 
@@ -418,7 +403,7 @@ def _make_sales_order(source_name, target_doc=None, ignore_permissions=False):
 		target.run_method("calculate_taxes_and_totals")
 
 	def update_item(obj, target, source_parent):
-		balance_qty = obj.qty if is_unit_price_row(obj) else obj.qty - ordered_items.get(obj.item_code, 0.0)
+		balance_qty = obj.qty if is_unit_price_row(obj) else obj.qty - ordered_items.get(obj.name, 0.0)
 		target.qty = balance_qty if balance_qty > 0 else 0
 		target.stock_qty = flt(target.qty) * flt(obj.conversion_factor)
 
@@ -434,10 +419,7 @@ def _make_sales_order(source_name, target_doc=None, ignore_permissions=False):
 		2. If selections: Is Alternative Item/Has Alternative Item: Map if selected and adequate qty
 		3. If no selections: Simple row: Map if adequate qty
 		"""
-		balance_qty = item.qty - ordered_items.get(item.item_code, 0.0)
-		has_valid_qty: bool = (balance_qty > 0) or is_unit_price_row(item)
-
-		if not has_valid_qty:
+		if not ((item.qty > ordered_items.get(item.name, 0.0)) or is_unit_price_row(item)):
 			return False
 
 		if not selected_rows:
@@ -604,3 +586,28 @@ def handle_mandatory_error(e, customer, lead_name):
 	message += _("Please create Customer from Lead {0}.").format(get_link_to_form("Lead", lead_name))
 
 	frappe.throw(message, title=_("Mandatory Missing"))
+
+
+def get_ordered_items(quotation: str):
+	"""
+	Returns a dict of ordered items with their total qty based on quotation row name.
+
+	In `Sales Order Item`, `quotation_item` is the row name of `Quotation Item`.
+
+	Example:
+	```
+	{
+	    "refsdjhd2": 10,
+	    "ygdhdshrt": 5,
+	}
+	```
+	"""
+	return frappe._dict(
+		frappe.get_all(
+			"Sales Order Item",
+			filters={"prevdoc_docname": quotation, "docstatus": 1},
+			fields=["quotation_item", "sum(qty)"],
+			group_by="quotation_item",
+			as_list=1,
+		)
+	)

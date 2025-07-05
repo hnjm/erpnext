@@ -152,8 +152,7 @@ class Customer(TransactionBase):
 		self.validate_currency_for_receivable_payable_and_advance_account()
 
 		# set loyalty program tier
-		if frappe.db.exists("Customer", self.name):
-			customer = frappe.get_doc("Customer", self.name)
+		if not self.is_new() and (customer := self.get_doc_before_save()):
 			if self.loyalty_program == customer.loyalty_program and not self.loyalty_program_tier:
 				self.loyalty_program_tier = customer.loyalty_program_tier
 
@@ -207,6 +206,7 @@ class Customer(TransactionBase):
 	def validate_internal_customer(self):
 		if not self.is_internal_customer:
 			self.represents_company = ""
+			return
 
 		internal_customer = frappe.db.get_value(
 			"Customer",
@@ -554,7 +554,7 @@ def check_credit_limit(customer, company, ignore_outstanding_sales_order=False, 
 		message += "<br><br>"
 
 		# If not authorized person raise exception
-		credit_controller_role = frappe.db.get_single_value("Accounts Settings", "credit_controller")
+		credit_controller_role = frappe.get_single_value("Accounts Settings", "credit_controller")
 		if not credit_controller_role or credit_controller_role not in frappe.get_roles():
 			# form a list of emails for the credit controller users
 			credit_controller_users = get_users_with_role(credit_controller_role or "Sales Master Manager")

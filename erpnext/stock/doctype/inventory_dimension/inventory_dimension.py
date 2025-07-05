@@ -5,6 +5,7 @@ import frappe
 from frappe import _, bold, scrub
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.model.document import Document
+from frappe.utils.caching import request_cache
 
 
 class DoNotChangeError(frappe.ValidationError):
@@ -363,52 +364,38 @@ def get_evaluated_inventory_dimension(doc, sl_dict, parent_doc=None):
 	return filter_dimensions
 
 
+@request_cache
 def get_document_wise_inventory_dimensions(doctype) -> dict:
-	if not hasattr(frappe.local, "document_wise_inventory_dimensions"):
-		frappe.local.document_wise_inventory_dimensions = {}
-
-	if not frappe.local.document_wise_inventory_dimensions.get(doctype):
-		dimensions = frappe.get_all(
-			"Inventory Dimension",
-			fields=[
-				"name",
-				"source_fieldname",
-				"condition",
-				"target_fieldname",
-				"type_of_transaction",
-				"fetch_from_parent",
-			],
-			filters={"disabled": 0},
-			or_filters={"document_type": doctype, "apply_to_all_doctypes": 1},
-		)
-
-		frappe.local.document_wise_inventory_dimensions[doctype] = dimensions
-
-	return frappe.local.document_wise_inventory_dimensions[doctype]
+	return frappe.get_all(
+		"Inventory Dimension",
+		fields=[
+			"name",
+			"source_fieldname",
+			"condition",
+			"target_fieldname",
+			"type_of_transaction",
+			"fetch_from_parent",
+		],
+		filters={"disabled": 0},
+		or_filters={"document_type": doctype, "apply_to_all_doctypes": 1},
+	)
 
 
 @frappe.whitelist()
+@request_cache
 def get_inventory_dimensions():
-	if not hasattr(frappe.local, "inventory_dimensions"):
-		frappe.local.inventory_dimensions = {}
-
-	if not frappe.local.inventory_dimensions:
-		dimensions = frappe.get_all(
-			"Inventory Dimension",
-			fields=[
-				"distinct target_fieldname as fieldname",
-				"source_fieldname",
-				"reference_document as doctype",
-				"validate_negative_stock",
-				"name as dimension_name",
-			],
-			filters={"disabled": 0},
-			order_by="creation",
-		)
-
-		frappe.local.inventory_dimensions = dimensions
-
-	return frappe.local.inventory_dimensions
+	return frappe.get_all(
+		"Inventory Dimension",
+		fields=[
+			"distinct target_fieldname as fieldname",
+			"source_fieldname",
+			"reference_document as doctype",
+			"validate_negative_stock",
+			"name as dimension_name",
+		],
+		filters={"disabled": 0},
+		order_by="creation",
+	)
 
 
 @frappe.whitelist()

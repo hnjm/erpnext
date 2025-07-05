@@ -146,7 +146,7 @@ def make_payment_entry():
 
 	supplier = create_supplier(supplier_name="_Test Supplier")
 	pi = make_purchase_invoice(
-		supplier=supplier,
+		supplier=supplier.name,
 		supplier_warehouse="_Test Warehouse - _TC",
 		expense_account="Cost of Goods Sold - _TC",
 		uom="Nos",

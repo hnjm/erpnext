@@ -4,7 +4,7 @@ import json
 
 import frappe
 from frappe.model import mapper
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, nowdate, today
 
 from erpnext import get_default_cost_center
@@ -20,15 +20,6 @@ from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import (
 )
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Company", "Cost Center"]
-
-
-class UnitTestDunning(UnitTestCase):
-	"""
-	Unit tests for Dunning.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestDunning(IntegrationTestCase):

@@ -5,7 +5,7 @@
 import json
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase, change_settings
+from frappe.tests import IntegrationTestCase, change_settings
 from frappe.utils import add_days, flt, getdate, nowdate
 from frappe.utils.data import today
 
@@ -26,15 +26,6 @@ from erpnext.stock.doctype.material_request.test_material_request import make_ma
 from erpnext.stock.doctype.purchase_receipt.purchase_receipt import (
 	make_purchase_invoice as make_pi_from_pr,
 )
-
-
-class UnitTestPurchaseOrder(UnitTestCase):
-	"""
-	Unit tests for PurchaseOrder.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestPurchaseOrder(IntegrationTestCase):
@@ -304,22 +295,21 @@ class TestPurchaseOrder(IntegrationTestCase):
 		user = "test@example.com"
 		test_user = frappe.get_doc("User", user)
 		test_user.add_roles("Accounts User")
-		frappe.set_user(user)
 
-		# update qty
-		trans_item = json.dumps(
-			[{"item_code": "_Test Item", "rate": 200, "qty": 7, "docname": po.items[0].name}]
-		)
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Purchase Order", trans_item, po.name
-		)
+		with self.set_user(user):
+			# update qty
+			trans_item = json.dumps(
+				[{"item_code": "_Test Item", "rate": 200, "qty": 7, "docname": po.items[0].name}]
+			)
+			self.assertRaises(
+				frappe.ValidationError, update_child_qty_rate, "Purchase Order", trans_item, po.name
+			)
 
-		# add new item
-		trans_item = json.dumps([{"item_code": "_Test Item", "rate": 100, "qty": 2}])
-		self.assertRaises(
-			frappe.ValidationError, update_child_qty_rate, "Purchase Order", trans_item, po.name
-		)
-		frappe.set_user("Administrator")
+			# add new item
+			trans_item = json.dumps([{"item_code": "_Test Item", "rate": 100, "qty": 2}])
+			self.assertRaises(
+				frappe.ValidationError, update_child_qty_rate, "Purchase Order", trans_item, po.name
+			)
 
 	def test_update_child_with_tax_template(self):
 		"""
@@ -1328,6 +1318,25 @@ class TestPurchaseOrder(IntegrationTestCase):
 		# PO still has qty 0, so billed % should be unset
 		self.assertFalse(po.per_billed)
 		self.assertEqual(po.status, "To Receive and Bill")
+
+	@IntegrationTestCase.change_settings("Buying Settings", {"maintain_same_rate": 0})
+	def test_purchase_invoice_creation_with_partial_qty(self):
+		po = create_purchase_order(qty=100, rate=10)
+
+		pi = make_pi_from_po(po.name)
+		pi.items[0].qty = 42
+		pi.items[0].rate = 7.5
+		pi.submit()
+
+		pi = make_pi_from_po(po.name)
+		self.assertEqual(pi.items[0].qty, 58)
+		self.assertEqual(pi.items[0].rate, 10)
+		pi.items[0].qty = 8
+		pi.items[0].rate = 5
+		pi.submit()
+
+		pi = make_pi_from_po(po.name)
+		self.assertEqual(pi.items[0].qty, 50)
 
 
 def create_po_for_sc_testing():

@@ -4,11 +4,12 @@ import unittest
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import flt, nowdate, nowtime, today
+from frappe.utils import add_months, flt, get_first_day, nowdate, nowtime, today
 
 from erpnext.assets.doctype.asset.asset import (
 	get_asset_account,
 	get_asset_value_after_depreciation,
+	make_sales_invoice,
 )
 from erpnext.assets.doctype.asset.test_asset import (
 	create_asset,
@@ -33,6 +34,33 @@ class TestAssetRepair(IntegrationTestCase):
 		create_asset_data()
 		create_item("_Test Stock Item")
 		frappe.db.sql("delete from `tabTax Rule`")
+
+	def test_asset_status(self):
+		date = nowdate()
+		purchase_date = add_months(get_first_day(date), -2)
+
+		asset = create_asset(
+			calculate_depreciation=1,
+			available_for_use_date=purchase_date,
+			purchase_date=purchase_date,
+			expected_value_after_useful_life=10000,
+			total_number_of_depreciations=10,
+			frequency_of_depreciation=1,
+			submit=1,
+		)
+
+		si = make_sales_invoice(asset=asset.name, item_code="Macbook Pro", company="_Test Company")
+		si.customer = "_Test Customer"
+		si.due_date = date
+		si.get("items")[0].rate = 25000
+		si.insert()
+		si.submit()
+
+		asset.reload()
+		self.assertEqual(frappe.db.get_value("Asset", asset.name, "status"), "Sold")
+		asset_repair = frappe.new_doc("Asset Repair")
+		asset_repair.update({"company": "_Test Company", "asset": asset.name, "asset_name": asset.asset_name})
+		self.assertRaises(frappe.ValidationError, asset_repair.save)
 
 	def test_update_status(self):
 		asset = create_asset(submit=1)
@@ -128,7 +156,11 @@ class TestAssetRepair(IntegrationTestCase):
 		asset = create_asset(calculate_depreciation=1, submit=1)
 		initial_asset_value = get_asset_value_after_depreciation(asset.name)
 		asset_repair = create_asset_repair(
-			asset=asset, capitalize_repair_cost=1, item="_Test Non Stock Item", submit=1
+			asset=asset,
+			capitalize_repair_cost=1,
+			item="_Test Non Stock Item",
+			submit=1,
+			increase_in_asset_value=1,
 		)
 		asset.reload()
 
@@ -136,7 +168,9 @@ class TestAssetRepair(IntegrationTestCase):
 		self.assertEqual(asset_repair.repair_cost, increase_in_asset_value)
 
 	def test_purchase_invoice(self):
-		asset_repair = create_asset_repair(capitalize_repair_cost=1, item="_Test Non Stock Item", submit=1)
+		asset_repair = create_asset_repair(
+			capitalize_repair_cost=1, item="_Test Non Stock Item", submit=1, increase_in_asset_value=1
+		)
 		self.assertTrue(asset_repair.invoices)
 
 	def test_gl_entries_with_perpetual_inventory(self):
@@ -163,6 +197,7 @@ class TestAssetRepair(IntegrationTestCase):
 			pi_expense_account1="Administrative Expenses - TCP1",
 			pi_expense_account2="Legal Expenses - TCP1",
 			item="_Test Non Stock Item",
+			increase_in_asset_life=1,
 			submit=1,
 		)
 
@@ -210,6 +245,7 @@ class TestAssetRepair(IntegrationTestCase):
 		asset_repair = create_asset_repair(
 			capitalize_repair_cost=1,
 			stock_consumption=1,
+			increase_in_asset_life=1,
 			item="_Test Non Stock Item",
 			submit=1,
 		)
@@ -259,7 +295,13 @@ class TestAssetRepair(IntegrationTestCase):
 		self.assertEqual(first_asset_depr_schedule.status, "Active")
 
 		initial_num_of_depreciations = num_of_depreciations(asset)
-		create_asset_repair(asset=asset, capitalize_repair_cost=1, item="_Test Non Stock Item", submit=1)
+		create_asset_repair(
+			asset=asset,
+			capitalize_repair_cost=1,
+			item="_Test Non Stock Item",
+			submit=1,
+			increase_in_asset_life=1,
+		)
 
 		asset.reload()
 		first_asset_depr_schedule.load_from_db()
@@ -282,7 +324,9 @@ class TestAssetRepair(IntegrationTestCase):
 
 
 def num_of_depreciations(asset):
-	return asset.finance_books[0].total_number_of_depreciations
+	return asset.finance_books[0].total_number_of_depreciations + (
+		asset.finance_books[0].increase_in_asset_life / 12
+	)
 
 
 def create_asset_repair(**args):
@@ -300,7 +344,7 @@ def create_asset_repair(**args):
 		{
 			"asset": asset.name,
 			"asset_name": asset.asset_name,
-			"failure_date": nowdate(),
+			"failure_date": args.failure_date or nowdate(),
 			"description": "Test Description",
 			"company": asset.company,
 		}
@@ -364,7 +408,7 @@ def create_asset_repair(**args):
 
 		if args.capitalize_repair_cost:
 			asset_repair.capitalize_repair_cost = 1
-			if asset.calculate_depreciation:
+			if asset.calculate_depreciation and args.increase_in_asset_life:
 				asset_repair.increase_in_asset_life = 12
 			pi1 = make_purchase_invoice(
 				company=asset.company,

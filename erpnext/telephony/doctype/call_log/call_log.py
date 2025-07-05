@@ -202,6 +202,8 @@ def get_linked_call_logs(doctype, docname):
 		fields=["parent"],
 		filters={"parenttype": "Call Log", "link_doctype": doctype, "link_name": docname},
 	)
+	if not logs:
+		return []
 
 	logs = {log.parent for log in logs}
 

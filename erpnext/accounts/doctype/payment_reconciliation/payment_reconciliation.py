@@ -407,7 +407,7 @@ class PaymentReconciliation(Document):
 
 	@frappe.whitelist()
 	def is_auto_process_enabled(self):
-		return frappe.db.get_single_value("Accounts Settings", "auto_reconcile_payments")
+		return frappe.get_single_value("Accounts Settings", "auto_reconcile_payments")
 
 	@frappe.whitelist()
 	def calculate_difference_on_allocation_change(self, payment_entry, invoice, allocated_amount):
@@ -532,7 +532,7 @@ class PaymentReconciliation(Document):
 
 	@frappe.whitelist()
 	def reconcile(self):
-		if frappe.db.get_single_value("Accounts Settings", "auto_reconcile_payments"):
+		if frappe.get_single_value("Accounts Settings", "auto_reconcile_payments"):
 			running_doc = is_any_doc_running(
 				dict(
 					company=self.company,
@@ -826,7 +826,7 @@ def reconcile_dr_cr_note(dr_cr_notes, company, active_dimensions=None):
 
 			create_gain_loss_journal(
 				company,
-				today(),
+				inv.difference_posting_date,
 				inv.party_type,
 				inv.party,
 				inv.account,

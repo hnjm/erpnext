@@ -42,6 +42,7 @@ class MaterialRequestPlanItem(Document):
 		safety_stock: DF.Float
 		sales_order: DF.Link | None
 		schedule_date: DF.Date | None
+		stock_reserved_qty: DF.Float
 		uom: DF.Link | None
 		warehouse: DF.Link
 	# end: auto-generated types

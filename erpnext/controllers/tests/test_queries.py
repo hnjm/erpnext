@@ -5,7 +5,6 @@ import frappe
 from frappe.core.doctype.user_permission.test_user_permission import create_user
 from frappe.core.doctype.user_permission.user_permission import add_user_permissions
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
-from frappe.tests import IntegrationTestCase
 
 from erpnext.controllers import queries
 from erpnext.tests.utils import ERPNextTestSuite
@@ -106,9 +105,8 @@ class TestQueries(ERPNextTestSuite):
 			value=1,
 			property_type="Check",
 		)
-		ps.save()
 
-		user = create_user("test_employee_query@example.com", ("Accounts User", "HR User"))
+		user = create_user("test_employee_query@example.com", "Accounts User", "HR User")
 		add_user_permissions(
 			{
 				"user": user.name,
@@ -121,29 +119,23 @@ class TestQueries(ERPNextTestSuite):
 			}
 		)
 
-		frappe.reload_doc("accounts", "doctype", "payment entry")
+		with self.set_user(user.name):
+			params = {
+				"doctype": "Employee",
+				"txt": "",
+				"searchfield": "name",
+				"start": 0,
+				"page_len": 20,
+				"filters": None,
+				"reference_doctype": "Payment Entry",
+				"ignore_user_permissions": 1,
+			}
 
-		frappe.set_user(user.name)
-		params = {
-			"doctype": "Employee",
-			"txt": "",
-			"searchfield": "name",
-			"start": 0,
-			"page_len": 20,
-			"filters": None,
-			"reference_doctype": "Payment Entry",
-			"ignore_user_permissions": 1,
-		}
+			result = queries.employee_query(**params)
+			self.assertGreater(len(result), 1)
 
-		result = queries.employee_query(**params)
-		self.assertGreater(len(result), 1)
+			ps.delete(ignore_permissions=1, force=1, delete_permanently=1)
 
-		ps.delete(ignore_permissions=1, force=1, delete_permanently=1)
-		frappe.reload_doc("accounts", "doctype", "payment entry")
-		frappe.clear_cache()
-
-		# only one employee should be returned even though ignore_user_permissions is passed as 1
-		result = queries.employee_query(**params)
-		self.assertEqual(len(result), 1)
-
-		frappe.set_user("Administrator")
+			# only one employee should be returned even though ignore_user_permissions is passed as 1
+			result = queries.employee_query(**params)
+			self.assertEqual(len(result), 1)

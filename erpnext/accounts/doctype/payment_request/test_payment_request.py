@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 
 from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_payment_terms_template
@@ -56,15 +56,6 @@ payment_method = [
 		"currency": "USD",
 	},
 ]
-
-
-class UnitTestPaymentRequest(UnitTestCase):
-	"""
-	Unit tests for PaymentRequest.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestPaymentRequest(IntegrationTestCase):
@@ -797,29 +788,28 @@ class TestPaymentRequest(IntegrationTestCase):
 		pr = make_payment_request(dt="Sales Invoice", dn=si.name, mute_email=1)
 		self.assertEqual(pr.grand_total, si.outstanding_amount)
 
+	def test_partial_paid_invoice_with_submitted_payment_entry(self):
+		pi = make_purchase_invoice(currency="INR", qty=1, rate=5000)
+		pi.save()
+		pi.submit()
 
-def test_partial_paid_invoice_with_submitted_payment_entry(self):
-	pi = make_purchase_invoice(currency="INR", qty=1, rate=5000)
-	pi.save()
-	pi.submit()
+		pe = get_payment_entry("Purchase Invoice", pi.name, bank_account="_Test Bank - _TC")
+		pe.reference_no = "PURINV0001"
+		pe.reference_date = frappe.utils.nowdate()
+		pe.paid_amount = 2500
+		pe.references[0].allocated_amount = 2500
+		pe.save()
+		pe.submit()
+		pe.cancel()
 
-	pe = get_payment_entry("Purchase Invoice", pi.name, bank_account="_Test Bank - _TC")
-	pe.reference_no = "PURINV0001"
-	pe.reference_date = frappe.utils.nowdate()
-	pe.paid_amount = 2500
-	pe.references[0].allocated_amount = 2500
-	pe.save()
-	pe.submit()
-	pe.cancel()
+		pe = get_payment_entry("Purchase Invoice", pi.name, bank_account="_Test Bank - _TC")
+		pe.reference_no = "PURINV0002"
+		pe.reference_date = frappe.utils.nowdate()
+		pe.paid_amount = 2500
+		pe.references[0].allocated_amount = 2500
+		pe.save()
+		pe.submit()
 
-	pe = get_payment_entry("Purchase Invoice", pi.name, bank_account="_Test Bank - _TC")
-	pe.reference_no = "PURINV0002"
-	pe.reference_date = frappe.utils.nowdate()
-	pe.paid_amount = 2500
-	pe.references[0].allocated_amount = 2500
-	pe.save()
-	pe.submit()
-
-	pi.load_from_db()
-	pr = make_payment_request(dt="Purchase Invoice", dn=pi.name, mute_email=1)
-	self.assertEqual(pr.grand_total, pi.outstanding_amount)
+		pi.load_from_db()
+		pr = make_payment_request(dt="Purchase Invoice", dn=pi.name, mute_email=1)
+		self.assertEqual(pr.grand_total, pi.outstanding_amount)

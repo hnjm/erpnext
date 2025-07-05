@@ -123,7 +123,7 @@ def check_duplicate_fiscal_year(doc):
 	)
 	for fiscal_year, ysd, yed in year_start_end_dates:
 		if (getdate(doc.year_start_date) == ysd and getdate(doc.year_end_date) == yed) and (
-			not frappe.flags.in_test
+			not frappe.in_test
 		):
 			frappe.throw(
 				_(

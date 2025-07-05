@@ -37,7 +37,7 @@ def batch_uses_naming_series():
 	Verify if the Batch is to be named using a naming series
 	:return: bool
 	"""
-	use_naming_series = cint(frappe.db.get_single_value("Stock Settings", "use_naming_series"))
+	use_naming_series = cint(frappe.get_single_value("Stock Settings", "use_naming_series"))
 	return bool(use_naming_series)
 
 
@@ -49,7 +49,7 @@ def _get_batch_prefix():
 	is set to use naming series.
 	:return: The naming series.
 	"""
-	naming_series_prefix = frappe.db.get_single_value("Stock Settings", "naming_series_prefix")
+	naming_series_prefix = frappe.get_single_value("Stock Settings", "naming_series_prefix")
 	if not naming_series_prefix:
 		naming_series_prefix = "BATCH-"
 
@@ -160,7 +160,7 @@ class Batch(Document):
 		from erpnext.stock.utils import get_valuation_method
 
 		if self.is_new():
-			if get_valuation_method(self.item) == "Moving Average" and frappe.db.get_single_value(
+			if get_valuation_method(self.item) == "Moving Average" and frappe.get_single_value(
 				"Stock Settings", "do_not_use_batchwise_valuation"
 			):
 				self.use_batchwise_valuation = 0

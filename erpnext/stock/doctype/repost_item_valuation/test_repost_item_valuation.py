@@ -425,13 +425,13 @@ class TestRepostItemValuation(IntegrationTestCase, StockTestMixin):
 		item_code = make_item("_Test Remove Attached File Item", properties={"is_stock_item": 1})
 
 		make_purchase_receipt(
-			item_code=item_code,
+			item_code=item_code.name,
 			qty=1,
 			rate=100,
 		)
 
 		pr1 = make_purchase_receipt(
-			item_code=item_code,
+			item_code=item_code.name,
 			qty=1,
 			rate=100,
 			posting_date=add_days(today(), days=-1),

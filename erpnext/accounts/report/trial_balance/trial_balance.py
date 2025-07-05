@@ -89,9 +89,7 @@ def get_data(filters):
 	)
 	company_currency = filters.presentation_currency or erpnext.get_company_currency(filters.company)
 
-	ignore_is_opening = frappe.db.get_single_value(
-		"Accounts Settings", "ignore_is_opening_check_for_reporting"
-	)
+	ignore_is_opening = frappe.get_single_value("Accounts Settings", "ignore_is_opening_check_for_reporting")
 
 	if not accounts:
 		return None
@@ -148,9 +146,7 @@ def get_rootwise_opening_balances(filters, report_type, ignore_is_opening):
 	gle = []
 
 	last_period_closing_voucher = ""
-	ignore_closing_balances = frappe.db.get_single_value(
-		"Accounts Settings", "ignore_account_closing_balance"
-	)
+	ignore_closing_balances = frappe.get_single_value("Accounts Settings", "ignore_account_closing_balance")
 
 	if not ignore_closing_balances:
 		last_period_closing_voucher = frappe.db.get_all(

@@ -3,6 +3,10 @@ on:
   push:
     branches:
       - version-13
+
+permissions:
+  contents: read
+
 jobs:
   release:
     name: Release

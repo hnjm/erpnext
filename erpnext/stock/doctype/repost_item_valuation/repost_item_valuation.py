@@ -195,7 +195,7 @@ class RepostItemValuation(Document):
 		        These flags are useful for asserting real time behaviour like quantity updates.
 		"""
 
-		if not frappe.flags.in_test:
+		if not frappe.in_test:
 			return
 		if self.flags.dont_run_in_test or frappe.flags.dont_execute_stock_reposts:
 			return
@@ -276,7 +276,7 @@ def repost(doc):
 		frappe.db.MAX_WRITES_PER_TRANSACTION *= 4
 
 		doc.set_status("In Progress")
-		if not frappe.flags.in_test:
+		if not frappe.in_test:
 			frappe.db.commit()
 
 		if doc.recreate_stock_ledgers:
@@ -290,7 +290,7 @@ def repost(doc):
 		remove_attached_file(doc.name)
 
 	except Exception as e:
-		if frappe.flags.in_test:
+		if frappe.in_test:
 			# Don't silently fail in tests,
 			# there is no reason for reposts to fail in CI
 			raise
@@ -329,7 +329,7 @@ def repost(doc):
 				notify_error_to_stock_managers(doc, message)
 				doc.set_status("Failed")
 	finally:
-		if not frappe.flags.in_test:
+		if not frappe.in_test:
 			frappe.db.commit()
 
 
@@ -390,7 +390,7 @@ def _get_directly_dependent_vouchers(doc):
 	warehouses = set()
 
 	if doc.based_on == "Transaction":
-		ref_doc = frappe.get_doc(doc.voucher_type, doc.voucher_no)
+		ref_doc = frappe.get_lazy_doc(doc.voucher_type, doc.voucher_no)
 		doc_items, doc_warehouses = ref_doc.get_items_and_warehouses()
 		items.update(doc_items)
 		warehouses.update(doc_warehouses)

@@ -1,7 +1,7 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors and Contributors
 # See license.txt
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 
 from erpnext.manufacturing.doctype.operation.test_operation import make_operation
 from erpnext.manufacturing.doctype.routing.test_routing import create_routing, setup_bom
@@ -12,15 +12,6 @@ from erpnext.manufacturing.doctype.workstation.workstation import (
 )
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Warehouse"]
-
-
-class UnitTestWorkstation(UnitTestCase):
-	"""
-	Unit tests for Workstation.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestWorkstation(IntegrationTestCase):

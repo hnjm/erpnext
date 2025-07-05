@@ -37,6 +37,7 @@ class StockEntryDetail(Document):
 		item_group: DF.Data | None
 		item_name: DF.Data | None
 		job_card_item: DF.Data | None
+		landed_cost_voucher_amount: DF.Currency
 		material_request: DF.Link | None
 		material_request_item: DF.Link | None
 		original_item: DF.Link | None

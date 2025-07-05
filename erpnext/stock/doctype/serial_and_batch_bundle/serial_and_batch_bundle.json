@@ -34,6 +34,7 @@
   "returned_against",
   "section_break_wzou",
   "is_cancelled",
+  "is_packed",
   "is_rejected",
   "amended_from"
  ],
@@ -251,12 +252,19 @@
    "label": "Naming Series",
    "options": "\nSABB-.########",
    "set_only_once": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_packed",
+   "fieldtype": "Check",
+   "label": "Is Packed"
   }
  ],
+ "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-02-17 16:22:36.056205",
+ "modified": "2025-05-30 18:05:55.489195",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Serial and Batch Bundle",
@@ -390,6 +398,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

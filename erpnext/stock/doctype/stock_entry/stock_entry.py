@@ -23,10 +23,12 @@ from frappe.utils import (
 
 import erpnext
 from erpnext.accounts.general_ledger import process_gl_map
+from erpnext.accounts.utils import get_account_currency
 from erpnext.buying.utils import check_on_hold_or_closed_status
 from erpnext.controllers.taxes_and_totals import init_landed_taxes_and_totals
 from erpnext.manufacturing.doctype.bom.bom import (
 	add_additional_cost,
+	get_bom_items_as_dict,
 	get_op_cost_from_sub_assemblies,
 	get_scrap_items_from_sub_assemblies,
 	validate_bom_no,
@@ -248,6 +250,7 @@ class StockEntry(StockController):
 		self.validate_closed_subcontracting_order()
 		self.make_bundle_using_old_serial_batch_fields()
 		self.update_work_order()
+		self.update_disassembled_order()
 		self.update_stock_ledger()
 		self.make_stock_reserve_for_wip_and_fg()
 
@@ -269,6 +272,7 @@ class StockEntry(StockController):
 			self.set_material_request_transfer_status("Completed")
 
 	def on_cancel(self):
+		self.delink_asset_repair_sabb()
 		self.validate_closed_subcontracting_order()
 		self.update_subcontract_order_supplied_items()
 		self.update_subcontracting_order_status()
@@ -278,6 +282,7 @@ class StockEntry(StockController):
 			self.validate_work_order_status()
 
 		self.update_work_order()
+		self.update_disassembled_order(is_cancel=True)
 		self.update_stock_ledger()
 
 		self.ignore_linked_doctypes = (
@@ -301,6 +306,7 @@ class StockEntry(StockController):
 			self.set_material_request_transfer_status("In Transit")
 
 	def on_update(self):
+		super().on_update()
 		self.set_serial_and_batch_bundle()
 
 	def set_job_card_data(self):
@@ -377,6 +383,27 @@ class StockEntry(StockController):
 				},
 			):
 				frappe.delete_doc("Stock Entry", d.name)
+
+	def delink_asset_repair_sabb(self):
+		if not self.asset_repair:
+			return
+
+		for row in self.items:
+			if row.serial_and_batch_bundle:
+				voucher_detail_no = frappe.db.get_value(
+					"Asset Repair Consumed Item",
+					{"parent": self.asset_repair, "serial_and_batch_bundle": row.serial_and_batch_bundle},
+					"name",
+				)
+
+				doc = frappe.get_doc("Serial and Batch Bundle", row.serial_and_batch_bundle)
+				doc.db_set(
+					{
+						"voucher_type": "Asset Repair",
+						"voucher_no": self.asset_repair,
+						"voucher_detail_no": voucher_detail_no,
+					}
+				)
 
 	def set_transfer_qty(self):
 		self.validate_qty_is_not_zero()
@@ -540,17 +567,19 @@ class StockEntry(StockController):
 			if acc_details.account_type == "Stock":
 				frappe.throw(
 					_(
-						"At row {0}: the Difference Account must not be a Stock type account, please change the Account Type for the account {1} or select a different account"
+						"At row #{0}: the Difference Account must not be a Stock type account, please change the Account Type for the account {1} or select a different account"
 					).format(d.idx, get_link_to_form("Account", d.expense_account)),
-					OpeningEntryAccountError,
+					title=_("Difference Account in Items Table"),
 				)
 
 			if self.purpose != "Material Issue" and acc_details.account_type == "Cost of Goods Sold":
 				frappe.msgprint(
 					_(
-						"At row {0}: You have selected the Difference Account {1}, which is a Cost of Goods Sold type account. Please select a different account"
+						"At row #{0}: you have selected the Difference Account {1}, which is a Cost of Goods Sold type account. Please select a different account"
 					).format(d.idx, bold(get_link_to_form("Account", d.expense_account))),
-					title=_("Warning : Cost of Goods Sold Account"),
+					title=_("Cost of Goods Sold Account in Items Table"),
+					indicator="orange",
+					alert=1,
 				)
 
 	def validate_warehouse(self):
@@ -1012,12 +1041,20 @@ class StockEntry(StockController):
 				continue
 			d.additional_cost = (flt(d.basic_amount) / incoming_items_cost) * self.total_additional_costs
 
-	def update_valuation_rate(self):
+	def update_valuation_rate(self, reset_outgoing_rate=True):
 		for d in self.get("items"):
+			if not reset_outgoing_rate and d.s_warehouse:
+				continue
+
 			if d.transfer_qty:
-				d.amount = flt(flt(d.basic_amount) + flt(d.additional_cost), d.precision("amount"))
+				d.amount = flt(
+					flt(flt(d.basic_amount) + flt(d.additional_cost) + flt(d.landed_cost_voucher_amount)),
+					d.precision("amount"),
+				)
 				# Do not round off valuation rate to avoid precision loss
-				d.valuation_rate = flt(d.basic_rate) + (flt(d.additional_cost) / flt(d.transfer_qty))
+				d.valuation_rate = flt(d.basic_rate) + (
+					flt(flt(d.additional_cost) + flt(d.landed_cost_voucher_amount)) / flt(d.transfer_qty)
+				)
 
 	def set_total_incoming_outgoing_value(self):
 		self.total_incoming_value = self.total_outgoing_value = 0.0
@@ -1388,7 +1425,7 @@ class StockEntry(StockController):
 					)
 				)
 
-	def update_stock_ledger(self, allow_negative_stock=False):
+	def update_stock_ledger(self, allow_negative_stock=False, via_landed_cost_voucher=False):
 		sl_entries = []
 		finished_item_row = self.get_finished_item_row()
 
@@ -1402,7 +1439,11 @@ class StockEntry(StockController):
 		if self.docstatus == 2:
 			sl_entries.reverse()
 
-		self.make_sl_entries(sl_entries, allow_negative_stock=allow_negative_stock)
+		self.make_sl_entries(
+			sl_entries,
+			allow_negative_stock=allow_negative_stock,
+			via_landed_cost_voucher=via_landed_cost_voucher,
+		)
 
 	def get_finished_item_row(self):
 		finished_item_row = None
@@ -1605,7 +1646,64 @@ class StockEntry(StockController):
 						)
 					)
 
+		self.set_gl_entries_for_landed_cost_voucher(gl_entries, warehouse_account)
+
 		return process_gl_map(gl_entries)
+
+	def set_gl_entries_for_landed_cost_voucher(self, gl_entries, warehouse_account):
+		landed_cost_entries = self.get_item_account_wise_lcv_entries()
+		if not landed_cost_entries:
+			return
+
+		for item in self.get("items"):
+			if item.s_warehouse:
+				continue
+
+			if (item.item_code, item.name) in landed_cost_entries:
+				for account, amount in landed_cost_entries[(item.item_code, item.name)].items():
+					account_currency = get_account_currency(account)
+					credit_amount = (
+						flt(amount["base_amount"])
+						if (amount["base_amount"] or account_currency != self.company_currency)
+						else flt(amount["amount"])
+					)
+
+					gl_entries.append(
+						self.get_gl_dict(
+							{
+								"account": account,
+								"against": warehouse_account.get(item.t_warehouse)["account"],
+								"cost_center": item.cost_center,
+								"debit": 0.0,
+								"credit": credit_amount,
+								"remarks": _("Accounting Entry for LCV in Stock Entry {0}").format(self.name),
+								"credit_in_account_currency": flt(amount["amount"]),
+								"account_currency": account_currency,
+								"project": item.project,
+							},
+							item=item,
+						)
+					)
+
+					account_currency = get_account_currency(item.expense_account)
+
+					# credit amount in negative to knock off the debit entry
+					gl_entries.append(
+						self.get_gl_dict(
+							{
+								"account": item.expense_account,
+								"against": warehouse_account.get(item.t_warehouse)["account"],
+								"cost_center": item.cost_center,
+								"debit": 0.0,
+								"credit": credit_amount * -1,
+								"remarks": _("Accounting Entry for LCV in Stock Entry {0}").format(self.name),
+								"debit_in_account_currency": flt(amount["amount"]),
+								"account_currency": account_currency,
+								"project": item.project,
+							},
+							item=item,
+						)
+					)
 
 	def update_work_order(self):
 		def _validate_work_order(pro_doc):
@@ -1635,6 +1733,11 @@ class StockEntry(StockController):
 			_validate_work_order(pro_doc)
 
 			if self.fg_completed_qty:
+				if self.docstatus == 1:
+					pro_doc.add_additional_items(self)
+				else:
+					pro_doc.remove_additional_items(self)
+
 				pro_doc.run_method("update_work_order_qty")
 				if self.purpose == "Manufacture":
 					pro_doc.run_method("update_planned_qty")
@@ -1643,10 +1746,21 @@ class StockEntry(StockController):
 			if not pro_doc.operations:
 				pro_doc.set_actual_dates()
 
+	def update_disassembled_order(self, is_cancel=False):
+		if not self.work_order:
+			return
+		if self.purpose == "Disassemble" and self.fg_completed_qty:
+			pro_doc = frappe.get_doc("Work Order", self.work_order)
+			pro_doc.run_method("update_disassembled_qty", self.fg_completed_qty, is_cancel)
+
 	def make_stock_reserve_for_wip_and_fg(self):
 		if self.is_stock_reserve_for_work_order():
 			pro_doc = frappe.get_doc("Work Order", self.work_order)
-			if self.purpose == "Manufacture" and not pro_doc.sales_order:
+			if (
+				self.purpose == "Manufacture"
+				and not pro_doc.sales_order
+				and not pro_doc.production_plan_sub_assembly_item
+			):
 				return
 
 			pro_doc.set_reserved_qty_for_wip_and_fg(self)
@@ -1654,7 +1768,11 @@ class StockEntry(StockController):
 	def cancel_stock_reserve_for_wip_and_fg(self):
 		if self.is_stock_reserve_for_work_order():
 			pro_doc = frappe.get_doc("Work Order", self.work_order)
-			if self.purpose == "Manufacture" and not pro_doc.sales_order:
+			if (
+				self.purpose == "Manufacture"
+				and not pro_doc.sales_order
+				and not pro_doc.production_plan_sub_assembly_item
+			):
 				return
 
 			pro_doc.cancel_reserved_qty_for_wip_and_fg(self)
@@ -1811,7 +1929,7 @@ class StockEntry(StockController):
 					},
 				)
 
-	def get_items_for_disassembly(self):
+	def get_items_for_disassembly(self, disassemble_qty, production_item):
 		"""Get items for Disassembly Order"""
 
 		if not self.work_order:
@@ -1819,15 +1937,24 @@ class StockEntry(StockController):
 
 		items = self.get_items_from_manufacture_entry()
 
-		s_warehouse = ""
-		if self.work_order:
-			s_warehouse = frappe.db.get_value("Work Order", self.work_order, "fg_warehouse")
+		s_warehouse = frappe.db.get_value("Work Order", self.work_order, "fg_warehouse")
+
+		items_dict = get_bom_items_as_dict(self.bom_no, self.company, disassemble_qty)
 
 		for row in items:
 			child_row = self.append("items", {})
 			for field, value in row.items():
 				if value is not None:
 					child_row.set(field, value)
+
+			# update qty and amount from BOM items
+			bom_items = items_dict.get(row.item_code)
+			if bom_items:
+				child_row.qty = bom_items.get("qty", child_row.qty)
+				child_row.amount = bom_items.get("amount", child_row.amount)
+
+			if row.item_code == production_item:
+				child_row.qty = disassemble_qty
 
 			child_row.s_warehouse = (self.from_warehouse or s_warehouse) if row.is_finished_item else ""
 			child_row.t_warehouse = self.to_warehouse if not row.is_finished_item else ""
@@ -1861,12 +1988,12 @@ class StockEntry(StockController):
 		)
 
 	@frappe.whitelist()
-	def get_items(self):
+	def get_items(self, qty=None, production_item=None):
 		self.set("items", [])
 		self.validate_work_order()
 
-		if self.purpose == "Disassemble":
-			return self.get_items_for_disassembly()
+		if self.purpose == "Disassemble" and qty is not None:
+			return self.get_items_for_disassembly(qty, production_item)
 
 		if not self.posting_date or not self.posting_time:
 			frappe.throw(_("Posting date and posting time is mandatory"))
@@ -2442,7 +2569,7 @@ class StockEntry(StockController):
 		if not qty:
 			return
 
-		use_serial_batch_fields = frappe.db.get_single_value("Stock Settings", "use_serial_batch_fields")
+		use_serial_batch_fields = frappe.get_single_value("Stock Settings", "use_serial_batch_fields")
 
 		ste_item_details = {
 			"from_warehouse": item.warehouse,
@@ -2920,7 +3047,7 @@ def move_sample_to_retention_warehouse(company, items):
 
 	if isinstance(items, str):
 		items = json.loads(items)
-	retention_warehouse = frappe.db.get_single_value("Stock Settings", "sample_retention_warehouse")
+	retention_warehouse = frappe.get_single_value("Stock Settings", "sample_retention_warehouse")
 	stock_entry = frappe.new_doc("Stock Entry")
 	stock_entry.company = company
 	stock_entry.purpose = "Material Transfer"
@@ -2971,7 +3098,7 @@ def make_stock_in_entry(source_name, target_doc=None):
 		target.stock_entry_type = "Material Transfer"
 		target.set_missing_values()
 
-		if not frappe.db.get_single_value("Stock Settings", "use_serial_batch_fields"):
+		if not frappe.get_single_value("Stock Settings", "use_serial_batch_fields"):
 			target.make_serial_and_batch_bundle_for_transfer()
 
 	def update_item(source_doc, target_doc, source_parent):
@@ -3039,7 +3166,7 @@ def get_operating_cost_per_unit(work_order=None, bom_no=None):
 			and frappe.db.get_single_value(
 				"Manufacturing Settings", "set_op_cost_and_scrap_from_sub_assemblies"
 			)
-			and frappe.get_cached_value("Work Order", work_order, "use_multi_level_bom")
+			and frappe.get_cached_value("Work Order", work_order.name, "use_multi_level_bom")
 		):
 			return get_op_cost_from_sub_assemblies(bom_no)
 
@@ -3200,7 +3327,7 @@ def validate_sample_quantity(item_code, sample_quantity, qty, batch_no=None):
 		frappe.throw(
 			_("Sample quantity {0} cannot be more than received quantity {1}").format(sample_quantity, qty)
 		)
-	retention_warehouse = frappe.db.get_single_value("Stock Settings", "sample_retention_warehouse")
+	retention_warehouse = frappe.get_single_value("Stock Settings", "sample_retention_warehouse")
 	retainted_qty = 0
 	if batch_no:
 		retainted_qty = get_batch_qty(batch_no, retention_warehouse, item_code)

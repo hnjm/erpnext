@@ -36,7 +36,7 @@ class CurrencyExchangeSettings(Document):
 
 	def validate(self):
 		self.set_parameters_and_result()
-		if frappe.flags.in_test or frappe.flags.in_install or frappe.flags.in_setup_wizard:
+		if frappe.in_test or frappe.flags.in_install or frappe.flags.in_setup_wizard:
 			return
 		response, value = self.validate_parameters()
 		self.validate_result(response, value)

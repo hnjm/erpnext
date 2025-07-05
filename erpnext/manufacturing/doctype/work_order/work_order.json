@@ -2,7 +2,7 @@
  "actions": [],
  "allow_import": 1,
  "autoname": "naming_series:",
- "creation": "2013-01-10 16:34:16",
+ "creation": "2025-04-09 12:09:40.634472",
  "doctype": "DocType",
  "document_type": "Setup",
  "engine": "InnoDB",
@@ -20,6 +20,7 @@
   "qty",
   "material_transferred_for_manufacturing",
   "produced_qty",
+  "disassembled_qty",
   "process_loss_qty",
   "project",
   "track_semi_finished_goods",
@@ -43,11 +44,6 @@
   "skip_transfer",
   "from_wip_warehouse",
   "update_consumed_material_cost_in_project",
-  "serial_no_and_batch_for_finished_good_section",
-  "has_serial_no",
-  "has_batch_no",
-  "column_break_18",
-  "batch_size",
   "time",
   "planned_start_date",
   "planned_end_date",
@@ -63,6 +59,11 @@
   "column_break_24",
   "corrective_operation_cost",
   "total_operating_cost",
+  "serial_no_and_batch_for_finished_good_section",
+  "has_serial_no",
+  "has_batch_no",
+  "column_break_18",
+  "batch_size",
   "more_info",
   "description",
   "stock_uom",
@@ -505,7 +506,7 @@
    "depends_on": "eval:!doc.__islocal",
    "fieldname": "serial_no_and_batch_for_finished_good_section",
    "fieldtype": "Section Break",
-   "label": "Serial No and Batch for Finished Good"
+   "label": "Finished Good Serial / Batch"
   },
   {
    "fieldname": "column_break_17",
@@ -592,14 +593,23 @@
    "fieldname": "reserve_stock",
    "fieldtype": "Check",
    "label": " Reserve Stock"
+  },
+  {
+   "depends_on": "eval:doc.docstatus==1",
+   "fieldname": "disassembled_qty",
+   "fieldtype": "Float",
+   "label": "Disassembled Qty",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
+ "grid_page_length": 50,
  "icon": "fa fa-cogs",
  "idx": 1,
  "image_field": "image",
  "is_submittable": 1,
  "links": [],
- "modified": "2024-09-23 16:56:00.483027",
+ "modified": "2025-06-21 00:55:45.916224",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "Work Order",
@@ -629,6 +639,7 @@
    "role": "Stock User"
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "ASC",
  "states": [],

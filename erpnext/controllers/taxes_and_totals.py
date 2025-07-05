@@ -28,9 +28,7 @@ class calculate_taxes_and_totals:
 	def __init__(self, doc: Document):
 		self.doc = doc
 		frappe.flags.round_off_applicable_accounts = []
-		frappe.flags.round_row_wise_tax = frappe.db.get_single_value(
-			"Accounts Settings", "round_row_wise_tax"
-		)
+		frappe.flags.round_row_wise_tax = frappe.get_single_value("Accounts Settings", "round_row_wise_tax")
 
 		if doc.get("round_off_applicable_accounts_for_tax_withholding"):
 			frappe.flags.round_off_applicable_accounts.append(
@@ -1170,7 +1168,7 @@ def get_rounded_tax_amount(itemised_tax, precision):
 
 @frappe.whitelist()
 def get_rounding_tax_settings():
-	return frappe.db.get_single_value("Accounts Settings", "round_row_wise_tax")
+	return frappe.get_single_value("Accounts Settings", "round_row_wise_tax")
 
 
 class init_landed_taxes_and_totals:

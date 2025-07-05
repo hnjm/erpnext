@@ -236,7 +236,7 @@ def get_balance_on(
 		report_type = ""
 
 	if cost_center and report_type == "Profit and Loss":
-		cc = frappe.get_doc("Cost Center", cost_center)
+		cc = frappe.get_lazy_doc("Cost Center", cost_center)
 		if cc.is_group:
 			cond.append(
 				f""" exists (
@@ -555,7 +555,7 @@ def reconcile_against_document(
 		# update advance paid in Advance Receivable/Payable doctypes
 		if update_advance_paid:
 			for t, n in update_advance_paid:
-				frappe.get_doc(t, n).set_total_advance_paid()
+				frappe.get_lazy_doc(t, n).set_total_advance_paid()
 
 		frappe.flags.ignore_party_validation = False
 
@@ -731,10 +731,13 @@ def update_reference_in_payment_entry(
 	update_advance_paid = []
 
 	# Update Reconciliation effect date in reference
+	reconciliation_takes_effect_on = frappe.get_cached_value(
+		"Company", payment_entry.company, "reconciliation_takes_effect_on"
+	)
 	if payment_entry.book_advance_payments_in_separate_party_account:
-		if payment_entry.advance_reconciliation_takes_effect_on == "Advance Payment Date":
+		if reconciliation_takes_effect_on == "Advance Payment Date":
 			reconcile_on = payment_entry.posting_date
-		elif payment_entry.advance_reconciliation_takes_effect_on == "Oldest Of Invoice Or Advance":
+		elif reconciliation_takes_effect_on == "Oldest Of Invoice Or Advance":
 			date_field = "posting_date"
 			if d.against_voucher_type in ["Sales Order", "Purchase Order"]:
 				date_field = "transaction_date"
@@ -742,7 +745,7 @@ def update_reference_in_payment_entry(
 
 			if getdate(reconcile_on) < getdate(payment_entry.posting_date):
 				reconcile_on = payment_entry.posting_date
-		elif payment_entry.advance_reconciliation_takes_effect_on == "Reconciliation Date":
+		elif reconciliation_takes_effect_on == "Reconciliation Date":
 			reconcile_on = nowdate()
 
 		reference_details.update({"reconcile_effect_on": reconcile_on})
@@ -883,7 +886,7 @@ def cancel_common_party_journal(self):
 	if self.doctype not in ["Sales Invoice", "Purchase Invoice"]:
 		return
 
-	if not frappe.db.get_single_value("Accounts Settings", "enable_common_party_accounting"):
+	if not frappe.get_single_value("Accounts Settings", "enable_common_party_accounting"):
 		return
 
 	party_link = self.get_common_party_link()
@@ -1464,7 +1467,7 @@ def repost_gle_for_stock_vouchers(
 
 		for voucher_type, voucher_no in stock_vouchers_chunk:
 			existing_gle = gle.get((voucher_type, voucher_no), [])
-			voucher_obj = frappe.get_doc(voucher_type, voucher_no)
+			voucher_obj = frappe.get_lazy_doc(voucher_type, voucher_no)
 			# Some transactions post credit as negative debit, this is handled while posting GLE
 			# but while comparing we need to make sure it's flipped so comparisons are accurate
 			expected_gle = toggle_debit_credit_if_negative(voucher_obj.get_gl_entries(warehouse_account))
@@ -1477,7 +1480,7 @@ def repost_gle_for_stock_vouchers(
 			else:
 				_delete_accounting_ledger_entries(voucher_type, voucher_no)
 
-		if not frappe.flags.in_test:
+		if not frappe.in_test:
 			frappe.db.commit()
 
 		if repost_doc:
@@ -1888,7 +1891,7 @@ def update_voucher_outstanding(voucher_type, voucher_no, account, party_type, pa
 		and voucher_outstanding
 	):
 		outstanding = voucher_outstanding[0]
-		ref_doc = frappe.get_doc(voucher_type, voucher_no)
+		ref_doc = frappe.get_lazy_doc(voucher_type, voucher_no)
 		outstanding_amount = flt(
 			outstanding["outstanding_in_account_currency"], ref_doc.precision("outstanding_amount")
 		)
@@ -2309,7 +2312,7 @@ def run_ledger_health_checks():
 
 
 def sync_auto_reconcile_config(auto_reconciliation_job_trigger: int = 15):
-	auto_reconciliation_job_trigger = auto_reconciliation_job_trigger or frappe.db.get_single_value(
+	auto_reconciliation_job_trigger = auto_reconciliation_job_trigger or frappe.get_single_value(
 		"Accounts Settings", "auto_reconciliation_job_trigger"
 	)
 	method = "erpnext.accounts.doctype.process_payment_reconciliation.process_payment_reconciliation.trigger_reconciliation_for_queued_docs"

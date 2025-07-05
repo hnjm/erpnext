@@ -241,7 +241,7 @@ class JobCard(Document):
 				row.sub_operation = row.operation
 				self.append("sub_operations", row)
 
-	def validate_time_logs(self):
+	def validate_time_logs(self, save=False):
 		self.total_time_in_mins = 0.0
 		self.total_completed_qty = 0.0
 
@@ -271,6 +271,14 @@ class JobCard(Document):
 					self.total_completed_qty += d.completed_qty
 
 			self.total_completed_qty = flt(self.total_completed_qty, self.precision("total_completed_qty"))
+
+			if save and self.docstatus == 1:
+				self.db_set(
+					{
+						"total_time_in_mins": self.total_time_in_mins,
+						"total_completed_qty": self.total_completed_qty,
+					}
+				)
 
 		for row in self.sub_operations:
 			self.total_completed_qty += row.completed_qty
@@ -670,7 +678,7 @@ class JobCard(Document):
 			return
 
 		for d in doc.required_items:
-			if not d.operation and not d.operation_row_id:
+			if not doc.track_semi_finished_goods and not d.operation and not d.operation_row_id:
 				frappe.throw(
 					_("Row {0} : Operation is required against the raw material item {1}").format(
 						d.idx, d.item_code
@@ -740,7 +748,7 @@ class JobCard(Document):
 					bold("Job Card"), get_link_to_form("Job Card", self.name)
 				)
 			)
-		else:
+		elif frappe.db.get_single_value("Manufacturing Settings", "enforce_time_logs"):
 			for row in self.time_logs:
 				if not row.from_time or not row.to_time:
 					frappe.throw(
@@ -1220,6 +1228,8 @@ class JobCard(Document):
 
 		if not self.employee and kwargs.employees:
 			self.set_employees(kwargs.employees)
+
+		self.validate_time_logs(save=True)
 
 	def update_workstation_status(self):
 		status_map = {

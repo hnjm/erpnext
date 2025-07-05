@@ -27,7 +27,9 @@
   "available_qty_at_source_warehouse",
   "available_qty_at_wip_warehouse",
   "column_break_jash",
-  "stock_reserved_qty"
+  "stock_reserved_qty",
+  "is_additional_item",
+  "voucher_detail_reference"
  ],
  "fields": [
   {
@@ -172,17 +174,35 @@
    "no_copy": 1,
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_additional_item",
+   "fieldtype": "Check",
+   "label": "Is Additional Item",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "is_additional_item",
+   "fieldname": "voucher_detail_reference",
+   "fieldtype": "Data",
+   "label": "Voucher Detail Reference",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
+ "grid_page_length": 50,
  "istable": 1,
  "links": [],
- "modified": "2024-11-20 15:48:16.823384",
+ "modified": "2025-05-12 17:36:00.115181",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "Work Order Item",
  "owner": "Administrator",
  "permissions": [],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

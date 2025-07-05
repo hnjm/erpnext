@@ -432,8 +432,9 @@ $.extend(erpnext.utils, {
 		if (!frappe.boot.setup_complete) {
 			return;
 		}
+		const today = frappe.datetime.get_today();
 		if (!date) {
-			date = frappe.datetime.get_today();
+			date = today;
 		}
 
 		let fiscal_year = "";
@@ -444,7 +445,7 @@ $.extend(erpnext.utils, {
 		) {
 			if (with_dates) fiscal_year = frappe.boot.current_fiscal_year;
 			else fiscal_year = frappe.boot.current_fiscal_year[0];
-		} else {
+		} else if (today != date) {
 			frappe.call({
 				method: "erpnext.accounts.utils.get_fiscal_year",
 				type: "GET", // make it cacheable
@@ -721,7 +722,7 @@ erpnext.utils.update_child_items = function (opts) {
 							} = r.message;
 
 							const row = dialog.fields_dict.trans_items.df.data.find(
-								(doc) => doc.idx == me.doc.idx
+								(row) => row.name == me.doc.name
 							);
 							if (row) {
 								Object.assign(row, {
@@ -1026,15 +1027,11 @@ erpnext.utils.map_current_doc = function (opts) {
 					return;
 				}
 
-				if (values.constructor === Array) {
-					opts.source_name = [...new Set(values)];
-				} else {
-					opts.source_name = values;
-				}
+				opts.source_name = Array.isArray(values) ? [...new Set(values)] : values;
 
 				if (
 					opts.allow_child_item_selection ||
-					["Purchase Receipt", "Delivery Note"].includes(opts.source_doctype)
+					["Purchase Receipt", "Delivery Note", "Pick List"].includes(opts.source_doctype)
 				) {
 					// args contains filtered child docnames
 					opts.args = args;

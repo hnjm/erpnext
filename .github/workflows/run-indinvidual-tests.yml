@@ -7,6 +7,9 @@ concurrency:
   group: server-individual-tests-develop-${{ github.event_name }}-${{ github.event.number || github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   discover:
     runs-on: ubuntu-latest

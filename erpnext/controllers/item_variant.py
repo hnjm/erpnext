@@ -242,7 +242,7 @@ def enqueue_multiple_variant_creation(item, args, use_template_image=False):
 			item=item,
 			args=args,
 			use_template_image=use_template_image,
-			now=frappe.flags.in_test,
+			now=frappe.in_test,
 		)
 		return "queued"
 

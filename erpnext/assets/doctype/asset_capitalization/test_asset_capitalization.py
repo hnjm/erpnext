@@ -59,10 +59,16 @@ class TestAssetCapitalization(IntegrationTestCase):
 			company=company,
 		)
 
+		wip_composite_asset = create_asset(
+			asset_name="Asset Capitalization WIP Composite Asset",
+			is_composite_asset=1,
+			warehouse="Stores - TCP1",
+			company=company,
+		)
+
 		# Create and submit Asset Captitalization
 		asset_capitalization = create_asset_capitalization(
-			capitalization_method="Create a new composite asset",
-			target_item_code="Macbook Pro",
+			target_asset=wip_composite_asset.name,
 			target_asset_location="Test Location",
 			stock_qty=stock_qty,
 			stock_rate=stock_rate,
@@ -148,10 +154,16 @@ class TestAssetCapitalization(IntegrationTestCase):
 			company=company,
 		)
 
+		wip_composite_asset = create_asset(
+			asset_name="Asset Capitalization WIP Composite Asset",
+			is_composite_asset=1,
+			warehouse="Stores - TCP1",
+			company=company,
+		)
+
 		# Create and submit Asset Captitalization
 		asset_capitalization = create_asset_capitalization(
-			capitalization_method="Create a new composite asset",
-			target_item_code="Macbook Pro",
+			target_asset=wip_composite_asset.name,
 			target_asset_location="Test Location",
 			stock_qty=stock_qty,
 			stock_rate=stock_rate,
@@ -240,7 +252,6 @@ class TestAssetCapitalization(IntegrationTestCase):
 
 		# Create and submit Asset Captitalization
 		asset_capitalization = create_asset_capitalization(
-			capitalization_method="Choose a WIP composite asset",
 			target_asset=wip_composite_asset.name,
 			target_asset_location="Test Location",
 			stock_qty=stock_qty,
@@ -251,7 +262,6 @@ class TestAssetCapitalization(IntegrationTestCase):
 		)
 
 		# Test Asset Capitalization values
-		self.assertEqual(asset_capitalization.capitalization_method, "Choose a WIP composite asset")
 		self.assertEqual(asset_capitalization.target_qty, 1)
 
 		self.assertEqual(asset_capitalization.stock_items[0].valuation_rate, stock_rate)
@@ -310,7 +320,6 @@ class TestAssetCapitalization(IntegrationTestCase):
 
 		# Create and submit Asset Captitalization
 		asset_capitalization = create_asset_capitalization(
-			capitalization_method="Choose a WIP composite asset",
 			target_asset=wip_composite_asset.name,
 			target_asset_location="Test Location",
 			service_qty=service_qty,
@@ -340,6 +349,50 @@ class TestAssetCapitalization(IntegrationTestCase):
 		self.assertFalse(get_actual_gle_dict(asset_capitalization.name))
 		self.assertFalse(get_actual_sle_dict(asset_capitalization.name))
 
+	def test_capitalize_composite_component(self):
+		company = "_Test Company with perpetual inventory"
+		set_depreciation_settings_in_company(company=company)
+		name = frappe.db.get_value(
+			"Asset Category Account",
+			filters={"parent": "Computers", "company_name": company},
+			fieldname=["name"],
+		)
+		frappe.db.set_value("Asset Category Account", name, "capital_work_in_progress_account", "")
+
+		wip_composite_asset = create_asset(
+			asset_name="Asset Capitalization WIP Composite Asset",
+			is_composite_asset=1,
+			warehouse="Stores - TCP1",
+			company=company,
+		)
+
+		consumed_asset_value = 100000
+
+		consumed_asset = create_asset(
+			asset_name="Asset Capitalization Consumable Asset",
+			asset_value=consumed_asset_value,
+			submit=1,
+			warehouse="Stores - _TC",
+			is_composite_component=1,
+			company=company,
+		)
+
+		# Create and submit Asset Captitalization
+		asset_capitalization = create_asset_capitalization(
+			target_asset=wip_composite_asset.name,
+			target_asset_location="Test Location",
+			consumed_asset=consumed_asset.name,
+			company=company,
+			submit=1,
+		)
+
+		# Test Asset Capitalization values
+		self.assertEqual(asset_capitalization.target_qty, 1)
+		self.assertEqual(asset_capitalization.asset_items[0].asset_value, consumed_asset_value)
+
+		actual_gle = get_actual_gle_dict(asset_capitalization.name)
+		self.assertEqual(actual_gle, {})
+
 
 def create_asset_capitalization_data():
 	create_item("Capitalization Target Stock Item", is_stock_item=1, is_fixed_asset=0, is_purchase_item=0)
@@ -362,7 +415,6 @@ def create_asset_capitalization(**args):
 	asset_capitalization = frappe.new_doc("Asset Capitalization")
 	asset_capitalization.update(
 		{
-			"capitalization_method": args.capitalization_method or None,
 			"company": company,
 			"posting_date": args.posting_date or now.strftime("%Y-%m-%d"),
 			"posting_time": args.posting_time or now.strftime("%H:%M:%S.%f"),

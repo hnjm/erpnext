@@ -4,7 +4,7 @@
 
 import frappe
 from frappe import qb
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, add_years, flt, getdate, nowdate, today
 from frappe.utils.data import getdate as convert_to_date
 
@@ -19,15 +19,6 @@ from erpnext.buying.doctype.purchase_order.test_purchase_order import create_pur
 from erpnext.stock.doctype.item.test_item import create_item
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ["Item"]
-
-
-class UnitTestPaymentReconciliation(UnitTestCase):
-	"""
-	Unit tests for PaymentReconciliation.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestPaymentReconciliation(IntegrationTestCase):
@@ -1988,7 +1979,9 @@ class TestPaymentReconciliation(IntegrationTestCase):
 
 	def test_reconciliation_on_closed_period_payment(self):
 		# create backdated fiscal year
-		first_fy_start_date = frappe.db.get_value("Fiscal Year", {"disabled": 0}, "min(year_start_date)")
+		first_fy_start_date = frappe.db.get_value(
+			"Fiscal Year", {"disabled": 0}, [{"MIN": "year_start_date"}]
+		)
 		prev_fy_start_date = add_years(first_fy_start_date, -1)
 		prev_fy_end_date = add_days(first_fy_start_date, -1)
 		create_fiscal_year(

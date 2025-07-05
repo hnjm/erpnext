@@ -25,6 +25,7 @@
   "column_break_8",
   "frequency_of_depreciation",
   "expected_value_after_useful_life",
+  "value_after_depreciation",
   "depreciation_schedule_section",
   "depreciation_schedule",
   "details_section",
@@ -38,6 +39,7 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Asset",
+   "link_filters": "[[\"Asset\",\"docstatus\",\"<\",\"2\"],[\"Asset\",\"company\",\"=\",\"eval:doc.company\"]]",
    "options": "Asset",
    "reqd": 1
   },
@@ -202,12 +204,18 @@
    "label": "Company",
    "options": "Company",
    "read_only": 1
+  },
+  {
+   "fieldname": "value_after_depreciation",
+   "fieldtype": "Currency",
+   "label": "Value After Depreciation",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-03-27 13:06:34.135004",
+ "modified": "2024-12-02 17:54:20.635668",
  "modified_by": "Administrator",
  "module": "Assets",
  "name": "Asset Depreciation Schedule",

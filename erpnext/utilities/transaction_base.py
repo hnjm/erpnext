@@ -166,6 +166,9 @@ class TransactionBase(StatusUpdater):
 		child_table_values = set()
 
 		for row in self.get(child_table):
+			if default_field == "set_warehouse" and row.get("delivered_by_supplier"):
+				continue
+
 			child_table_values.add(row.get(child_table_field))
 
 		if len(child_table_values) > 1:
@@ -351,7 +354,7 @@ class TransactionBase(StatusUpdater):
 			self.set_rate_based_on_price_list(item_obj, item_details)
 
 	def add_taxes_from_item_template(self, item_obj: object, item_details: dict) -> None:
-		if item_details.item_tax_rate and frappe.db.get_single_value(
+		if item_details.item_tax_rate and frappe.get_single_value(
 			"Accounts Settings", "add_taxes_from_item_tax_template"
 		):
 			item_tax_template = frappe.json.loads(item_details.item_tax_rate)

@@ -25,6 +25,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: server-mariadb-develop-${{ github.event_name }}-${{ github.event.number || github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
@@ -65,7 +68,7 @@ jobs:
 
       - name: Check for valid Python & Merge Conflicts
         run: |
-          python -m compileall -f "${GITHUB_WORKSPACE}"
+          python -m compileall -fq "${GITHUB_WORKSPACE}"
           if grep -lr --exclude-dir=node_modules "^<<<<<<< " "${GITHUB_WORKSPACE}"
               then echo "Found merge conflicts"
               exit 1

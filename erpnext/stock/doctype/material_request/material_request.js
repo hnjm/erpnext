@@ -91,6 +91,12 @@ frappe.ui.form.on("Material Request", {
 	refresh: function (frm) {
 		frm.events.make_custom_buttons(frm);
 		frm.toggle_reqd("customer", frm.doc.material_request_type == "Customer Provided");
+		prevent_past_schedule_dates(frm);
+	},
+
+	transaction_date(frm) {
+		prevent_past_schedule_dates(frm);
+		frm.set_value("schedule_date", "");
 	},
 
 	set_from_warehouse: function (frm) {
@@ -568,25 +574,23 @@ erpnext.buying.MaterialRequestController = class MaterialRequestController exten
 
 	onload() {
 		this.frm.set_query("item_code", "items", function (doc, cdt, cdn) {
+			let filters = { is_stock_item: 1 };
+
 			if (doc.material_request_type == "Customer Provided") {
-				return {
-					query: "erpnext.controllers.queries.item_query",
-					filters: {
-						customer: doc.customer,
-						is_stock_item: 1,
-					},
-				};
-			} else if (doc.material_request_type == "Purchase") {
-				return {
-					query: "erpnext.controllers.queries.item_query",
-					filters: { is_purchase_item: 1 },
-				};
-			} else {
-				return {
-					query: "erpnext.controllers.queries.item_query",
-					filters: { is_stock_item: 1 },
-				};
+				filters.customer = doc.customer;
+			} else if (
+				doc.material_request_type == "Purchase" ||
+				doc.material_request_type == "Subcontracting"
+			) {
+				filters = { is_purchase_item: 1 };
+			} else if (doc.material_request_type == "Manufacture") {
+				filters.include_item_in_manufacturing = 1;
 			}
+
+			return {
+				query: "erpnext.controllers.queries.item_query",
+				filters: filters,
+			};
 		});
 	}
 
@@ -601,10 +605,6 @@ erpnext.buying.MaterialRequestController = class MaterialRequestController exten
 	}
 
 	items_on_form_rendered() {
-		set_schedule_date(this.frm);
-	}
-
-	schedule_date() {
 		set_schedule_date(this.frm);
 	}
 
@@ -628,5 +628,13 @@ function set_schedule_date(frm) {
 			"items",
 			"schedule_date"
 		);
+	}
+}
+
+function prevent_past_schedule_dates(frm) {
+	if (frm.doc.transaction_date) {
+		frm.fields_dict["schedule_date"].datepicker.update({
+			minDate: new Date(frm.doc.transaction_date),
+		});
 	}
 }

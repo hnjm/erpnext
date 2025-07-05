@@ -114,7 +114,7 @@ class TestDeferredRevenueAndExpense(IntegrationTestCase, AccountsTestMixin):
 		pda.submit()
 
 		# execute report
-		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01"))
+		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01")[0])
 		self.filters = frappe._dict(
 			{
 				"company": self.company,
@@ -186,7 +186,7 @@ class TestDeferredRevenueAndExpense(IntegrationTestCase, AccountsTestMixin):
 		pda.submit()
 
 		# execute report
-		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01"))
+		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01")[0])
 		self.filters = frappe._dict(
 			{
 				"company": self.company,
@@ -253,7 +253,7 @@ class TestDeferredRevenueAndExpense(IntegrationTestCase, AccountsTestMixin):
 		pda.submit()
 
 		# execute report
-		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01"))
+		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2021-05-01")[0])
 		self.filters = frappe._dict(
 			{
 				"company": self.company,
@@ -326,7 +326,7 @@ class TestDeferredRevenueAndExpense(IntegrationTestCase, AccountsTestMixin):
 		pda.submit()
 
 		# execute report
-		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2022-01-31"))
+		fiscal_year = frappe.get_doc("Fiscal Year", get_fiscal_year(date="2022-01-31")[0])
 		self.filters = frappe._dict(
 			{
 				"company": self.company,

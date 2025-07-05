@@ -3,7 +3,7 @@
 
 
 import frappe
-from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils.data import (
 	add_days,
 	add_months,
@@ -19,15 +19,6 @@ from frappe.utils.data import (
 from erpnext.accounts.doctype.subscription.subscription import get_prorata_factor
 
 EXTRA_TEST_RECORD_DEPENDENCIES = ("UOM", "Item Group", "Item")
-
-
-class UnitTestSubscription(UnitTestCase):
-	"""
-	Unit tests for Subscription.
-	Use this class for testing individual functions and methods.
-	"""
-
-	pass
 
 
 class TestSubscription(IntegrationTestCase):

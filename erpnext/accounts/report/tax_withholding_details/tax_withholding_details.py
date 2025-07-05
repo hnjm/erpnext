@@ -9,7 +9,7 @@ from frappe.utils import getdate
 
 def execute(filters=None):
 	if filters.get("party_type") == "Customer":
-		party_naming_by = frappe.db.get_single_value("Selling Settings", "cust_master_name")
+		party_naming_by = frappe.get_single_value("Selling Settings", "cust_master_name")
 	else:
 		party_naming_by = frappe.db.get_single_value("Buying Settings", "supp_master_name")
 
@@ -121,7 +121,7 @@ def get_result(filters, tds_docs, tds_accounts, tax_category_map, journal_entry_
 				)
 				out.append(row)
 
-	out.sort(key=lambda x: x["section_code"])
+	out.sort(key=lambda x: (x["section_code"], x["transaction_date"]))
 
 	return out
 

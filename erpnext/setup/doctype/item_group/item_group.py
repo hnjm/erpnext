@@ -32,7 +32,7 @@ class ItemGroup(NestedSet):
 	# end: auto-generated types
 
 	def validate(self):
-		if not self.parent_item_group and not frappe.flags.in_test:
+		if not self.parent_item_group and not frappe.in_test:
 			if frappe.db.exists("Item Group", _("All Item Groups")):
 				self.parent_item_group = _("All Item Groups")
 		self.validate_item_group_defaults()

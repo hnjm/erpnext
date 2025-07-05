@@ -5,6 +5,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "invoice_type",
+  "section_break_gyos",
   "invoice_fields",
   "pos_search_fields"
  ],
@@ -12,7 +14,7 @@
   {
    "fieldname": "invoice_fields",
    "fieldtype": "Table",
-   "label": "POS Field",
+   "label": "POS Additional Fields",
    "options": "POS Field"
   },
   {
@@ -20,11 +22,23 @@
    "fieldtype": "Table",
    "label": "POS Search Fields",
    "options": "POS Search Fields"
+  },
+  {
+   "default": "Sales Invoice",
+   "description": "The system will create a Sales Invoice or a POS Invoice from the POS interface based on this setting. For high-volume transactions, it is recommended to use POS Invoice.",
+   "fieldname": "invoice_type",
+   "fieldtype": "Select",
+   "label": "Invoice Type Created via POS Screen",
+   "options": "Sales Invoice\nPOS Invoice"
+  },
+  {
+   "fieldname": "section_break_gyos",
+   "fieldtype": "Section Break"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2024-03-27 13:10:17.083132",
+ "modified": "2025-06-06 11:36:44.885353",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Settings",
@@ -56,6 +70,7 @@
   }
  ],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

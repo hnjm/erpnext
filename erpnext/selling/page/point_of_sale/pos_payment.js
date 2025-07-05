@@ -1,8 +1,11 @@
 /* eslint-disable no-unused-vars */
 erpnext.PointOfSale.Payment = class {
-	constructor({ events, wrapper }) {
+	constructor({ events, wrapper, settings }) {
 		this.wrapper = wrapper;
 		this.events = events;
+		this.set_gt_to_default_mop = settings.set_grand_total_to_default_mop;
+		this.invoice_fields = settings.invoice_fields;
+		this.allow_partial_payment = settings.allow_partial_payment;
 
 		this.init_component();
 	}
@@ -17,14 +20,23 @@ erpnext.PointOfSale.Payment = class {
 	prepare_dom() {
 		this.wrapper.append(
 			`<section class="payment-container">
-				<div class="section-label payment-section">${__("Payment Method")}</div>
-				<div class="payment-modes"></div>
-				<div class="fields-numpad-container">
-					<div class="fields-section">
-						<div class="section-label">${__("Additional Information")}</div>
-						<div class="invoice-fields"></div>
+				<div class="payment-split-container">
+					<div class="payment-container-left">
+						<div class="section-label payment-section">${__("Payment Method")}</div>
+						<div class="payment-modes"></div>
 					</div>
-					<div class="number-pad"></div>
+					<div class="payment-container-right">
+						<div class="fields-numpad-container">
+							<div class="fields-section">
+								<div class="invoice-fields">
+									<button class="btn btn-default btn-sm btn-shadow addl-fields hidden">${__(
+										"Update Additional Information"
+									)}</button>
+								</div>
+							</div>
+							<div class="number-pad"></div>
+						</div>
+					</div>
 				</div>
 				<div class="totals-section">
 					<div class="totals"></div>
@@ -40,48 +52,67 @@ erpnext.PointOfSale.Payment = class {
 		this.$invoice_fields_section = this.$component.find(".fields-section");
 	}
 
-	make_invoice_fields_control() {
-		this.reqd_invoice_fields = [];
-		frappe.db.get_doc("POS Settings", undefined).then((doc) => {
-			const fields = doc.invoice_fields;
-			if (!fields.length) return;
-
-			this.$invoice_fields = this.$invoice_fields_section.find(".invoice-fields");
-			this.$invoice_fields.html("");
-			const frm = this.events.get_frm();
-
-			fields.forEach((df) => {
-				this.$invoice_fields.append(
-					`<div class="invoice_detail_field ${df.fieldname}-field" data-fieldname="${df.fieldname}"></div>`
-				);
-				let df_events = {
-					onchange: function () {
-						frm.set_value(this.df.fieldname, this.get_value());
-					},
-				};
-				if (df.fieldtype == "Button") {
-					df_events = {
-						click: function () {
-							if (frm.script_manager.has_handlers(df.fieldname, frm.doc.doctype)) {
-								frm.script_manager.trigger(df.fieldname, frm.doc.doctype, frm.doc.docname);
-							}
-						},
-					};
+	make_invoice_field_dialog() {
+		const me = this;
+		if (!me.invoice_fields.length) return;
+		me.addl_dlg = new frappe.ui.Dialog({
+			title: __("Additional Information"),
+			fields: me.invoice_fields,
+			size: "small",
+			primary_action_label: __("Save"),
+			primary_action(values) {
+				me.set_values_to_frm(values);
+				if (this.complete_order) {
+					me.events.submit_invoice();
 				}
-				if (df.reqd && (df.fieldtype !== "Button" || !df.read_only)) {
-					this.reqd_invoice_fields.push({ fieldname: df.fieldname, label: df.label });
-				}
+				this.hide();
+			},
+		});
+		me.addl_dlg.$wrapper.on("hide.bs.modal", function () {
+			me.addl_dlg.complete_order = false;
+		});
+		me.add_btn_field_click_listener();
+		me.set_value_on_dialog_fields();
+		me.make_addl_info_dialog_btn_visible();
+	}
 
-				this[`${df.fieldname}_field`] = frappe.ui.form.make_control({
-					df: {
-						...df,
-						...df_events,
-					},
-					parent: this.$invoice_fields.find(`.${df.fieldname}-field`),
-					render_input: true,
+	set_values_to_frm(values) {
+		const frm = this.events.get_frm();
+		this.addl_dlg.fields.forEach((df) => {
+			frm.set_value(df.fieldname, values[df.fieldname]);
+		});
+		frappe.show_alert({
+			message: __("Additional Information updated successfully."),
+			indicator: "green",
+		});
+	}
+
+	add_btn_field_click_listener() {
+		const frm = this.events.get_frm();
+		this.addl_dlg.fields.forEach((df) => {
+			if (df.fieldtype === "Button") {
+				this.addl_dlg.fields_dict[df.fieldname].$input.on("click", function () {
+					if (frm.script_manager.has_handlers(df.fieldname, frm.doc.doctype)) {
+						frm.script_manager.trigger(df.fieldname, frm.doc.doctype, frm.doc.docname);
+					}
 				});
-				this[`${df.fieldname}_field`].set_value(frm.doc[df.fieldname]);
-			});
+			}
+		});
+	}
+
+	set_value_on_dialog_fields() {
+		const doc = this.events.get_frm().doc;
+		this.addl_dlg.fields.forEach((df) => {
+			if (doc[df.fieldname] || df.default_value) {
+				this.addl_dlg.set_value(df.fieldname, doc[df.fieldname] || df.default_value);
+			}
+		});
+	}
+
+	make_addl_info_dialog_btn_visible() {
+		this.$invoice_fields_section.find(".addl-fields").removeClass("hidden");
+		this.$invoice_fields_section.find(".addl-fields").on("click", () => {
+			this.addl_dlg.show();
 		});
 	}
 
@@ -99,7 +130,7 @@ erpnext.PointOfSale.Payment = class {
 				[1, 2, 3],
 				[4, 5, 6],
 				[7, 8, 9],
-				[".", 0, "Delete"],
+				["+/-", 0, "Delete"],
 			],
 		});
 
@@ -110,13 +141,33 @@ erpnext.PointOfSale.Payment = class {
 		const button_value = $btn.attr("data-button-value");
 
 		highlight_numpad_btn($btn);
-		this.numpad_value =
-			button_value === "delete" ? this.numpad_value.slice(0, -1) : this.numpad_value + button_value;
-		this.selected_mode.$input.get(0).focus();
-		this.selected_mode.set_value(this.numpad_value);
+		if (!this.selected_mode) {
+			frappe.show_alert({
+				message: __("Select a Payment Method."),
+				indicator: "yellow",
+			});
+			return;
+		}
+
+		const precision = 10 ** frappe.sys_defaults.currency_precision;
+		this.numpad_value = "0";
+		if (this.selected_mode.get_value()) {
+			this.numpad_value = (this.selected_mode.get_value() * precision).toFixed(0).toString();
+		}
+
+		if (button_value === "delete") {
+			this.numpad_value = this.numpad_value.slice(0, -1);
+		} else if (button_value === "+/-") {
+			this.numpad_value = `${this.numpad_value * -1}`;
+		} else {
+			this.numpad_value = this.numpad_value + button_value;
+		}
+
+		this.selected_mode.set_value(this.numpad_value / precision);
 
 		function highlight_numpad_btn($btn) {
 			$btn.addClass("shadow-base-inner bg-selected");
+			frappe.utils.play_sound("numpad-touch", true);
 			setTimeout(() => {
 				$btn.removeClass("shadow-base-inner bg-selected");
 			}, 100);
@@ -131,22 +182,17 @@ erpnext.PointOfSale.Payment = class {
 			// if clicked element doesn't have .mode-of-payment class then return
 			if (!$(e.target).is(mode_clicked)) return;
 
-			const scrollLeft =
-				mode_clicked.offset().left - me.$payment_modes.offset().left + me.$payment_modes.scrollLeft();
-			me.$payment_modes.animate({ scrollLeft });
-
 			const mode = mode_clicked.attr("data-mode");
 
 			// hide all control fields and shortcuts
 			$(`.mode-of-payment-control`).css("display", "none");
-			$(`.cash-shortcuts`).css("display", "none");
 			me.$payment_modes.find(`.pay-amount`).css("display", "inline");
 			me.$payment_modes.find(`.loyalty-amount-name`).css("display", "none");
 
 			// remove highlight from all mode-of-payments
 			$(".mode-of-payment").removeClass("border-primary");
 
-			if (mode_clicked.hasClass("border-primary")) {
+			if (me.selected_mode?._label === me[`${mode}_control`]?._label) {
 				// clicked one is selected then unselect it
 				mode_clicked.removeClass("border-primary");
 				me.selected_mode = "";
@@ -154,13 +200,21 @@ erpnext.PointOfSale.Payment = class {
 				// clicked one is not selected then select it
 				mode_clicked.addClass("border-primary");
 				mode_clicked.find(".mode-of-payment-control").css("display", "flex");
-				mode_clicked.find(".cash-shortcuts").css("display", "grid");
 				me.$payment_modes.find(`.${mode}-amount`).css("display", "none");
 				me.$payment_modes.find(`.${mode}-name`).css("display", "inline");
 
 				me.selected_mode = me[`${mode}_control`];
-				me.selected_mode && me.selected_mode.$input.get(0).focus();
 				me.auto_set_remaining_amount();
+			}
+		});
+
+		frappe.ui.form.on("POS Invoice", "contact_mobile", (frm) => {
+			const contact = frm.doc.contact_mobile;
+			const request_button = $(this.request_for_payment_field?.$input[0]);
+			if (contact) {
+				request_button.removeClass("btn-default").addClass("btn-primary");
+			} else {
+				request_button.removeClass("btn-primary").addClass("btn-default");
 			}
 		});
 
@@ -184,16 +238,21 @@ erpnext.PointOfSale.Payment = class {
 			const paid_amount = doc.paid_amount;
 			const items = doc.items;
 
-			if (!this.validate_reqd_invoice_fields()) {
-				return;
-			}
-
-			if (!items.length || (paid_amount == 0 && doc.additional_discount_percentage != 100)) {
+			if (
+				!items.length ||
+				(paid_amount == 0 &&
+					doc.additional_discount_percentage != 100 &&
+					this.allow_partial_payment === 0)
+			) {
 				const message = items.length
 					? __("You cannot submit the order without payment.")
 					: __("You cannot submit empty order.");
 				frappe.show_alert({ message, indicator: "orange" });
 				frappe.utils.play_sound("error");
+				return;
+			}
+
+			if (!this.validate_reqd_invoice_fields()) {
 				return;
 			}
 
@@ -250,11 +309,6 @@ erpnext.PointOfSale.Payment = class {
 
 	bind_paid_amount_event(frm) {
 		this.update_totals_section(frm.doc);
-
-		// need to re calculate cash shortcuts after discount is applied
-		const is_cash_shortcuts_invisible = !this.$payment_modes.find(".cash-shortcuts").is(":visible");
-		this.attach_cash_shortcuts(frm.doc);
-		!is_cash_shortcuts_invisible && this.$payment_modes.find(".cash-shortcuts").css("display", "grid");
 		this.render_payment_mode_dom();
 	}
 
@@ -355,9 +409,9 @@ erpnext.PointOfSale.Payment = class {
 
 	render_payment_section() {
 		this.render_payment_mode_dom();
-		this.make_invoice_fields_control();
+		this.make_invoice_field_dialog();
 		this.update_totals_section();
-		this.unset_grand_total_to_default_mop();
+		this.set_grand_total_to_default_mop();
 	}
 
 	after_render() {
@@ -411,8 +465,7 @@ erpnext.PointOfSale.Payment = class {
 				.map((p, i) => {
 					const mode = this.sanitize_mode_of_payment(p.mode_of_payment);
 					const payment_type = p.type;
-					const margin = i % 2 === 0 ? "pr-2" : "pl-2";
-					const amount = p.amount > 0 ? format_currency(p.amount, currency) : "";
+					const amount = p.amount !== 0 ? format_currency(p.amount, currency) : "";
 
 					return `
 					<div class="payment-mode-wrapper">
@@ -452,11 +505,11 @@ erpnext.PointOfSale.Payment = class {
 			});
 			this[`${mode}_control`].toggle_label(false);
 			this[`${mode}_control`].set_value(p.amount);
+
+			this.selected_mode_input_display();
 		});
 
 		this.render_loyalty_points_payment_mode();
-
-		this.attach_cash_shortcuts(doc);
 	}
 
 	focus_on_default_mop() {
@@ -470,45 +523,6 @@ erpnext.PointOfSale.Payment = class {
 				}, 500);
 			}
 		});
-	}
-
-	attach_cash_shortcuts(doc) {
-		const grand_total = cint(frappe.sys_defaults.disable_rounded_total)
-			? doc.grand_total
-			: doc.rounded_total;
-		const currency = doc.currency;
-
-		const shortcuts = this.get_cash_shortcuts(flt(grand_total));
-
-		this.$payment_modes.find(".cash-shortcuts").remove();
-		let shortcuts_html = shortcuts
-			.map((s) => {
-				return `<div class="shortcut" data-value="${s}">${format_currency(s, currency)}</div>`;
-			})
-			.join("");
-
-		this.$payment_modes
-			.find('[data-payment-type="Cash"]')
-			.find(".mode-of-payment-control")
-			.after(`<div class="cash-shortcuts">${shortcuts_html}</div>`);
-	}
-
-	get_cash_shortcuts(grand_total) {
-		let steps = [1, 5, 10];
-		const digits = String(Math.round(grand_total)).length;
-
-		steps = steps.map((x) => x * 10 ** (digits - 2));
-
-		const get_nearest = (amount, x) => {
-			let nearest_x = Math.ceil(amount / x) * x;
-			return nearest_x === amount ? nearest_x + x : nearest_x;
-		};
-
-		return steps.reduce((finalArr, x) => {
-			let nearest_x = get_nearest(grand_total, x);
-			nearest_x = finalArr.indexOf(nearest_x) != -1 ? nearest_x + x : nearest_x;
-			return [...finalArr, nearest_x];
-		}, []);
 	}
 
 	render_loyalty_points_payment_mode() {
@@ -610,7 +624,7 @@ erpnext.PointOfSale.Payment = class {
 		const remaining = grand_total - doc.paid_amount;
 		const change = doc.change_amount || remaining <= 0 ? -1 * remaining : undefined;
 		const currency = doc.currency;
-		const label = __("Change Amount");
+		const label = doc.paid_amount > grand_total ? __("Change Amount") : __("Remaining Amount");
 
 		this.$totals.html(
 			`<div class="col">
@@ -625,7 +639,10 @@ erpnext.PointOfSale.Payment = class {
 			<div class="seperator-y"></div>
 			<div class="col">
 				<div class="total-label">${label}</div>
-				<div class="value">${format_currency(change || remaining, currency)}</div>
+				<div class="value ${doc.paid_amount < grand_total ? "text-danger" : "text-success"}">${format_currency(
+				change || remaining,
+				currency
+			)}</div>
 			</div>`
 		);
 	}
@@ -642,32 +659,34 @@ erpnext.PointOfSale.Payment = class {
 			.toLowerCase();
 	}
 
-	async unset_grand_total_to_default_mop() {
-		const doc = this.events.get_frm().doc;
-		let r = await frappe.db.get_value(
-			"POS Profile",
-			doc.pos_profile,
-			"disable_grand_total_to_default_mop"
-		);
-
-		if (!r.message.disable_grand_total_to_default_mop) {
+	set_grand_total_to_default_mop() {
+		if (this.set_gt_to_default_mop) {
 			this.focus_on_default_mop();
 		}
 	}
 
 	validate_reqd_invoice_fields() {
+		if (this.invoice_fields.length === 0) return true;
 		const doc = this.events.get_frm().doc;
-		let validation_flag = true;
-		for (let field of this.reqd_invoice_fields) {
-			if (!doc[field.fieldname]) {
-				validation_flag = false;
-				frappe.show_alert({
-					message: __("{0} is a mandatory field.", [field.label]),
-					indicator: "orange",
-				});
-				frappe.utils.play_sound("error");
+		for (const df of this.addl_dlg.fields) {
+			if (df.reqd && !doc[df.fieldname]) {
+				this.addl_dlg.primary_action_label = "Submit";
+				this.addl_dlg.complete_order = true;
+				this.addl_dlg.show();
+				this.addl_dlg.fields_dict[df.fieldname].$input.focus();
+				return false;
 			}
 		}
-		return validation_flag;
+		return true;
+	}
+
+	selected_mode_input_display() {
+		if (this.selected_mode) {
+			const mode = this.sanitize_mode_of_payment(this.selected_mode.df.label);
+			this.$payment_modes.find(`.mode-of-payment[data-mode="${mode}"]`).addClass("border-primary");
+			this.$payment_modes.find(`.${mode}.mode-of-payment-control`).css("display", "flex");
+			this.$payment_modes.find(`.${mode}-amount`).css("display", "none");
+			this.$payment_modes.find(`.${mode}-name`).css("display", "inline");
+		}
 	}
 };

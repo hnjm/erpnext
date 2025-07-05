@@ -134,6 +134,7 @@
    "fieldname": "quantity",
    "fieldtype": "Float",
    "label": "Quantity",
+   "non_negative": 1,
    "oldfieldname": "quantity",
    "oldfieldtype": "Currency",
    "reqd": 1
@@ -663,7 +664,7 @@
  "image_field": "image",
  "is_submittable": 1,
  "links": [],
- "modified": "2024-06-03 16:24:47.518411",
+ "modified": "2025-06-16 16:13:22.497695",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "BOM",
@@ -696,6 +697,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "search_fields": "item, item_name",
  "show_name_in_global_search": 1,
  "sort_field": "creation",

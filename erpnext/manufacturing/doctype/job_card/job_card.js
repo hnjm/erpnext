@@ -45,8 +45,7 @@ frappe.ui.form.on("Job Card", {
 
 	setup_stock_entry(frm) {
 		if (
-			frm.doc.manufactured_qty &&
-			frm.doc.finished_good &&
+			frm.doc.track_semi_finished_goods &&
 			frm.doc.docstatus === 1 &&
 			!frm.doc.is_subcontracted &&
 			flt(frm.doc.for_quantity) + flt(frm.doc.process_loss_qty) > flt(frm.doc.manufactured_qty)
@@ -97,9 +96,13 @@ frappe.ui.form.on("Job Card", {
 			let excess_transfer_allowed = frm.doc.__onload.job_card_excess_transfer;
 
 			if (has_items && (to_request || excess_transfer_allowed)) {
-				frm.add_custom_button(__("Material Request"), () => {
-					frm.trigger("make_material_request");
-				});
+				frm.add_custom_button(
+					__("Material Request"),
+					() => {
+						frm.trigger("make_material_request");
+					},
+					__("Create")
+				);
 			}
 
 			// check if any row has untransferred materials
@@ -107,9 +110,13 @@ frappe.ui.form.on("Job Card", {
 			let to_transfer = frm.doc.items.some((row) => row.transferred_qty < row.required_qty);
 
 			if (has_items && (to_transfer || excess_transfer_allowed)) {
-				frm.add_custom_button(__("Material Transfer"), () => {
-					frm.trigger("make_stock_entry");
-				});
+				frm.add_custom_button(
+					__("Material Transfer"),
+					() => {
+						frm.trigger("make_stock_entry");
+					},
+					__("Create")
+				);
 			}
 		}
 
@@ -252,7 +259,6 @@ frappe.ui.form.on("Job Card", {
 				fieldtype: "Float",
 				label: __("Process Loss Quantity"),
 				fieldname: "process_loss_qty",
-				reqd: 1,
 				onchange() {
 					let doc = frm.job_completion_dialog;
 

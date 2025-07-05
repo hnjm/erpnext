@@ -522,7 +522,7 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 				table.name,
 				child_table.activity_type,
 				table.status,
-				table.total_billable_hours,
+				child_table.billing_hours,
 				(table.sales_invoice | child_table.sales_invoice).as_("sales_invoice"),
 				child_table.project,
 			)

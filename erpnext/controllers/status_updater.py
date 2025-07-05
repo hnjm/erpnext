@@ -164,6 +164,17 @@ status_map = {
 		["Draft", None],
 		["Completed", "eval:self.docstatus == 1"],
 	],
+	"Pick List": [
+		["Draft", None],
+		["Open", "eval:self.docstatus == 1"],
+		["Completed", "stock_entry_exists"],
+		[
+			"Partly Delivered",
+			"eval:self.purpose == 'Delivery' and self.delivery_status == 'Partly Delivered'",
+		],
+		["Completed", "eval:self.purpose == 'Delivery' and self.delivery_status == 'Fully Delivered'"],
+		["Cancelled", "eval:self.docstatus == 2"],
+	],
 }
 
 
@@ -266,7 +277,7 @@ class StatusUpdater(Document):
 				if hasattr(d, "qty") and d.qty > 0 and self.get("is_return"):
 					frappe.throw(_("For an item {0}, quantity must be negative number").format(d.item_code))
 
-				if not frappe.db.get_single_value("Selling Settings", "allow_negative_rates_for_items"):
+				if not frappe.get_single_value("Selling Settings", "allow_negative_rates_for_items"):
 					if hasattr(d, "item_code") and hasattr(d, "rate") and flt(d.rate) < 0:
 						frappe.throw(
 							_(
@@ -336,12 +347,10 @@ class StatusUpdater(Document):
 			qty_or_amount,
 		)
 
-		role_allowed_to_over_deliver_receive = frappe.db.get_single_value(
+		role_allowed_to_over_deliver_receive = frappe.get_single_value(
 			"Stock Settings", "role_allowed_to_over_deliver_receive"
 		)
-		role_allowed_to_over_bill = frappe.db.get_single_value(
-			"Accounts Settings", "role_allowed_to_over_bill"
-		)
+		role_allowed_to_over_bill = frappe.get_single_value("Accounts Settings", "role_allowed_to_over_bill")
 		role = role_allowed_to_over_deliver_receive if qty_or_amount == "qty" else role_allowed_to_over_bill
 
 		overflow_percent = (
@@ -561,7 +570,7 @@ class StatusUpdater(Document):
 				)
 
 		if update_data:
-			target = frappe.get_doc(args["target_parent_dt"], args["name"])
+			target = frappe.get_lazy_doc(args["target_parent_dt"], args["name"])
 			target.update(update_data)  # status calculus might depend on it
 			status = target.get_status()
 			if status.get("status"):
@@ -621,7 +630,7 @@ class StatusUpdater(Document):
 
 			per_billed = safe_div(min(ref_doc_qty, billed_qty), ref_doc_qty) * 100
 
-			ref_doc = frappe.get_doc(ref_dt, ref_dn)
+			ref_doc = frappe.get_lazy_doc(ref_dt, ref_dn)
 
 			ref_doc.db_set("per_billed", per_billed)
 

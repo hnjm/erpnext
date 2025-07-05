@@ -3,6 +3,7 @@
 
 
 import json
+import typing
 from functools import WRAPPER_ASSIGNMENTS, wraps
 
 import frappe
@@ -135,7 +136,7 @@ def get_item_details(
 	out.update(data)
 
 	if (
-		frappe.db.get_single_value("Stock Settings", "auto_create_serial_and_batch_bundle_for_outward")
+		frappe.get_single_value("Stock Settings", "auto_create_serial_and_batch_bundle_for_outward")
 		and not ctx.get("serial_and_batch_bundle")
 		and (ctx.get("use_serial_batch_fields") or ctx.get("doctype") == "POS Invoice")
 	):
@@ -200,9 +201,15 @@ def update_stock(ctx, out, doc=None):
 			{
 				"item_code": ctx.item_code,
 				"warehouse": ctx.warehouse,
-				"based_on": frappe.db.get_single_value("Stock Settings", "pick_serial_and_batch_based_on"),
+				"based_on": frappe.get_single_value("Stock Settings", "pick_serial_and_batch_based_on"),
+				"sabb_voucher_no": doc.get("name"),
+				"sabb_voucher_detail_no": ctx.child_docname,
+				"sabb_voucher_type": ctx.doctype,
 			}
 		)
+
+		if ctx.get("doctype") == "Delivery Note":
+			kwargs["against_sales_order"] = ctx.get("against_sales_order")
 
 		if ctx.get("ignore_serial_nos"):
 			kwargs["ignore_serial_nos"] = ctx.get("ignore_serial_nos")
@@ -366,7 +373,7 @@ def get_basic_details(ctx: ItemDetailsCtx, item, overwrite_warehouse=True) -> It
 	"""
 
 	if not item:
-		item = frappe.get_doc("Item", ctx.item_code)
+		item = frappe.get_cached_doc("Item", ctx.item_code)
 
 	if item.variant_of and not item.taxes and frappe.db.exists("Item Tax", {"parent": item.variant_of}):
 		item.update_template_tables()
@@ -532,8 +539,8 @@ def get_basic_details(ctx: ItemDetailsCtx, item, overwrite_warehouse=True) -> It
 			out.manufacturer_part_no = None
 			out.manufacturer = None
 	else:
-		data = frappe.get_value(
-			"Item", item.name, ["default_item_manufacturer", "default_manufacturer_part_no"], as_dict=1
+		data = frappe.get_cached_value(
+			"Item", item.name, ["default_item_manufacturer", "default_manufacturer_part_no"], as_dict=True
 		)
 
 		if data:
@@ -590,7 +597,7 @@ def get_item_warehouse_(ctx: ItemDetailsCtx, item, overwrite_warehouse, defaults
 		warehouse = ctx.warehouse
 
 	if not warehouse:
-		default_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+		default_warehouse = frappe.get_single_value("Stock Settings", "default_warehouse")
 		if frappe.db.get_value("Warehouse", default_warehouse, "company") == ctx.company:
 			return default_warehouse
 
@@ -671,8 +678,9 @@ def get_item_tax_info(doc, tax_category, item_codes, item_rates=None, item_tax_t
 	return out
 
 
+@frappe.whitelist()
 @erpnext.normalize_ctx_input(ItemDetailsCtx)
-def get_item_tax_template(ctx: ItemDetailsCtx, item, out: ItemDetails):
+def get_item_tax_template(ctx: ItemDetailsCtx, item=None, out: ItemDetails | None = None):
 	"""
 	Determines item_tax template from item or parent item groups.
 
@@ -690,6 +698,12 @@ def get_item_tax_template(ctx: ItemDetailsCtx, item, out: ItemDetails):
 	        "base_net_rate": float
 	        }
 	"""
+	if not item:
+		if not ctx.get("item_code"):
+			frappe.throw(_("Item/Item Code required to get Item Tax Template."))
+		else:
+			item = frappe.get_cached_doc("Item", ctx.item_code)
+
 	item_tax_template = None
 	if item.taxes:
 		item_tax_template = _get_item_tax_template(ctx, item.taxes, out)
@@ -701,8 +715,10 @@ def get_item_tax_template(ctx: ItemDetailsCtx, item, out: ItemDetails):
 			item_tax_template = _get_item_tax_template(ctx, item_group_doc.taxes, out)
 			item_group = item_group_doc.parent_item_group
 
-	if ctx.get("child_doctype") and item_tax_template:
+	if out and ctx.get("child_doctype") and item_tax_template:
 		out.update(get_fetch_values(ctx.get("child_doctype"), "item_tax_template", item_tax_template))
+
+	return item_tax_template
 
 
 @erpnext.normalize_ctx_input(ItemDetailsCtx)
@@ -1178,9 +1194,8 @@ def check_packing_list(price_list_rate_name, desired_qty, item_code):
 	"""
 
 	flag = True
-	item_price = frappe.get_doc("Item Price", price_list_rate_name)
-	if item_price.packing_unit:
-		packing_increment = desired_qty % item_price.packing_unit
+	if packing_unit := frappe.db.get_value("Item Price", price_list_rate_name, "packing_unit", cache=True):
+		packing_increment = desired_qty % packing_unit
 
 		if packing_increment != 0:
 			flag = False
@@ -1317,15 +1332,20 @@ def get_pos_profile(company, pos_profile=None, user=None):
 
 @frappe.whitelist()
 def get_conversion_factor(item_code, uom):
-	variant_of = frappe.db.get_value("Item", item_code, "variant_of", cache=True)
+	item = frappe.get_cached_value("Item", item_code, ["variant_of", "stock_uom"], as_dict=True)
+	if not item_code or not item:
+		return {"conversion_factor": 1.0}
+
+	if uom == item.stock_uom:
+		return {"conversion_factor": 1.0}
+
 	filters = {"parent": item_code, "uom": uom}
 
-	if variant_of:
-		filters["parent"] = ("in", (item_code, variant_of))
+	if item.variant_of:
+		filters["parent"] = ("in", (item_code, item.variant_of))
 	conversion_factor = frappe.db.get_value("UOM Conversion Detail", filters, "conversion_factor")
 	if not conversion_factor:
-		stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
-		conversion_factor = get_uom_conv_factor(uom, stock_uom)
+		conversion_factor = get_uom_conv_factor(uom, item.stock_uom)
 
 	return {"conversion_factor": conversion_factor or 1.0}
 
@@ -1447,7 +1467,7 @@ def apply_price_list(ctx: ItemDetailsCtx, as_doc=False, doc=None):
 
 
 def apply_price_list_on_item(ctx, doc=None):
-	item_doc = frappe.db.get_value("Item", ctx.item_code, ["name", "variant_of"], as_dict=1)
+	item_doc = frappe.get_cached_doc("Item", ctx.item_code)
 	item_details = get_price_list_rate(ctx, item_doc)
 	item_details.update(get_pricing_rule_for_item(ctx, doc=doc))
 
@@ -1515,7 +1535,6 @@ def get_valuation_rate(item_code, company, warehouse=None):
 	item = get_item_defaults(item_code, company)
 	item_group = get_item_group_defaults(item_code, company)
 	brand = get_brand_defaults(item_code, company)
-	# item = frappe.get_doc("Item", item_code)
 	if item.get("is_stock_item"):
 		if not warehouse:
 			warehouse = (

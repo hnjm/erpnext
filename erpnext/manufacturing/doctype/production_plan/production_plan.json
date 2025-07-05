@@ -11,6 +11,7 @@
   "get_items_from",
   "column_break1",
   "posting_date",
+  "reserve_stock",
   "filters",
   "item_code",
   "customer",
@@ -23,6 +24,7 @@
   "from_delivery_date",
   "to_delivery_date",
   "sales_orders_detail",
+  "combine_items",
   "get_sales_orders",
   "sales_orders",
   "material_request_detail",
@@ -30,16 +32,14 @@
   "material_requests",
   "select_items_to_manufacture_section",
   "get_items",
-  "combine_items",
   "po_items",
   "section_break_25",
   "prod_plan_references",
   "section_break_24",
-  "combine_sub_items",
   "sub_assembly_warehouse",
-  "section_break_ucc4",
-  "skip_available_sub_assembly_item",
   "column_break_igxl",
+  "skip_available_sub_assembly_item",
+  "combine_sub_items",
   "get_sub_assembly_items",
   "section_break_g4ip",
   "sub_assembly_items",
@@ -215,7 +215,8 @@
   {
    "fieldname": "material_request_planning",
    "fieldtype": "Section Break",
-   "label": "Material Request Planning"
+   "hide_border": 1,
+   "label": "For Raw Materials"
   },
   {
    "default": "1",
@@ -231,10 +232,10 @@
   },
   {
    "default": "1",
-   "description": "If enabled, the system will consider items with a shortfall in quantity. \n<br>\nQty = Reqd Qty (BOM) - <a href=\"https://docs.frappe.io/erpnext/user/manual/en/projected-quantity\">Projected Qty</a>",
+   "description": "If enabled, formula for <b>Required Qty</b>: <br>\nRequired Qty (BOM) - <a href=\"https://docs.frappe.io/erpnext/user/manual/en/projected-quantity\">Projected Qty</a>. <br> This helps avoid over-ordering.",
    "fieldname": "ignore_existing_ordered_qty",
    "fieldtype": "Check",
-   "label": "Skip Available Raw Materials"
+   "label": "Consider Projected Qty in Calculation (RM)"
   },
   {
    "fieldname": "column_break_25",
@@ -314,7 +315,7 @@
   {
    "fieldname": "for_warehouse",
    "fieldtype": "Link",
-   "label": "Raw Materials Warehouse",
+   "label": "For Warehouse",
    "options": "Warehouse"
   },
   {
@@ -375,11 +376,13 @@
    "label": "Get Sub Assembly Items"
   },
   {
+   "depends_on": "eval:doc.get_items_from == 'Sales Order'",
    "fieldname": "from_delivery_date",
    "fieldtype": "Date",
    "label": "From Delivery Date"
   },
   {
+   "depends_on": "eval:doc.get_items_from == 'Sales Order'",
    "fieldname": "to_delivery_date",
    "fieldtype": "Date",
    "label": "To Delivery Date"
@@ -404,15 +407,10 @@
   },
   {
    "default": "1",
-   "description": "If enabled, the system will consider items with a shortfall in quantity. \n<br>\nQty = Reqd Qty (BOM) - <a href=\"https://docs.frappe.io/erpnext/user/manual/en/projected-quantity\">Projected Qty</a>",
+   "description": "If enabled, formula for <b>Qty to Order</b>: <br>\nRequired Qty (BOM) - <a href=\"https://docs.frappe.io/erpnext/user/manual/en/projected-quantity\">Projected Qty</a>. <br> This helps avoid over-ordering.",
    "fieldname": "skip_available_sub_assembly_item",
    "fieldtype": "Check",
-   "label": "Skip Available Sub Assembly Items"
-  },
-  {
-   "fieldname": "section_break_ucc4",
-   "fieldtype": "Column Break",
-   "hide_border": 1
+   "label": "Consider Projected Qty in Calculation"
   },
   {
    "fieldname": "section_break_g4ip",
@@ -423,7 +421,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "When a parent warehouse is chosen, the system conducts stock checks against the associated child warehouses",
+   "description": "When a parent warehouse is chosen, the system conducts Project Qty checks against the associated child warehouses",
    "fieldname": "sub_assembly_warehouse",
    "fieldtype": "Link",
    "label": "Sub Assembly Warehouse",
@@ -435,6 +433,12 @@
    "fieldname": "consider_minimum_order_qty",
    "fieldtype": "Check",
    "label": "Consider Minimum Order Qty"
+  },
+  {
+   "default": "0",
+   "fieldname": "reserve_stock",
+   "fieldtype": "Check",
+   "label": "Reserve Stock"
   }
  ],
  "grid_page_length": 50,
@@ -442,7 +446,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-04-08 17:24:09.394056",
+ "modified": "2025-05-09 18:55:45.500257",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "Production Plan",
