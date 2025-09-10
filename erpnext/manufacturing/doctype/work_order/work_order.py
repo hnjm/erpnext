@@ -149,6 +149,7 @@ class WorkOrder(Document):
 		self.set_onload("material_consumption", ms.material_consumption)
 		self.set_onload("backflush_raw_materials_based_on", ms.backflush_raw_materials_based_on)
 		self.set_onload("overproduction_percentage", ms.overproduction_percentage_for_work_order)
+		self.set_onload("transfer_extra_materials_percentage", ms.transfer_extra_materials_percentage)
 		self.set_onload("show_create_job_card_button", self.show_create_job_card_button())
 		self.set_onload(
 			"enable_stock_reservation",
@@ -199,6 +200,7 @@ class WorkOrder(Document):
 
 		self.set_required_items(reset_only_qty=len(self.get("required_items")))
 		self.enable_auto_reserve_stock()
+		self.validate_operations_sequence()
 
 	def validate_dates(self):
 		if self.actual_start_date and self.actual_end_date:
@@ -228,6 +230,30 @@ class WorkOrder(Document):
 	def enable_auto_reserve_stock(self):
 		if self.is_new() and frappe.db.get_single_value("Stock Settings", "auto_reserve_stock"):
 			self.reserve_stock = 1
+
+	def validate_operations_sequence(self):
+		if all([not op.sequence_id for op in self.operations]):
+			for op in self.operations:
+				op.sequence_id = op.idx
+		else:
+			sequence_id = 1
+			for op in self.operations:
+				if op.idx == 1 and op.sequence_id != 1:
+					frappe.throw(
+						_("Row #1: Sequence ID must be 1 for Operation {0}.").format(
+							frappe.bold(op.operation)
+						)
+					)
+				elif op.sequence_id != sequence_id and op.sequence_id != sequence_id + 1:
+					frappe.throw(
+						_("Row #{0}: Sequence ID must be {1} or {2} for Operation {3}.").format(
+							op.idx,
+							frappe.bold(sequence_id),
+							frappe.bold(sequence_id + 1),
+							frappe.bold(op.operation),
+						)
+					)
+				sequence_id = op.sequence_id
 
 	def set_warehouses(self):
 		for row in self.required_items:
@@ -440,6 +466,9 @@ class WorkOrder(Document):
 		"""Update **Manufactured Qty** and **Material Transferred for Qty** in Work Order
 		based on Stock Entry"""
 
+		if self.track_semi_finished_goods:
+			return
+
 		allowance_percentage = flt(
 			frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
 		)
@@ -457,11 +486,18 @@ class WorkOrder(Document):
 
 			qty = self.get_transferred_or_manufactured_qty(purpose)
 
+			if not allowance_percentage and purpose == "Material Transfer for Manufacture":
+				allowance_percentage = flt(
+					frappe.db.get_single_value(
+						"Manufacturing Settings", "transfer_extra_materials_percentage"
+					)
+				)
+
 			completed_qty = self.qty + (allowance_percentage / 100 * self.qty)
 			if qty > completed_qty:
 				frappe.throw(
 					_("{0} ({1}) cannot be greater than planned quantity ({2}) in Work Order {3}").format(
-						self.meta.get_label(fieldname), qty, completed_qty, self.name
+						_(self.meta.get_label(fieldname)), qty, completed_qty, self.name
 					),
 					StockOverProductionError,
 				)
@@ -722,17 +758,6 @@ class WorkOrder(Document):
 
 		enable_capacity_planning = not cint(manufacturing_settings_doc.disable_capacity_planning)
 		plan_days = cint(manufacturing_settings_doc.capacity_planning_for_days) or 30
-
-		if all([op.sequence_id for op in self.operations]):
-			self.operations = sorted(self.operations, key=lambda op: op.sequence_id)
-			for idx, op in enumerate(self.operations):
-				op.idx = idx + 1
-		elif any([op.sequence_id for op in self.operations]):
-			frappe.throw(
-				_(
-					"Row #{0}: Incorrect Sequence ID. If any single operation has a Sequence ID then all other operations must have one too."
-				).format(next((op.idx for op in self.operations if not op.sequence_id), None))
-			)
 
 		for idx, row in enumerate(self.operations):
 			qty = self.qty
@@ -1177,7 +1202,7 @@ class WorkOrder(Document):
 			self.transfer_material_against = "Work Order"
 		if not self.transfer_material_against:
 			frappe.throw(
-				_("Setting {} is required").format(self.meta.get_label("transfer_material_against")),
+				_("Setting {0} is required").format(_(self.meta.get_label("transfer_material_against"))),
 				title=_("Missing value"),
 			)
 
@@ -1300,16 +1325,15 @@ class WorkOrder(Document):
 		data = query.run(as_dict=1) or []
 		transferred_items = frappe._dict({d.original_item or d.item_code: d.qty for d in data})
 
+		row_wise_serial_batch = frappe._dict({})
+		if self.reserve_stock:
+			row_wise_serial_batch = get_row_wise_serial_batch(self.name)
+
 		for row in self.required_items:
 			transferred_qty = transferred_items.get(row.item_code) or 0.0
 			row.db_set("transferred_qty", transferred_qty, update_modified=False)
-
-		if not self.reserve_stock:
-			return
-
-		row_wise_serial_batch = get_row_wise_serial_batch(self.name)
-		for row in self.required_items:
-			self.update_qty_in_stock_reservation(row, transferred_qty, row_wise_serial_batch)
+			if self.reserve_stock:
+				self.update_qty_in_stock_reservation(row, transferred_qty, row_wise_serial_batch)
 
 	def update_qty_in_stock_reservation(self, row, transferred_qty, row_wise_serial_batch):
 		if names := frappe.get_all(
@@ -1325,7 +1349,7 @@ class WorkOrder(Document):
 			for name in names:
 				doc = frappe.get_doc("Stock Reservation Entry", name)
 				qty_to_update = 0.0
-				if transferred_qty <= 0:
+				if transferred_qty < 0:
 					continue
 
 				if transferred_qty > flt(doc.reserved_qty - doc.consumed_qty):
@@ -1335,12 +1359,16 @@ class WorkOrder(Document):
 					qty_to_update = transferred_qty
 					transferred_qty = 0.0
 
-				if qty_to_update <= 0:
+				if qty_to_update < 0:
 					continue
 
 				doc.db_set("transferred_qty", flt(qty_to_update), update_modified=False)
 				if (doc.has_batch_no or doc.has_serial_no) and doc.reservation_based_on == "Serial and Batch":
 					doc.consume_serial_batch_for_material_transfer(row_wise_serial_batch)
+
+				if doc.transferred_qty >= doc.reserved_qty:
+					doc.db_set("status", "Closed", update_modified=False)
+
 				doc.update_status()
 				doc.update_reserved_stock_in_bin()
 
@@ -1388,8 +1416,8 @@ class WorkOrder(Document):
 			if not self.reserve_stock:
 				continue
 
-			wip_warehouse = wip_warehouse or item.source_warehouse
-			self.update_consumed_qty_in_stock_reservation(item, consumed_qty, wip_warehouse)
+			warehouse = wip_warehouse or item.source_warehouse
+			self.update_consumed_qty_in_stock_reservation(item, consumed_qty, warehouse)
 
 	def update_consumed_qty_in_stock_reservation(self, item, consumed_qty, wip_warehouse):
 		filters = {
@@ -1608,6 +1636,7 @@ class WorkOrder(Document):
 				"docstatus": 1,
 			},
 			fields=[
+				"item_code",
 				"name",
 				"stock_qty",
 				"stock_reserved_qty",
@@ -2387,7 +2416,7 @@ def get_row_wise_serial_batch(work_order, purpose=None):
 
 	row_wise_serial_batch = {}
 	for entry in serial_batch_entries:
-		key = (entry.item_code, entry.warehouse, entry.voucher_detail_no)
+		key = (entry.item_code, entry.warehouse)
 		if key not in row_wise_serial_batch:
 			row_wise_serial_batch[key] = frappe._dict(
 				{

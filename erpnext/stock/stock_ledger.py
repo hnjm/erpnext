@@ -923,6 +923,7 @@ class update_entries_after:
 			)
 
 		sle.doctype = "Stock Ledger Entry"
+		sle.modified = now()
 		frappe.get_doc(sle).db_update()
 
 		if not self.args.get("sle_id") or (
@@ -977,10 +978,12 @@ class update_entries_after:
 				self.wh_data.valuation_rate = self.get_fallback_rate(sle)
 
 	def reset_actual_qty_for_stock_reco(self, sle):
-		doc = frappe.get_cached_doc("Stock Reconciliation", sle.voucher_no)
+		doc = frappe.get_doc("Stock Reconciliation", sle.voucher_no)
 		doc.recalculate_current_qty(sle.voucher_detail_no, sle.creation, sle.actual_qty > 0)
 
 		if sle.actual_qty < 0:
+			doc.reload()
+
 			sle.actual_qty = (
 				flt(frappe.db.get_value("Stock Reconciliation Item", sle.voucher_detail_no, "current_qty"))
 				* -1
@@ -988,6 +991,16 @@ class update_entries_after:
 
 			if abs(sle.actual_qty) == 0.0:
 				sle.is_cancelled = 1
+
+				if sle.serial_and_batch_bundle:
+					for row in doc.items:
+						if row.name == sle.voucher_detail_no:
+							row.db_set("current_serial_and_batch_bundle", "")
+
+					sabb_doc = frappe.get_doc("Serial and Batch Bundle", sle.serial_and_batch_bundle)
+					sabb_doc.voucher_detail_no = None
+					sabb_doc.voucher_no = None
+					sabb_doc.cancel()
 
 		if sle.serial_and_batch_bundle and frappe.get_cached_value("Item", sle.item_code, "has_serial_no"):
 			self.update_serial_no_status(sle)
@@ -1032,6 +1045,15 @@ class update_entries_after:
 			doc = frappe.get_doc("Serial and Batch Bundle", sle.serial_and_batch_bundle)
 			doc.set_incoming_rate(save=True, allow_negative_stock=self.allow_negative_stock)
 			doc.calculate_qty_and_amount(save=True)
+
+		if stock_queue := frappe.get_all(
+			"Serial and Batch Entry",
+			filters={"parent": sle.serial_and_batch_bundle, "stock_queue": ("is", "set")},
+			pluck="stock_queue",
+			order_by="idx desc",
+			limit=1,
+		):
+			self.wh_data.stock_queue = json.loads(stock_queue[0]) if stock_queue else []
 
 		self.wh_data.stock_value = round_off_if_near_zero(self.wh_data.stock_value + doc.total_amount)
 		self.wh_data.qty_after_transaction += flt(doc.total_qty, self.flt_precision)
@@ -1682,8 +1704,20 @@ def get_stock_ledger_entries(
 ):
 	"""get stock ledger entries filtered by specific posting datetime conditions"""
 	conditions = f" and posting_datetime {operator} %(posting_datetime)s"
-	if previous_sle.get("warehouse"):
-		conditions += " and warehouse = %(warehouse)s"
+
+	if item_code := previous_sle.get("item_code"):
+		if isinstance(item_code, list | tuple):
+			conditions += " and item_code in %(item_code)s"
+		else:
+			conditions += " and item_code = %(item_code)s"
+
+	if warehouse := previous_sle.get("warehouse"):
+		if isinstance(warehouse, list | tuple):
+			conditions += " and warehouse in %(warehouse)s"
+
+		else:
+			conditions += " and warehouse = %(warehouse)s"
+
 	elif previous_sle.get("warehouse_condition"):
 		conditions += " and " + previous_sle.get("warehouse_condition")
 
@@ -1726,8 +1760,7 @@ def get_stock_ledger_entries(
 		"""
 		select *, posting_datetime as "timestamp"
 		from `tabStock Ledger Entry`
-		where item_code = %(item_code)s
-		and is_cancelled = 0
+		where is_cancelled = 0
 		{conditions}
 		order by posting_datetime {order}, creation {order}
 		{limit} {for_update}""".format(

@@ -451,7 +451,9 @@ class StockEntry(StockController):
 			additional_cost_amt = additional_costs[0][0] if additional_costs else 0
 
 			amount += additional_cost_amt
-			frappe.db.set_value("Project", self.project, "total_consumed_material_cost", amount)
+			project = frappe.get_doc("Project", self.project)
+			project.total_consumed_material_cost = amount
+			project.save()
 
 	def validate_item(self):
 		stock_items = self.get_stock_items()
@@ -1648,7 +1650,7 @@ class StockEntry(StockController):
 
 		self.set_gl_entries_for_landed_cost_voucher(gl_entries, warehouse_account)
 
-		return process_gl_map(gl_entries)
+		return process_gl_map(gl_entries, from_repost=frappe.flags.through_repost_item_valuation)
 
 	def set_gl_entries_for_landed_cost_voucher(self, gl_entries, warehouse_account):
 		landed_cost_entries = self.get_item_account_wise_lcv_entries()
@@ -1724,9 +1726,6 @@ class StockEntry(StockController):
 				job_doc.set_transferred_qty_in_job_card_item(self)
 			else:
 				job_doc.set_manufactured_qty()
-
-		if self.job_card and frappe.get_cached_value("Job Card", self.job_card, "finished_good"):
-			return
 
 		if self.work_order:
 			pro_doc = frappe.get_doc("Work Order", self.work_order)
@@ -2341,7 +2340,18 @@ class StockEntry(StockController):
 					"Work Order", self.work_order, "allow_alternative_item"
 				)
 
-			item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
+			skip_transfer, from_wip_warehouse = frappe.get_value(
+				"Work Order", self.work_order, ["skip_transfer", "from_wip_warehouse"]
+			)
+			item.from_warehouse = (
+				frappe.get_value(
+					"Work Order Item",
+					{"parent": self.work_order, "item_code": item.item_code},
+					"source_warehouse",
+				)
+				if skip_transfer and not from_wip_warehouse
+				else self.from_warehouse or item.source_warehouse or item.default_warehouse
+			)
 			if item.item_code in used_alternative_items:
 				alternative_item_data = used_alternative_items.get(item.item_code)
 				item.item_code = alternative_item_data.item_code
@@ -2630,10 +2640,16 @@ class StockEntry(StockController):
 			frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
 		)
 
+		transfer_extra_materials_percentage = flt(
+			frappe.db.get_single_value("Manufacturing Settings", "transfer_extra_materials_percentage")
+		)
+
 		to_transfer_qty = flt(self.pro_doc.material_transferred_for_manufacturing) + flt(
 			self.fg_completed_qty
 		)
 		transfer_limit_qty = max_qty + ((max_qty * overproduction_percentage) / 100)
+		if transfer_extra_materials_percentage:
+			transfer_limit_qty = max_qty + ((max_qty * transfer_extra_materials_percentage) / 100)
 
 		if transfer_limit_qty >= to_transfer_qty:
 			allow_overproduction = True
@@ -2683,11 +2699,22 @@ class StockEntry(StockController):
 		else:
 			wip_warehouse = None
 
+		transfer_extra_materials_percentage = flt(
+			frappe.db.get_single_value("Manufacturing Settings", "transfer_extra_materials_percentage")
+		)
+
 		for d in work_order.get("required_items"):
 			if consider_job_card and (d.item_code not in job_card_items):
 				continue
 
+			additional_qty = 0.0
+			if transfer_extra_materials_percentage:
+				additional_qty = transfer_extra_materials_percentage * flt(d.required_qty) / 100
+
 			transfer_pending = flt(d.required_qty) > flt(d.transferred_qty)
+			if additional_qty:
+				transfer_pending = (flt(d.required_qty) + additional_qty) > flt(d.transferred_qty)
+
 			can_transfer = transfer_pending or (backflush_based_on == "Material Transferred for Manufacture")
 
 			if not can_transfer:

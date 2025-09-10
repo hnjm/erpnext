@@ -169,7 +169,7 @@ class PricingRule(Document):
 
 		tocheck = frappe.scrub(self.get("applicable_for", ""))
 		if tocheck and not self.get(tocheck):
-			throw(_("{0} is required").format(self.meta.get_label(tocheck)), frappe.MandatoryError)
+			throw(_("{0} is required").format(_(self.meta.get_label(tocheck))), frappe.MandatoryError)
 
 		if self.apply_rule_on_other:
 			o_field = "other_" + frappe.scrub(self.apply_rule_on_other)
@@ -700,17 +700,6 @@ def set_transaction_type(args):
 		args.transaction_type = "selling"
 	else:
 		args.transaction_type = "buying"
-
-
-@frappe.whitelist()
-def make_pricing_rule(doctype, docname):
-	doc = frappe.new_doc("Pricing Rule")
-	doc.applicable_for = doctype
-	doc.set(frappe.scrub(doctype), docname)
-	doc.selling = 1 if doctype == "Customer" else 0
-	doc.buying = 1 if doctype == "Supplier" else 0
-
-	return doc
 
 
 @frappe.whitelist()
