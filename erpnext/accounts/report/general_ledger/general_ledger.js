@@ -198,6 +198,11 @@ frappe.query_reports["General Ledger"] = {
 			fieldtype: "Check",
 		},
 		{
+			fieldname: "show_amount_in_company_currency",
+			label: __("Show Credit / Debit in Company Currency"),
+			fieldtype: "Check",
+		},
+		{
 			fieldname: "add_values_in_transaction_currency",
 			label: __("Add Columns in Transaction Currency"),
 			fieldtype: "Check",
@@ -209,7 +214,7 @@ frappe.query_reports["General Ledger"] = {
 		},
 		{
 			fieldname: "ignore_err",
-			label: __("Ignore Exchange Rate Revaluation Journals"),
+			label: __("Ignore Exchange Rate Revaluation and Gain / Loss Journals"),
 			fieldtype: "Check",
 		},
 		{

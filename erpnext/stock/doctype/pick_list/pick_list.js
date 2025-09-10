@@ -21,6 +21,14 @@ frappe.ui.form.on("Pick List", {
 			"Stock Entry": "Stock Entry",
 		};
 
+		frm.set_query("warehouse", "locations", () => {
+			return {
+				filters: {
+					company: frm.doc.company,
+				},
+			};
+		});
+
 		frm.set_query("parent_warehouse", () => {
 			return {
 				filters: {
@@ -91,12 +99,26 @@ frappe.ui.form.on("Pick List", {
 			});
 		}
 	},
+
+	pick_manually: (frm) => {
+		frm.trigger("update_warehouse_property");
+	},
+
+	update_warehouse_property: (frm) => {
+		frm.fields_dict.locations.grid.update_docfield_property(
+			"warehouse",
+			"read_only",
+			!frm.doc.pick_manually
+		);
+	},
+
 	get_item_locations: (frm) => {
 		// Button on the form
 		frm.events.set_item_locations(frm, false);
 	},
 	refresh: (frm) => {
 		frm.trigger("add_get_items_button");
+		frm.trigger("update_warehouse_property");
 		if (frm.doc.docstatus === 1) {
 			const status_completed = frm.doc.status === "Completed";
 			frm.set_df_property("locations", "allow_on_submit", status_completed ? 0 : 1);

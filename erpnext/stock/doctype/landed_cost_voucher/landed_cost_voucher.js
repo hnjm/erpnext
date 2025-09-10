@@ -62,7 +62,10 @@ erpnext.stock.LandedCostVoucher = class LandedCostVoucher extends erpnext.stock.
 
 		if (this.frm.doc.company) {
 			let company_currency = frappe.get_doc(":Company", this.frm.doc.company).default_currency;
-			this.frm.set_currency_labels(["total_taxes_and_charges"], company_currency);
+			this.frm.set_currency_labels(
+				["total_taxes_and_charges", "total_vendor_invoices_cost"],
+				company_currency
+			);
 		}
 	}
 
@@ -165,6 +168,15 @@ frappe.ui.form.on("Landed Cost Voucher", {
 				};
 			}
 		});
+
+		frm.set_query("vendor_invoice", "vendor_invoices", (doc, cdt, cdn) => {
+			return {
+				query: "erpnext.stock.doctype.landed_cost_voucher.landed_cost_voucher.get_vendor_invoices",
+				filters: {
+					company: doc.company,
+				},
+			};
+		});
 	},
 });
 
@@ -183,6 +195,27 @@ frappe.ui.form.on("Landed Cost Purchase Receipt", {
 					if (r.message) {
 						$.extend(d, r.message);
 						refresh_field("purchase_receipts");
+					}
+				},
+			});
+		}
+	},
+});
+
+frappe.ui.form.on("Landed Cost Vendor Invoice", {
+	vendor_invoice(frm, cdt, cdn) {
+		var d = locals[cdt][cdn];
+		if (d.vendor_invoice) {
+			frappe.call({
+				method: "get_vendor_invoice_amount",
+				doc: frm.doc,
+				args: {
+					vendor_invoice: d.vendor_invoice,
+				},
+				callback: function (r) {
+					if (r.message) {
+						$.extend(d, r.message);
+						refresh_field("vendor_invoices");
 					}
 				},
 			});

@@ -68,7 +68,7 @@ class TransactionBase(StatusUpdater):
 					frappe.throw(_("Invalid reference {0} {1}").format(reference_doctype, reference_name))
 
 				for field, condition in fields:
-					if prevdoc_values[field] is not None and field not in self.exclude_fields:
+					if prevdoc_values[field] not in [None, ""] and field not in self.exclude_fields:
 						self.validate_value(field, condition, prevdoc_values[field], doc)
 
 	def get_prev_doc_reference_details(self, reference_names, reference_doctype, fields):
@@ -316,9 +316,12 @@ class TransactionBase(StatusUpdater):
 				setattr(item_obj, k, v)
 
 	def handle_internal_parties(self, item_obj: object, item_details: dict) -> None:
+		fetch_valuation_rate_for_internal_transaction = cint(
+			frappe.get_single_value("Accounts Settings", "fetch_valuation_rate_for_internal_transaction")
+		)
 		if (
 			self.get("is_internal_customer") or self.get("is_internal_supplier")
-		) and self.represents_company == self.company:
+		) and fetch_valuation_rate_for_internal_transaction:
 			args = frappe._dict(
 				{
 					"item_code": item_obj.item_code,
