@@ -195,18 +195,9 @@ erpnext.stock.PurchaseReceiptController = class PurchaseReceiptController extend
 	erpnext.buying.BuyingController
 ) {
 	setup(doc) {
+		this.setup_accounting_dimension_triggers();
 		this.setup_posting_date_time_check();
 		super.setup(doc);
-	}
-
-	onload() {
-		this.frm.set_query("supplier", function () {
-			return {
-				filters: {
-					is_transporter: 0,
-				},
-			};
-		});
 	}
 
 	refresh() {

@@ -41,18 +41,20 @@ frappe.ui.form.on("Supplier", {
 
 		frm.set_query("supplier_primary_contact", function (doc) {
 			return {
-				query: "erpnext.buying.doctype.supplier.supplier.get_supplier_primary_contact",
+				query: "erpnext.buying.doctype.supplier.supplier.get_supplier_primary",
 				filters: {
 					supplier: doc.name,
+					type: "Contact",
 				},
 			};
 		});
 
 		frm.set_query("supplier_primary_address", function (doc) {
 			return {
+				query: "erpnext.buying.doctype.supplier.supplier.get_supplier_primary",
 				filters: {
-					link_doctype: "Supplier",
-					link_name: doc.name,
+					supplier: doc.name,
+					type: "Address",
 				},
 			};
 		});
@@ -107,22 +109,6 @@ frappe.ui.form.on("Supplier", {
 					});
 				},
 				__("View")
-			);
-
-			frm.add_custom_button(
-				__("Bank Account"),
-				function () {
-					erpnext.utils.make_bank_account(frm.doc.doctype, frm.doc.name);
-				},
-				__("Create")
-			);
-
-			frm.add_custom_button(
-				__("Pricing Rule"),
-				function () {
-					frm.trigger("make_pricing_rule");
-				},
-				__("Create")
 			);
 
 			frm.add_custom_button(
