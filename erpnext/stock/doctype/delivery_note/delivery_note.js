@@ -140,6 +140,7 @@ erpnext.stock.DeliveryNoteController = class DeliveryNoteController extends (
 	erpnext.selling.SellingController
 ) {
 	setup(doc) {
+		this.setup_accounting_dimension_triggers();
 		this.setup_posting_date_time_check();
 		super.setup(doc);
 		this.frm.make_methods = {
@@ -334,6 +335,7 @@ erpnext.stock.DeliveryNoteController = class DeliveryNoteController extends (
 		if (
 			doc.docstatus == 1 &&
 			!doc.is_return &&
+			doc.per_returned != 100 &&
 			doc.status != "Closed" &&
 			flt(doc.per_billed) < 100 &&
 			frappe.model.can_create("Sales Invoice")

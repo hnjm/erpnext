@@ -111,6 +111,10 @@ frappe.ui.form.on("Journal Entry", {
 		}
 
 		erpnext.accounts.unreconcile_payment.add_unreconcile_btn(frm);
+
+		$.each(frm.doc.accounts || [], function (i, row) {
+			erpnext.journal_entry.set_exchange_rate(frm, row.doctype, row.name);
+		});
 	},
 	before_save: function (frm) {
 		if (frm.doc.docstatus == 0 && !frm.doc.is_system_generated) {
@@ -716,6 +720,8 @@ $.extend(erpnext.journal_entry, {
 					}
 				},
 			});
+		} else {
+			erpnext.journal_entry.clear_fields(frm, dt, dn);
 		}
 	},
 	set_amount_on_last_row: function (frm, dt, dn) {
@@ -739,5 +745,14 @@ $.extend(erpnext.journal_entry, {
 			}
 		}
 		refresh_field("accounts");
+	},
+	clear_fields: function (frm, dt, dn) {
+		let row = locals[dt][dn];
+
+		row.party_type = null;
+		row.party = null;
+		row.bank_account = null;
+
+		frm.refresh_field("accounts");
 	},
 });
