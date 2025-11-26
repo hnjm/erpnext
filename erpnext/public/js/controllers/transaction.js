@@ -1697,13 +1697,13 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		var company_currency = this.get_company_currency();
 
 		if (
-			this._last_company_currency === company_currency &&
+			this._last_currency === this.frm.doc.currency &&
 			this._last_price_list_currency === this.frm.doc.price_list_currency
 		) {
 			return;
 		}
 
-		this._last_company_currency = company_currency;
+		this._last_currency = this.frm.doc.currency;
 		this._last_price_list_currency = this.frm.doc.price_list_currency;
 
 		this.change_form_labels(company_currency);
