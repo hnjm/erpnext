@@ -38,6 +38,7 @@ class PaymentLedgerEntry(Document):
 		amount_in_account_currency: DF.Currency
 		company: DF.Link | None
 		cost_center: DF.Link | None
+		project: DF.Link | None
 		delinked: DF.Check
 		due_date: DF.Date | None
 		finance_book: DF.Link | None
@@ -131,7 +132,6 @@ class PaymentLedgerEntry(Document):
 				account_type == "Profit and Loss"
 				and self.company == dimension.company
 				and dimension.mandatory_for_pl
-				and not dimension.disabled
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
@@ -144,7 +144,6 @@ class PaymentLedgerEntry(Document):
 				account_type == "Balance Sheet"
 				and self.company == dimension.company
 				and dimension.mandatory_for_bs
-				and not dimension.disabled
 			):
 				if not self.get(dimension.fieldname):
 					frappe.throw(
@@ -159,7 +158,7 @@ class PaymentLedgerEntry(Document):
 	def on_update(self):
 		adv_adj = self.flags.adv_adj
 		if not self.flags.from_repost:
-			validate_frozen_account(self.account, adv_adj)
+			validate_frozen_account(self.company, self.account, adv_adj)
 			if not self.delinked:
 				self.validate_account_details()
 				self.validate_dimensions_for_pl_and_bs()

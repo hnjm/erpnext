@@ -15,7 +15,7 @@ frappe.query_reports["Accounts Receivable"] = {
 		},
 		{
 			fieldname: "report_date",
-			label: __("Posting Date"),
+			label: __("Report Date"),
 			fieldtype: "Date",
 			default: frappe.datetime.get_today(),
 		},
@@ -35,6 +35,17 @@ frappe.query_reports["Accounts Receivable"] = {
 				});
 			},
 			options: "Cost Center",
+		},
+		{
+			fieldname: "project",
+			label: __("Project"),
+			fieldtype: "MultiSelectList",
+			options: "Project",
+			get_data: function (txt) {
+				return frappe.db.get_link_options("Project", txt, {
+					company: frappe.query_report.get_filter_value("company"),
+				});
+			},
 		},
 		{
 			fieldname: "party_type",
@@ -87,10 +98,10 @@ frappe.query_reports["Accounts Receivable"] = {
 			default: "Due Date",
 		},
 		{
-			fieldname: "calculate_ageing_with",
-			label: __("Calculate Ageing With"),
+			fieldname: "age_as_on",
+			label: __("Age as on"),
 			fieldtype: "Select",
-			options: "Report Date\nToday Date",
+			options: "Report Date\nToday",
 			default: "Report Date",
 		},
 		{
@@ -129,8 +140,11 @@ frappe.query_reports["Accounts Receivable"] = {
 		{
 			fieldname: "territory",
 			label: __("Territory"),
-			fieldtype: "Link",
+			fieldtype: "MultiSelectList",
 			options: "Territory",
+			get_data: function (txt) {
+				return frappe.db.get_link_options("Territory", txt);
+			},
 		},
 		{
 			fieldname: "group_by_party",
@@ -178,6 +192,8 @@ frappe.query_reports["Accounts Receivable"] = {
 			fieldtype: "Check",
 		},
 	],
+	collapsible_filters: true,
+	separate_check_filters: true,
 
 	formatter: function (value, row, column, data, default_formatter) {
 		value = default_formatter(value, row, column, data);
@@ -192,6 +208,10 @@ frappe.query_reports["Accounts Receivable"] = {
 			var filters = report.get_values();
 			frappe.set_route("query-report", "Accounts Receivable Summary", { company: filters.company });
 		});
+
+		if (frappe.boot.sysdefaults.default_ageing_range) {
+			report.set_filter_value("range", frappe.boot.sysdefaults.default_ageing_range);
+		}
 	},
 };
 

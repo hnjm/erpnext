@@ -11,13 +11,16 @@
   "add_deduct_tax",
   "charge_type",
   "row_id",
-  "included_in_print_rate",
-  "included_in_paid_amount",
   "col_break1",
   "account_head",
   "description",
-  "is_tax_withholding_account",
+  "section_break_uhfl",
   "set_by_item_tax_template",
+  "is_tax_withholding_account",
+  "allocate_full_amount_to_stock_items",
+  "column_break_zqtz",
+  "included_in_print_rate",
+  "included_in_paid_amount",
   "section_break_10",
   "rate",
   "accounting_dimensions_section",
@@ -34,7 +37,8 @@
   "base_net_amount",
   "base_tax_amount",
   "base_total",
-  "base_tax_amount_after_discount_amount"
+  "base_tax_amount_after_discount_amount",
+  "dont_recompute_tax"
  ],
  "fields": [
   {
@@ -76,6 +80,15 @@
    "label": "Reference Row #",
    "oldfieldname": "row_id",
    "oldfieldtype": "Data"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.charge_type=='Actual' && ['Valuation', 'Valuation and Total'].includes(doc.category)",
+   "description": "If checked, the entire amount (e.g. Freight) is allocated to the valuation of stock & asset items only. If unchecked, the amount is distributed across all items and the portion belonging to non-stock items is not added to valuation.",
+   "fieldname": "allocate_full_amount_to_stock_items",
+   "fieldtype": "Check",
+   "label": "Allocate Full Amount to Stock Items",
+   "show_description_on_click": 1
   },
   {
    "default": "0",
@@ -205,11 +218,11 @@
    "fieldtype": "Column Break"
   },
   {
-    "allow_on_submit": 1,
-    "fieldname": "project",
-    "fieldtype": "Link",
-    "label": "Project",
-    "options": "Project"
+   "allow_on_submit": 1,
+   "fieldname": "project",
+   "fieldtype": "Link",
+   "label": "Project",
+   "options": "Project"
   },
   {
    "default": "0",
@@ -262,13 +275,30 @@
    "print_hide": 1,
    "read_only": 1,
    "report_hide": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "dont_recompute_tax",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Don't Recompute Tax",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_uhfl",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_zqtz",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-07-24 15:08:44.433022",
+ "modified": "2026-06-21 17:13:05.586544",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Purchase Taxes and Charges",

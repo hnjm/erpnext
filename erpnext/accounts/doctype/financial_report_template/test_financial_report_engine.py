@@ -5,24 +5,18 @@ import frappe
 from frappe.utils import flt
 
 from erpnext.accounts.doctype.financial_report_template.financial_report_engine import (
-	AccountData,
-	DataCollector,
 	DependencyResolver,
 	FilterExpressionParser,
 	FinancialQueryBuilder,
+	FinancialReportEngine,
 	FormulaCalculator,
-	PeriodValue,
 )
 from erpnext.accounts.doctype.financial_report_template.test_financial_report_template import (
 	FinancialReportTemplateTestCase,
 )
-from erpnext.accounts.utils import get_currency_precision
-
-# On IntegrationTestCase, the doctype test records and all
-# link-field test record dependencies are recursively loaded
-# Use these module variables to add/remove to/from that list
-EXTRA_TEST_RECORD_DEPENDENCIES = []  # eg. ["User"]
-IGNORE_TEST_RECORD_DEPENDENCIES = []  # eg. ["User"]
+from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
+from erpnext.accounts.utils import get_currency_precision, get_fiscal_year
+from erpnext.tests.utils import change_settings
 
 
 class TestDependencyResolver(FinancialReportTemplateTestCase):
@@ -1300,6 +1294,7 @@ class TestFilterExpressionParser(FinancialReportTemplateTestCase):
 				self.data_source = "Account Data"
 				self.idx = 1
 				self.reverse_sign = 0
+				self.advanced_filtering = True
 
 		return MockReportRow(formula, reference_code)
 
@@ -1672,3 +1667,818 @@ class TestFilterExpressionParser(FinancialReportTemplateTestCase):
 		mock_row_invalid = self._create_mock_report_row(invalid_formula)
 		condition = parser.build_condition(mock_row_invalid, account_table)
 		self.assertIsNone(condition)
+
+
+class TestFinancialQueryBuilder(FinancialReportTemplateTestCase):
+	def test_fetch_balances_with_journal_entries(self):
+		company = "_Test Company"
+		cash_account = "_Test Cash - _TC"
+		bank_account = "_Test Bank - _TC"
+
+		# Create journal entries in different periods
+		# October: Transfer 1000 from Bank to Cash
+		jv_oct = make_journal_entry(
+			account1=cash_account,
+			account2=bank_account,
+			amount=1000,
+			posting_date="2024-10-15",
+			company=company,
+			submit=True,
+		)
+
+		# November: Transfer 500 from Bank to Cash
+		jv_nov = make_journal_entry(
+			account1=cash_account,
+			account2=bank_account,
+			amount=500,
+			posting_date="2024-11-20",
+			company=company,
+			submit=True,
+		)
+
+		# December: No transactions (test zero movement period)
+
+		try:
+			# Set up filters and periods for Q4 2024
+			filters = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-10-01",
+				"period_end_date": "2024-12-31",
+				"filter_based_on": "Date Range",
+				"periodicity": "Monthly",
+			}
+
+			periods = [
+				{"key": "2024_oct", "from_date": "2024-10-01", "to_date": "2024-10-31"},
+				{"key": "2024_nov", "from_date": "2024-11-01", "to_date": "2024-11-30"},
+				{"key": "2024_dec", "from_date": "2024-12-01", "to_date": "2024-12-31"},
+			]
+
+			query_builder = FinancialQueryBuilder(filters, periods)
+
+			# Create account objects as expected by fetch_account_balances
+			accounts = [
+				frappe._dict({"name": cash_account, "account_name": "Cash", "account_number": "1001"}),
+				frappe._dict({"name": bank_account, "account_name": "Bank", "account_number": "1002"}),
+			]
+
+			# Fetch balances using the full workflow
+			balances_data = query_builder.fetch_account_balances(accounts)
+
+			# Verify Cash account balances
+			cash_data = balances_data.get(cash_account)
+			self.assertIsNotNone(cash_data, "Cash account should exist in results")
+
+			# October: movement = +1000 (debit)
+			oct_cash = cash_data.get_period("2024_oct")
+			self.assertIsNotNone(oct_cash, "October period should exist for cash")
+			self.assertEqual(oct_cash.movement, 1000.0, "October cash movement should be 1000")
+
+			# November: movement = +500
+			nov_cash = cash_data.get_period("2024_nov")
+			self.assertIsNotNone(nov_cash, "November period should exist for cash")
+			self.assertEqual(nov_cash.movement, 500.0, "November cash movement should be 500")
+			self.assertEqual(
+				nov_cash.opening, oct_cash.closing, "November opening should equal October closing"
+			)
+
+			# December: movement = 0 (no transactions)
+			dec_cash = cash_data.get_period("2024_dec")
+			self.assertIsNotNone(dec_cash, "December period should exist for cash")
+			self.assertEqual(dec_cash.movement, 0.0, "December cash movement should be 0")
+			self.assertEqual(
+				dec_cash.closing,
+				nov_cash.closing,
+				"December closing should equal November closing when no movement",
+			)
+
+			# Verify Bank account balances (opposite direction)
+			bank_data = balances_data.get(bank_account)
+			self.assertIsNotNone(bank_data, "Bank account should exist in results")
+
+			oct_bank = bank_data.get_period("2024_oct")
+			self.assertEqual(oct_bank.movement, -1000.0, "October bank movement should be -1000")
+
+			nov_bank = bank_data.get_period("2024_nov")
+			self.assertEqual(nov_bank.movement, -500.0, "November bank movement should be -500")
+
+		finally:
+			# Clean up: cancel journal entries
+			jv_nov.cancel()
+			jv_oct.cancel()
+
+	def test_opening_balance_from_previous_period_closing(self):
+		company = "_Test Company"
+		cash_account = "_Test Cash - _TC"
+		sales_account = "Sales - _TC"
+		posting_date_2023 = "2023-06-15"
+
+		# Create journal entry in prior period (2023)
+		# Cash Dr 5000, Sales Cr 5000
+		jv_2023 = make_journal_entry(
+			account1=cash_account,
+			account2=sales_account,
+			amount=5000,
+			posting_date=posting_date_2023,
+			company=company,
+			submit=True,
+		)
+
+		pcv = None
+		jv_2024 = None
+		original_pcv_setting = frappe.db.get_single_value(
+			"Accounts Settings", "use_legacy_controller_for_pcv"
+		)
+
+		try:
+			# Create Period Closing Voucher for 2023
+			# This will create Account Closing Balance entries
+			closing_account = frappe.db.get_value(
+				"Account",
+				{
+					"company": company,
+					"root_type": "Liability",
+					"is_group": 0,
+					"account_type": ["not in", ["Payable", "Receivable"]],
+				},
+				"name",
+			)
+
+			fy_2023 = get_fiscal_year(posting_date_2023, company=company)
+
+			frappe.db.set_single_value("Accounts Settings", "use_legacy_controller_for_pcv", 1)
+
+			pcv = frappe.get_doc(
+				{
+					"doctype": "Period Closing Voucher",
+					"transaction_date": "2023-12-31",
+					"period_start_date": fy_2023[1],
+					"period_end_date": fy_2023[2],
+					"company": company,
+					"fiscal_year": fy_2023[0],
+					"cost_center": "_Test Cost Center - _TC",
+					"closing_account_head": closing_account,
+					"remarks": "Test Period Closing",
+				}
+			)
+			pcv.insert()
+			pcv.submit()
+			pcv.reload()
+
+			# Now create a small transaction in 2024 to ensure the account appears
+			jv_2024 = make_journal_entry(
+				account1=cash_account,
+				account2=sales_account,
+				amount=100,
+				posting_date="2024-01-15",
+				company=company,
+				submit=True,
+			)
+
+			# Set up filters for Q1 2024 (after the period closing)
+			filters = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-01-01",
+				"period_end_date": "2024-03-31",
+				"filter_based_on": "Date Range",
+				"periodicity": "Monthly",
+				"ignore_closing_entries": True,  # Don't include PCV entries in movements
+			}
+
+			periods = [
+				{"key": "2024_jan", "from_date": "2024-01-01", "to_date": "2024-01-31"},
+				{"key": "2024_feb", "from_date": "2024-02-01", "to_date": "2024-02-29"},
+				{"key": "2024_mar", "from_date": "2024-03-01", "to_date": "2024-03-31"},
+			]
+
+			query_builder = FinancialQueryBuilder(filters, periods)
+
+			accounts = [
+				frappe._dict({"name": cash_account, "account_name": "Cash", "account_number": "1001"}),
+			]
+
+			balances_data = query_builder.fetch_account_balances(accounts)
+
+			# Verify Cash account has opening balance from 2023 transactions
+			cash_data = balances_data.get(cash_account)
+			self.assertIsNotNone(cash_data, "Cash account should exist in results")
+
+			jan_cash = cash_data.get_period("2024_jan")
+			self.assertIsNotNone(jan_cash, "January period should exist")
+
+			# Opening balance should be from prior period
+			# Cash had 5000 debit in 2023, so opening in 2024 should be >= 5000
+			# (may be higher if there were other test transactions)
+			self.assertEqual(
+				jan_cash.opening,
+				5000.0,
+				"January opening should equal to balance from 2023 (5000)",
+			)
+
+			# Verify running balance logic
+			# Movement in January is 100 (from jv_2024)
+			self.assertEqual(jan_cash.movement, 100.0, "January movement should be 100")
+			self.assertEqual(
+				jan_cash.closing, jan_cash.opening + jan_cash.movement, "Closing = Opening + Movement"
+			)
+
+			# February and March should have no movement but carry the balance
+			feb_cash = cash_data.get_period("2024_feb")
+			self.assertEqual(feb_cash.opening, jan_cash.closing, "Feb opening = Jan closing")
+			self.assertEqual(feb_cash.movement, 0.0, "February should have no movement")
+			self.assertEqual(feb_cash.closing, feb_cash.opening, "Feb closing = opening when no movement")
+
+			mar_cash = cash_data.get_period("2024_mar")
+			self.assertEqual(mar_cash.opening, feb_cash.closing, "Mar opening = Feb closing")
+			self.assertEqual(mar_cash.movement, 0.0, "March should have no movement")
+			self.assertEqual(mar_cash.closing, mar_cash.opening, "Mar closing = opening when no movement")
+
+			# Set up filters for Q2 2024
+			filters_q2 = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-04-01",
+				"period_end_date": "2024-06-30",
+				"filter_based_on": "Date Range",
+				"periodicity": "Monthly",
+				"ignore_closing_entries": True,
+			}
+
+			periods_q2 = [
+				{"key": "2024_apr", "from_date": "2024-04-01", "to_date": "2024-04-30"},
+				{"key": "2024_may", "from_date": "2024-05-01", "to_date": "2024-05-31"},
+				{"key": "2024_jun", "from_date": "2024-06-01", "to_date": "2024-06-30"},
+			]
+
+			query_builder_q2 = FinancialQueryBuilder(filters_q2, periods_q2)
+
+			balances_data_q2 = query_builder_q2.fetch_account_balances(accounts)
+
+			# Verify Cash account in Q2
+			cash_data_q2 = balances_data_q2.get(cash_account)
+			self.assertIsNotNone(cash_data_q2, "Cash account should exist in Q2 results")
+
+			apr_cash = cash_data_q2.get_period("2024_apr")
+			self.assertIsNotNone(apr_cash, "April period should exist")
+
+			# Opening balance in April should equal closing in March
+			self.assertEqual(
+				apr_cash.opening,
+				mar_cash.closing,
+				"April opening should equal March closing balance",
+			)
+
+			self.assertEqual(apr_cash.closing, apr_cash.opening, "April closing = opening when no movement")
+
+		finally:
+			# Clean up
+			frappe.db.set_single_value(
+				"Accounts Settings", "use_legacy_controller_for_pcv", original_pcv_setting or 0
+			)
+
+			if jv_2024:
+				jv_2024.cancel()
+
+			if pcv:
+				pcv.reload()
+				if pcv.docstatus == 1:
+					pcv.cancel()
+
+			jv_2023.cancel()
+
+	@change_settings("Accounts Settings", {"use_legacy_controller_for_pcv": 1})
+	def test_opening_balance_sums_acb_rows_across_dimensions(self):
+		"""
+		Account Closing Balance stores one row per (account, cost_center,
+		project, finance_book). The closing-balance fetch must sum all rows.
+		"""
+		company = "_Test Company"
+		cash_account = "_Test Cash - _TC"
+		sales_account = "Sales - _TC"
+		cc_1 = "_Test Cost Center - _TC"
+		cc_2 = "_Test Cost Center 2 - _TC"
+		docs = []
+
+		try:
+			jv_2023_cc1 = make_journal_entry(
+				account1=cash_account,
+				account2=sales_account,
+				amount=3000,
+				posting_date="2023-06-15",
+				cost_center=cc_1,
+				company=company,
+				submit=True,
+			)
+			docs.append(jv_2023_cc1)
+			jv_2023_cc2 = make_journal_entry(
+				account1=cash_account,
+				account2=sales_account,
+				amount=2000,
+				posting_date="2023-06-15",
+				cost_center=cc_2,
+				company=company,
+				submit=True,
+			)
+			docs.append(jv_2023_cc2)
+
+			fy_2023 = get_fiscal_year("2023-06-15", company=company)
+
+			pcv = frappe.get_doc(
+				{
+					"doctype": "Period Closing Voucher",
+					"transaction_date": "2023-12-31",
+					"period_start_date": fy_2023[1],
+					"period_end_date": fy_2023[2],
+					"company": company,
+					"fiscal_year": fy_2023[0],
+					"cost_center": cc_1,
+					"closing_account_head": "Deferred Revenue - _TC",
+					"remarks": "Test multi-dim PCV",
+				}
+			)
+			pcv.insert()
+			pcv.submit()
+			docs.append(pcv)
+
+			jv_2024 = make_journal_entry(
+				account1=cash_account,
+				account2=sales_account,
+				amount=100,
+				posting_date="2024-01-15",
+				cost_center=cc_1,
+				company=company,
+				submit=True,
+			)
+			docs.append(jv_2024)
+
+			filters = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-01-01",
+				"period_end_date": "2024-03-31",
+				"filter_based_on": "Date Range",
+				"periodicity": "Monthly",
+				"ignore_closing_entries": True,
+			}
+			periods = [
+				{"key": "2024_jan", "from_date": "2024-01-01", "to_date": "2024-01-31"},
+				{"key": "2024_feb", "from_date": "2024-02-01", "to_date": "2024-02-29"},
+				{"key": "2024_mar", "from_date": "2024-03-01", "to_date": "2024-03-31"},
+			]
+
+			query_builder = FinancialQueryBuilder(filters, periods)
+			accounts = [
+				frappe._dict({"name": cash_account, "account_name": "Cash", "account_number": "1001"}),
+			]
+
+			balances_data = query_builder.fetch_account_balances(accounts)
+			cash_data = balances_data.get(cash_account)
+			self.assertIsNotNone(cash_data, "Cash account must appear in results")
+
+			jan_cash = cash_data.get_period("2024_jan")
+			self.assertEqual(jan_cash.opening, 5000.0)
+			self.assertEqual(jan_cash.movement, 100.0)
+			self.assertEqual(jan_cash.closing, 5100.0)
+
+		finally:
+			self.cancel_docs(docs)
+
+	def test_opening_entries_roll_into_opening_after_period_closing(self):
+		"""
+		Sequence:
+		    1. is_opening JV of 3000 in current year (FY 2024)
+		    2. is_opening JV of 5000 in next year (FY 2025)
+		    3. Period Closing Voucher for previous year (FY 2023)
+
+		Expected (BS report for FY 2024):
+		    opening of FY 2024 = 3000 + 5000 = 8000
+		    (all is_opening entries roll into opening irrespective of fiscal year,
+		    on top of the PCV carry-forward — here PCV closing for cash is 0).
+		"""
+		company = "_Test Company"
+		cash_account = "_Test Cash - _TC"
+		# Opening JVs cannot post against P&L accounts; use a Balance Sheet offset.
+		opening_offset_account = "Temporary Opening - _TC"
+
+		pcv = None
+		jv_current_year = None
+		jv_next_year = None
+		original_pcv_setting = frappe.db.get_single_value(
+			"Accounts Settings", "use_legacy_controller_for_pcv"
+		)
+
+		try:
+			# Step 1: opening JV in current year (FY 2024) — must be posted before PCV
+			# exists, else `validate_against_pcv` rejects it.
+			jv_current_year = make_journal_entry(
+				account1=cash_account,
+				account2=opening_offset_account,
+				amount=3000,
+				posting_date="2024-06-15",
+				company=company,
+				save=False,
+			)
+			jv_current_year.is_opening = "Yes"
+			jv_current_year.insert()
+			jv_current_year.submit()
+
+			# Step 2: opening JV in next year (FY 2025)
+			jv_next_year = make_journal_entry(
+				account1=cash_account,
+				account2=opening_offset_account,
+				amount=5000,
+				posting_date="2025-06-15",
+				company=company,
+				save=False,
+			)
+			jv_next_year.is_opening = "Yes"
+			jv_next_year.insert()
+			jv_next_year.submit()
+
+			# Step 3: book Period Closing Voucher for previous year (FY 2023)
+			closing_account = frappe.db.get_value(
+				"Account",
+				{
+					"company": company,
+					"root_type": "Liability",
+					"is_group": 0,
+					"account_type": ["not in", ["Payable", "Receivable"]],
+				},
+				"name",
+			)
+			fy_2023 = get_fiscal_year("2023-06-15", company=company)
+
+			frappe.db.set_single_value("Accounts Settings", "use_legacy_controller_for_pcv", 1)
+
+			pcv = frappe.get_doc(
+				{
+					"doctype": "Period Closing Voucher",
+					"transaction_date": "2023-12-31",
+					"period_start_date": fy_2023[1],
+					"period_end_date": fy_2023[2],
+					"company": company,
+					"fiscal_year": fy_2023[0],
+					"cost_center": "_Test Cost Center - _TC",
+					"closing_account_head": closing_account,
+					"remarks": "Test Period Closing",
+				}
+			)
+			pcv.insert()
+			pcv.submit()
+			pcv.reload()
+
+			# Run BS report for FY 2024
+			filters = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-01-01",
+				"period_end_date": "2024-12-31",
+				"filter_based_on": "Date Range",
+				"periodicity": "Yearly",
+				"ignore_closing_entries": True,
+			}
+
+			periods = [{"key": "2024", "from_date": "2024-01-01", "to_date": "2024-12-31"}]
+
+			query_builder = FinancialQueryBuilder(filters, periods)
+			accounts = [
+				frappe._dict({"name": cash_account, "account_name": "Cash", "account_number": "1001"}),
+				frappe._dict(
+					{
+						"name": opening_offset_account,
+						"account_name": "Temporary Opening",
+						"account_number": "1900",
+					}
+				),
+			]
+
+			balances_data = query_builder.fetch_account_balances(accounts)
+			cash_data = balances_data.get(cash_account)
+			offset_data = balances_data.get(opening_offset_account)
+			self.assertIsNotNone(cash_data, "Cash account should exist in results")
+			self.assertIsNotNone(offset_data, "Offset account should exist in results")
+
+			year_2024_cash = cash_data.get_period("2024")
+			year_2024_offset = offset_data.get_period("2024")
+			self.assertIsNotNone(year_2024_cash, "FY 2024 period should exist for cash")
+			self.assertIsNotNone(year_2024_offset, "FY 2024 period should exist for offset")
+
+			# All is_opening JVs (current + next year) roll into FY 2024 opening
+			self.assertEqual(
+				year_2024_cash.opening,
+				8000.0,
+				"FY 2024 cash opening must combine is_opening JVs from current and next year",
+			)
+			self.assertEqual(
+				year_2024_offset.opening,
+				-8000.0,
+				"FY 2024 offset opening must combine is_opening JVs from current and next year",
+			)
+			self.assertEqual(
+				year_2024_cash.movement, 0.0, "Opening JVs must not be counted as period movement"
+			)
+			self.assertEqual(year_2024_cash.closing, 8000.0, "Closing = opening when no non-opening movement")
+
+		finally:
+			frappe.db.set_single_value(
+				"Accounts Settings", "use_legacy_controller_for_pcv", original_pcv_setting or 0
+			)
+
+			if pcv:
+				pcv.reload()
+				if pcv.docstatus == 1:
+					pcv.cancel()
+
+			if jv_next_year and jv_next_year.docstatus == 1:
+				jv_next_year.cancel()
+
+			if jv_current_year and jv_current_year.docstatus == 1:
+				jv_current_year.cancel()
+
+	def test_account_with_gl_entries_but_no_prior_closing_balance(self):
+		company = "_Test Company"
+		cash_account = "_Test Cash - _TC"
+		bank_account = "_Test Bank - _TC"
+
+		# Create journal entries WITHOUT any prior Period Closing Voucher
+		# This ensures the account exists in gl_dict but NOT in balances_data
+		jv = make_journal_entry(
+			account1=cash_account,
+			account2=bank_account,
+			amount=2500,
+			posting_date="2024-07-15",
+			company=company,
+			submit=True,
+		)
+
+		try:
+			# Set up filters - use a period with no prior PCV
+			filters = {
+				"company": company,
+				"from_fiscal_year": "2024",
+				"to_fiscal_year": "2024",
+				"period_start_date": "2024-07-01",
+				"period_end_date": "2024-09-30",
+				"filter_based_on": "Date Range",
+				"periodicity": "Monthly",
+			}
+
+			periods = [
+				{"key": "2024_jul", "from_date": "2024-07-01", "to_date": "2024-07-31"},
+				{"key": "2024_aug", "from_date": "2024-08-01", "to_date": "2024-08-31"},
+				{"key": "2024_sep", "from_date": "2024-09-01", "to_date": "2024-09-30"},
+			]
+
+			query_builder = FinancialQueryBuilder(filters, periods)
+
+			# Use accounts that have GL entries but may not have Account Closing Balance
+			accounts = [
+				frappe._dict({"name": cash_account, "account_name": "Cash", "account_number": "1001"}),
+				frappe._dict({"name": bank_account, "account_name": "Bank", "account_number": "1002"}),
+			]
+
+			balances_data = query_builder.fetch_account_balances(accounts)
+
+			# Verify accounts are present in results even without prior closing balance
+			cash_data = balances_data.get(cash_account)
+			self.assertIsNotNone(cash_data, "Cash account should exist in results")
+
+			bank_data = balances_data.get(bank_account)
+			self.assertIsNotNone(bank_data, "Bank account should exist in results")
+
+			# Verify July has the movement from journal entry
+			jul_cash = cash_data.get_period("2024_jul")
+			self.assertIsNotNone(jul_cash, "July period should exist for cash")
+			self.assertEqual(jul_cash.movement, 2500.0, "July cash movement should be 2500")
+
+			jul_bank = bank_data.get_period("2024_jul")
+			self.assertIsNotNone(jul_bank, "July period should exist for bank")
+			self.assertEqual(jul_bank.movement, -2500.0, "July bank movement should be -2500")
+
+			# Verify subsequent periods exist with zero movement
+			aug_cash = cash_data.get_period("2024_aug")
+			self.assertIsNotNone(aug_cash, "August period should exist for cash")
+			self.assertEqual(aug_cash.movement, 0.0, "August cash movement should be 0")
+			self.assertEqual(aug_cash.opening, jul_cash.closing, "August opening = July closing")
+
+			sep_cash = cash_data.get_period("2024_sep")
+			self.assertIsNotNone(sep_cash, "September period should exist for cash")
+			self.assertEqual(sep_cash.movement, 0.0, "September cash movement should be 0")
+			self.assertEqual(sep_cash.opening, aug_cash.closing, "September opening = August closing")
+
+		finally:
+			jv.cancel()
+
+	def test_pl_pcv_exclusion_and_growth_view_year_over_year(self):
+		"""
+		Sequence:
+		    1. Expense JV 2000 in FY 2024, PCV for FY 2024
+		       → assert FY 2024 movement = 2000 via FinancialQueryBuilder
+		    2. Expense JV 3000 in FY 2025, PCV for FY 2025
+		    3. Run FinancialReportEngine with selected_view="Growth"
+		       → assert col_2024 = 2000 (raw), col_2025 = 50.0 (% growth)
+		"""
+		company = "_Test Company"
+		expense_account = "Administrative Expenses - _TC"
+		bank_account = "_Test Bank - _TC"
+
+		template = None
+		pcv_2024 = None
+		pcv_2025 = None
+		jv_2024 = None
+		jv_2025 = None
+		original_pcv_setting = frappe.db.get_single_value(
+			"Accounts Settings", "use_legacy_controller_for_pcv"
+		)
+
+		try:
+			closing_account = frappe.db.get_value(
+				"Account",
+				{
+					"company": company,
+					"root_type": "Liability",
+					"is_group": 0,
+					"account_type": ["not in", ["Payable", "Receivable"]],
+				},
+				"name",
+			)
+
+			frappe.db.set_single_value("Accounts Settings", "use_legacy_controller_for_pcv", 1)
+
+			accounts = [
+				frappe._dict(
+					{
+						"name": expense_account,
+						"account_name": "Administrative Expenses",
+						"account_number": "5001",
+					}
+				),
+			]
+
+			# --- Step 1: FY 2024 expense + PCV, assert PCV reversal excluded ---
+			jv_2024 = make_journal_entry(
+				account1=expense_account,
+				account2=bank_account,
+				amount=2000,
+				posting_date="2024-06-15",
+				company=company,
+				submit=True,
+			)
+			fy_2024 = get_fiscal_year("2024-06-15", company=company)
+			pcv_2024 = frappe.get_doc(
+				{
+					"doctype": "Period Closing Voucher",
+					"transaction_date": "2024-12-31",
+					"period_start_date": fy_2024[1],
+					"period_end_date": fy_2024[2],
+					"company": company,
+					"fiscal_year": fy_2024[0],
+					"cost_center": "_Test Cost Center - _TC",
+					"closing_account_head": closing_account,
+					"remarks": "Test PCV FY 2024",
+				}
+			)
+			pcv_2024.insert()
+			pcv_2024.submit()
+			pcv_2024.reload()
+
+			builder_2024 = FinancialQueryBuilder(
+				{
+					"company": company,
+					"from_fiscal_year": "2024",
+					"to_fiscal_year": "2024",
+					"period_start_date": "2024-01-01",
+					"period_end_date": "2024-12-31",
+					"filter_based_on": "Date Range",
+					"periodicity": "Yearly",
+				},
+				[{"key": "2024", "from_date": "2024-01-01", "to_date": "2024-12-31"}],
+			)
+			data_2024 = builder_2024.fetch_account_balances(accounts)
+			expense_2024 = data_2024.get(expense_account)
+			self.assertIsNotNone(expense_2024, "Expense account must appear in FY 2024 results")
+			year_2024 = expense_2024.get_period("2024")
+			self.assertEqual(
+				year_2024.movement,
+				2000.0,
+				"FY 2024 expense movement must equal real expense (PCV reversal excluded)",
+			)
+
+			# --- Step 2: FY 2025 expense + PCV ---
+			jv_2025 = make_journal_entry(
+				account1=expense_account,
+				account2=bank_account,
+				amount=3000,
+				posting_date="2025-06-15",
+				company=company,
+				submit=True,
+			)
+			fy_2025 = get_fiscal_year("2025-06-15", company=company)
+			pcv_2025 = frappe.get_doc(
+				{
+					"doctype": "Period Closing Voucher",
+					"transaction_date": "2025-12-31",
+					"period_start_date": fy_2025[1],
+					"period_end_date": fy_2025[2],
+					"company": company,
+					"fiscal_year": fy_2025[0],
+					"cost_center": "_Test Cost Center - _TC",
+					"closing_account_head": closing_account,
+					"remarks": "Test PCV FY 2025",
+				}
+			)
+			pcv_2025.insert()
+			pcv_2025.submit()
+			pcv_2025.reload()
+
+			# --- Step 3: full pipeline with Growth view across both years ---
+			template_name = f"Test Growth Template {frappe.generate_hash()[:8]}"
+			template = frappe.get_doc(
+				{
+					"doctype": "Financial Report Template",
+					"template_name": template_name,
+					"report_type": "Profit and Loss Statement",
+					"rows": [
+						{
+							"reference_code": "EXP_ADMIN",
+							"display_name": "Administrative Expenses",
+							"indentation_level": 0,
+							"data_source": "Account Data",
+							"balance_type": "Closing Balance",
+							"calculation_formula": f'["name", "=", "{expense_account}"]',
+						},
+					],
+				}
+			)
+			template.insert()
+
+			filters = frappe._dict(
+				{
+					"company": company,
+					"report_template": template_name,
+					"from_fiscal_year": fy_2024[0],
+					"to_fiscal_year": fy_2025[0],
+					"period_start_date": "2024-01-01",
+					"period_end_date": "2025-12-31",
+					"filter_based_on": "Date Range",
+					"periodicity": "Yearly",
+					"accumulated_values": 0,
+					"selected_view": "Growth",
+				}
+			)
+
+			_columns, formatted_data, _msg, _chart = FinancialReportEngine().execute(filters)
+
+			expense_row = next(
+				(row for row in formatted_data if row.get("account_name") == "Administrative Expenses"),
+				None,
+			)
+			self.assertIsNotNone(expense_row, "Administrative Expenses row must appear in growth view")
+
+			period_keys = expense_row.get("_segment_info", {}).get("period_keys", [])
+			self.assertEqual(len(period_keys), 2, "Yearly view must yield exactly two periods")
+			first_period_key, second_period_key = period_keys
+
+			# First column: raw absolute value (FY 2024 expense)
+			self.assertEqual(
+				flt(expense_row[first_period_key]),
+				2000.0,
+				"First column in growth view must keep raw FY 2024 expense value",
+			)
+			# Second column: ((3000 - 2000) / 2000) * 100 = 50.0
+			self.assertEqual(
+				flt(expense_row[second_period_key]),
+				50.0,
+				"Second column must be % growth FY 2024 → FY 2025",
+			)
+
+		finally:
+			frappe.db.set_single_value(
+				"Accounts Settings", "use_legacy_controller_for_pcv", original_pcv_setting or 0
+			)
+
+			if pcv_2025:
+				pcv_2025.reload()
+				if pcv_2025.docstatus == 1:
+					pcv_2025.cancel()
+
+			if jv_2025 and jv_2025.docstatus == 1:
+				jv_2025.cancel()
+
+			if pcv_2024:
+				pcv_2024.reload()
+				if pcv_2024.docstatus == 1:
+					pcv_2024.cancel()
+
+			if jv_2024 and jv_2024.docstatus == 1:
+				jv_2024.cancel()
+
+			if template and frappe.db.exists("Financial Report Template", template.name):
+				frappe.delete_doc("Financial Report Template", template.name, force=1)

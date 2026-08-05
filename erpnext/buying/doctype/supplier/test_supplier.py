@@ -7,14 +7,10 @@ import frappe
 from erpnext.accounts.party import get_due_date
 from erpnext.controllers.website_list_for_contact import get_customers_suppliers
 from erpnext.exceptions import PartyDisabled
-
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Payment Term", "Payment Terms Template"]
-
-
-from frappe.tests import IntegrationTestCase
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestSupplier(IntegrationTestCase):
+class TestSupplier(ERPNextTestSuite):
 	def test_get_supplier_group_details(self):
 		doc = frappe.new_doc("Supplier Group")
 		doc.supplier_group_name = "_Testing Supplier Group"
@@ -110,7 +106,7 @@ class TestSupplier(IntegrationTestCase):
 	def test_supplier_country(self):
 		# Test that country field exists in Supplier DocType
 		supplier = frappe.get_doc("Supplier", "_Test Supplier with Country")
-		self.assertTrue("country" in supplier.as_dict())
+		self.assertIn("country", supplier.as_dict())
 
 		# Test if test supplier field record is 'Greece'
 		self.assertEqual(supplier.country, "Greece")
@@ -122,29 +118,27 @@ class TestSupplier(IntegrationTestCase):
 		self.assertEqual(supplier.country, "Greece")
 
 	def test_party_details_tax_category(self):
-		from erpnext.accounts.party import get_party_details
+		from erpnext.accounts.party import _get_party_details
 
 		frappe.delete_doc_if_exists("Address", "_Test Address With Tax Category-Billing")
 
 		# Tax Category without Address
-		details = get_party_details("_Test Supplier With Tax Category", party_type="Supplier")
+		details = _get_party_details("_Test Supplier With Tax Category", party_type="Supplier")
 		self.assertEqual(details.tax_category, "_Test Tax Category 1")
 
 		address = frappe.get_doc(
-			dict(
-				doctype="Address",
-				address_title="_Test Address With Tax Category",
-				tax_category="_Test Tax Category 2",
-				address_type="Billing",
-				address_line1="Station Road",
-				city="_Test City",
-				country="India",
-				links=[dict(link_doctype="Supplier", link_name="_Test Supplier With Tax Category")],
-			)
+			doctype="Address",
+			address_title="_Test Address With Tax Category",
+			tax_category="_Test Tax Category 2",
+			address_type="Billing",
+			address_line1="Station Road",
+			city="_Test City",
+			country="India",
+			links=[dict(link_doctype="Supplier", link_name="_Test Supplier With Tax Category")],
 		).insert()
 
 		# Tax Category with Address
-		details = get_party_details("_Test Supplier With Tax Category", party_type="Supplier")
+		details = _get_party_details("_Test Supplier With Tax Category", party_type="Supplier")
 		self.assertEqual(details.tax_category, "_Test Tax Category 2")
 
 		# Rollback
@@ -172,12 +166,24 @@ def create_supplier(**args):
 	if not args.without_supplier_group:
 		doc.supplier_group = args.supplier_group or "Services"
 
+	if args.get("party_account"):
+		doc.append(
+			"accounts",
+			{
+				"company": frappe.db.get_value("Account", args.get("party_account"), "company"),
+				"account": args.get("party_account"),
+			},
+		)
+
 	doc.insert()
 
 	return doc
 
 
-class TestSupplierPortal(IntegrationTestCase):
+from erpnext.tests.utils import ERPNextTestSuite
+
+
+class TestSupplierPortal(ERPNextTestSuite):
 	def test_portal_user_can_access_supplier_data(self):
 		supplier = create_supplier()
 
@@ -196,3 +202,24 @@ class TestSupplierPortal(IntegrationTestCase):
 			_, suppliers = get_customers_suppliers("Purchase Order", user)
 
 			self.assertIn(supplier.name, suppliers)
+
+	def test_portal_user_contact_link(self):
+		user_email = frappe.generate_hash() + "@example.com"
+		user = frappe.new_doc("User")
+		user.email = user_email
+		user.first_name = "Test Portal Contact User"
+		user.send_welcome_email = False
+		user.insert(ignore_permissions=True)
+
+		contact = frappe.new_doc("Contact")
+		contact.first_name = "Test Portal Contact User"
+		contact.add_email(user_email, is_primary=1)
+		contact.links = []
+		contact.insert(ignore_permissions=True)
+
+		supplier = create_supplier()
+		supplier.append("portal_users", {"user": user.name})
+		supplier.save()
+
+		contact.reload()
+		self.assertTrue(contact.has_link("Supplier", supplier.name))

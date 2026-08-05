@@ -48,22 +48,25 @@ def execute(filters=None):
 		return columns, data, message, chart
 
 	fiscal_year = get_fiscal_year_data(filters.get("from_fiscal_year"), filters.get("to_fiscal_year"))
-	companies_column, companies = get_companies(filters)
-	columns = get_columns(companies_column, filters)
+	company_list, companies = get_companies(filters)
+	company_columns = get_company_columns(company_list, filters)
+	columns = get_columns(company_columns)
 
 	if filters.get("report") == "Balance Sheet":
 		data, message, chart, report_summary = get_balance_sheet_data(
-			fiscal_year, companies, columns, filters
+			fiscal_year, companies, company_columns, filters
 		)
 	elif filters.get("report") == "Profit and Loss Statement":
-		data, message, chart, report_summary = get_profit_loss_data(fiscal_year, companies, columns, filters)
+		data, message, chart, report_summary = get_profit_loss_data(
+			fiscal_year, companies, company_columns, filters
+		)
 	else:
 		data, report_summary = get_cash_flow_data(fiscal_year, companies, filters)
 
 	return columns, data, message, chart, report_summary
 
 
-def get_balance_sheet_data(fiscal_year, companies, columns, filters):
+def get_balance_sheet_data(fiscal_year, companies, company_columns, filters):
 	asset = get_data(companies, "Asset", "Debit", fiscal_year, filters=filters)
 
 	liability = get_data(companies, "Liability", "Credit", fiscal_year, filters=filters)
@@ -116,7 +119,7 @@ def get_balance_sheet_data(fiscal_year, companies, columns, filters):
 		True,
 	)
 
-	chart = get_chart_data(filters, columns, asset, liability, equity, company_currency)
+	chart = get_chart_data(filters, company_columns, asset, liability, equity, company_currency)
 
 	return data, message, chart, report_summary
 
@@ -164,7 +167,7 @@ def get_root_account_name(root_type, company):
 		return root_account[0][0]
 
 
-def get_profit_loss_data(fiscal_year, companies, columns, filters):
+def get_profit_loss_data(fiscal_year, companies, company_columns, filters):
 	income, expense, net_profit_loss = get_income_expense_data(companies, fiscal_year, filters)
 	company_currency = get_company_currency(filters)
 
@@ -174,7 +177,7 @@ def get_profit_loss_data(fiscal_year, companies, columns, filters):
 	if net_profit_loss:
 		data.append(net_profit_loss)
 
-	chart = get_pl_chart_data(filters, columns, income, expense, net_profit_loss, company_currency)
+	chart = get_pl_chart_data(filters, company_columns, income, expense, net_profit_loss, company_currency)
 
 	report_summary, primitive_summary = get_pl_summary(
 		companies, "", income, expense, net_profit_loss, company_currency, filters, True
@@ -189,7 +192,15 @@ def get_income_expense_data(companies, fiscal_year, filters):
 
 	expense = get_data(companies, "Expense", "Debit", fiscal_year, filters, True)
 
-	net_profit_loss = get_net_profit_loss(income, expense, companies, filters.company, company_currency, True)
+	net_profit_loss = get_net_profit_loss(
+		income,
+		expense,
+		companies,
+		filters.company,
+		company_currency,
+		consolidated=True,
+		accumulated_values=bool(filters.accumulated_values),
+	)
 
 	return income, expense, net_profit_loss
 
@@ -280,7 +291,30 @@ def get_account_type_based_data(account_type, companies, fiscal_year, filters):
 	return data
 
 
-def get_columns(companies, filters):
+def get_company_columns(companies, filters):
+	company_columns = []
+	for company in companies:
+		apply_currency_formatter = 1 if not filters.presentation_currency else 0
+		currency = filters.presentation_currency
+		if not currency:
+			currency = erpnext.get_company_currency(company)
+
+		company_columns.append(
+			{
+				"fieldname": company,
+				"label": f"{company} ({currency})",
+				"fieldtype": "Currency",
+				"options": "currency",
+				"width": 150,
+				"apply_currency_formatter": apply_currency_formatter,
+				"company_name": company,
+			}
+		)
+
+	return company_columns
+
+
+def get_columns(company_columns):
 	columns = [
 		{
 			"fieldname": "account",
@@ -298,23 +332,7 @@ def get_columns(companies, filters):
 		},
 	]
 
-	for company in companies:
-		apply_currency_formatter = 1 if not filters.presentation_currency else 0
-		currency = filters.presentation_currency
-		if not currency:
-			currency = erpnext.get_company_currency(company)
-
-		columns.append(
-			{
-				"fieldname": company,
-				"label": f"{company} ({currency})",
-				"fieldtype": "Currency",
-				"options": "currency",
-				"width": 150,
-				"apply_currency_formatter": apply_currency_formatter,
-				"company_name": company,
-			}
-		)
+	columns.extend(company_columns)
 
 	return columns
 
@@ -337,11 +355,10 @@ def get_data(companies, root_type, balance_must_be, fiscal_year, filters=None, i
 	filters.end_date = end_date
 
 	gl_entries_by_account = {}
-	for root in frappe.db.sql(
-		"""select lft, rgt from tabAccount
-			where root_type=%s and ifnull(parent_account, '') = ''""",
-		root_type,
-		as_dict=1,
+	for root in frappe.get_all(
+		"Account",
+		filters={"root_type": root_type, "parent_account": ["is", "not set"]},
+		fields=["lft", "rgt"],
 	):
 		set_gl_entries_by_account(
 			start_date,
@@ -502,9 +519,11 @@ def get_companies(filters):
 def get_subsidiary_companies(company):
 	lft, rgt = frappe.get_cached_value("Company", company, ["lft", "rgt"])
 
-	return frappe.db.sql_list(
-		f"""select name from `tabCompany`
-		where lft >= {lft} and rgt <= {rgt} order by lft, rgt"""
+	return frappe.get_all(
+		"Company",
+		filters={"lft": [">=", lft], "rgt": ["<=", rgt]},
+		pluck="name",
+		order_by="lft, rgt",
 	)
 
 
@@ -571,7 +590,12 @@ def prepare_data(accounts, start_date, end_date, balance_must_be, companies, com
 				total += flt(row[company])
 
 		row["has_value"] = has_value
-		row["total"] = total
+		# when accumulating into the group company, that company's column already consolidates its
+		# descendants, so summing every company column would double-count; use the group total directly.
+		if filters.get("accumulated_in_group_company"):
+			row["total"] = flt(row.get(filters.company, 0.0), 3)
+		else:
+			row["total"] = total
 
 		data.append(row)
 
@@ -594,14 +618,10 @@ def set_gl_entries_by_account(
 
 	company_lft, company_rgt = frappe.get_cached_value("Company", filters.get("company"), ["lft", "rgt"])
 
-	companies = frappe.db.sql(
-		""" select name, default_currency from `tabCompany`
-		where lft >= %(company_lft)s and rgt <= %(company_rgt)s""",
-		{
-			"company_lft": company_lft,
-			"company_rgt": company_rgt,
-		},
-		as_dict=1,
+	companies = frappe.get_all(
+		"Company",
+		filters={"lft": [">=", company_lft], "rgt": ["<=", company_rgt]},
+		fields=["name", "default_currency"],
 	)
 
 	currency_info = frappe._dict(
@@ -646,7 +666,11 @@ def set_gl_entries_by_account(
 			query = query.where(Criterion.all(additional_conditions))
 		gl_entries = query.run(as_dict=True)
 
-		if filters and filters.get("presentation_currency") != d.default_currency:
+		if (
+			filters
+			and filters.get("presentation_currency")
+			and filters.get("presentation_currency") != d.default_currency
+		):
 			currency_info["company"] = d.name
 			currency_info["company_currency"] = d.default_currency
 			convert_to_presentation_currency(gl_entries, currency_info)

@@ -2,29 +2,24 @@
 # For license information, please see license.txt
 
 import frappe
-from frappe.tests import IntegrationTestCase
-from frappe.tests.utils import make_test_records
 
-# On IntegrationTestCase, the doctype test records and all
-# link-field test record dependencies are recursively loaded
-# Use these module variables to add/remove to/from that list
-EXTRA_TEST_RECORD_DEPENDENCIES = []  # eg. ["User"]
-IGNORE_TEST_RECORD_DEPENDENCIES = []  # eg. ["User"]
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestFinancialReportTemplate(IntegrationTestCase):
-	pass
-
-
-class FinancialReportTemplateTestCase(IntegrationTestCase):
+class FinancialReportTemplateTestCase(ERPNextTestSuite):
 	"""Utility class with common setup and helper methods for all test classes"""
 
-	@classmethod
-	def setUpClass(cls):
+	def cancel_docs(self, docs):
+		"""Cancel submitted docs in reverse creation order to avoid dependency issues."""
+		for doc in reversed(docs):
+			if doc:
+				doc.reload()
+				if doc.docstatus == 1:
+					doc.cancel()
+
+	def setUp(self):
 		"""Set up test data"""
-		make_test_records("Company")
-		make_test_records("Fiscal Year")
-		cls.create_test_template()
+		self.create_test_template()
 
 	@classmethod
 	def create_test_template(cls):

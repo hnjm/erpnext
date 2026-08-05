@@ -5,6 +5,11 @@ from frappe.utils import cstr, now, today
 from pypika import functions
 
 
+def disable_opportunity_creation_on_contact_us_disabled(doc, method):
+	if doc.is_disabled:
+		frappe.db.set_single_value("CRM Settings", "enable_opportunity_creation_from_contact_us", 0)
+
+
 def update_lead_phone_numbers(contact, method):
 	if contact.phone_nos:
 		contact_lead = contact.get_link_for("Lead")
@@ -144,7 +149,7 @@ def link_open_events(ref_doctype, ref_docname, doc):
 
 
 @frappe.whitelist()
-def get_open_activities(ref_doctype, ref_docname):
+def get_open_activities(ref_doctype: str, ref_docname: str):
 	tasks = get_open_todos(ref_doctype, ref_docname)
 	events = get_open_events(ref_doctype, ref_docname)
 	tasks_history = get_closed_todos(ref_doctype, ref_docname)
@@ -184,6 +189,7 @@ def get_filtered_todos(ref_doctype, ref_docname, status: str | tuple[str, str]):
 			"allocated_to",
 			"date",
 		],
+		order_by="date asc",
 	)
 
 
@@ -213,6 +219,7 @@ def get_filtered_events(ref_doctype, ref_docname, open: bool):
 			& (event_link.reference_docname == ref_docname)
 			& (event_status_filter)
 		)
+		.orderby(event.starts_on)
 	)
 	data = query.run(as_dict=True)
 
@@ -242,20 +249,20 @@ def open_leads_opportunities_based_on_todays_event():
 
 class CRMNote(Document):
 	@frappe.whitelist()
-	def add_note(self, note):
+	def add_note(self, note: str):
 		self.append("notes", {"note": note, "added_by": frappe.session.user, "added_on": now()})
 		self.save()
 		notify_mentions(self.doctype, self.name, note)
 
 	@frappe.whitelist()
-	def edit_note(self, note, row_id):
+	def edit_note(self, note: str, row_id: str):
 		for d in self.notes:
 			if cstr(d.name) == row_id:
 				d.note = note
 				d.db_update()
 
 	@frappe.whitelist()
-	def delete_note(self, row_id):
+	def delete_note(self, row_id: str):
 		for d in self.notes:
 			if cstr(d.name) == row_id:
 				self.remove(d)

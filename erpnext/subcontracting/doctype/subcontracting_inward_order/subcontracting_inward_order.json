@@ -8,7 +8,6 @@
  "document_type": "Document",
  "engine": "InnoDB",
  "field_order": [
-  "title",
   "naming_series",
   "sales_order",
   "customer",
@@ -25,10 +24,11 @@
   "raw_materials_received_section",
   "received_items",
   "scrap_items_generated_section",
-  "scrap_items",
+  "secondary_items",
   "service_items_section",
   "service_items",
   "tab_other_info",
+  "title",
   "order_status_section",
   "status",
   "per_raw_material_received",
@@ -43,10 +43,8 @@
  "fields": [
   {
    "allow_on_submit": 1,
-   "default": "{customer_name}",
    "fieldname": "title",
    "fieldtype": "Data",
-   "hidden": 1,
    "label": "Title",
    "no_copy": 1,
    "print_hide": 1
@@ -181,7 +179,7 @@
    "in_standard_filter": 1,
    "label": "Status",
    "no_copy": 1,
-   "options": "Draft\nOpen\nOngoing\nProduced\nDelivered\nCancelled\nClosed",
+   "options": "Draft\nOpen\nOngoing\nProduced\nDelivered\nReturned\nCancelled\nClosed",
    "print_hide": 1,
    "read_only": 1,
    "reqd": 1,
@@ -252,17 +250,10 @@
    "reqd": 1
   },
   {
-   "depends_on": "scrap_items",
+   "depends_on": "secondary_items",
    "fieldname": "scrap_items_generated_section",
    "fieldtype": "Section Break",
-   "label": "Scrap Items Generated"
-  },
-  {
-   "fieldname": "scrap_items",
-   "fieldtype": "Table",
-   "label": "Scrap Items",
-   "no_copy": 1,
-   "options": "Subcontracting Inward Order Scrap Item"
+   "label": "Secondary Items Generated"
   },
   {
    "fieldname": "per_returned",
@@ -300,13 +291,20 @@
    "label": "Customer Currency",
    "options": "Currency",
    "read_only": 1
+  },
+  {
+   "fieldname": "secondary_items",
+   "fieldtype": "Table",
+   "label": "Secondary Items",
+   "no_copy": 1,
+   "options": "Subcontracting Inward Order Secondary Item"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-09-05 14:41:46.859510",
+ "modified": "2026-07-27 11:20:14.512336",
  "modified_by": "Administrator",
  "module": "Subcontracting",
  "name": "Subcontracting Inward Order",

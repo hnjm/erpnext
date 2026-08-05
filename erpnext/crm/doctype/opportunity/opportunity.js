@@ -40,7 +40,7 @@ frappe.ui.form.on("Opportunity", {
 			erpnext.utils.get_party_details(frm);
 		} else if (frm.doc.opportunity_from == "Lead") {
 			erpnext.utils.map_current_doc({
-				method: "erpnext.crm.doctype.lead.lead.make_opportunity",
+				method: "erpnext.crm.doctype.lead.mapper.make_opportunity",
 				source_name: frm.doc.party_name,
 				frm: frm,
 			});
@@ -204,14 +204,14 @@ frappe.ui.form.on("Opportunity", {
 
 	make_supplier_quotation: function (frm) {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.crm.doctype.opportunity.opportunity.make_supplier_quotation",
+			method: "erpnext.crm.doctype.opportunity.mapper.make_supplier_quotation",
 			frm: frm,
 		});
 	},
 
 	make_request_for_quotation: function (frm) {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.crm.doctype.opportunity.opportunity.make_request_for_quotation",
+			method: "erpnext.crm.doctype.opportunity.mapper.make_request_for_quotation",
 			frm: frm,
 		});
 	},
@@ -307,6 +307,21 @@ erpnext.crm.Opportunity = class Opportunity extends frappe.ui.form.Controller {
 			};
 		});
 
+		this.frm.set_query("uom", "items", function (doc, cdt, cdn) {
+			let row = locals[cdt][cdn];
+
+			if (!row.item_code) {
+				return;
+			}
+
+			return {
+				query: "erpnext.controllers.queries.get_item_uom_query",
+				filters: {
+					item_code: row.item_code,
+				},
+			};
+		});
+
 		me.frm.set_query("contact_person", erpnext.queries["contact_query"]);
 
 		if (me.frm.doc.opportunity_from == "Lead") {
@@ -326,14 +341,14 @@ erpnext.crm.Opportunity = class Opportunity extends frappe.ui.form.Controller {
 
 	create_quotation() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.crm.doctype.opportunity.opportunity.make_quotation",
+			method: "erpnext.crm.doctype.opportunity.mapper.make_quotation",
 			frm: this.frm,
 		});
 	}
 
 	make_customer() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.crm.doctype.opportunity.opportunity.make_customer",
+			method: "erpnext.crm.doctype.opportunity.mapper.make_customer",
 			frm: this.frm,
 		});
 	}

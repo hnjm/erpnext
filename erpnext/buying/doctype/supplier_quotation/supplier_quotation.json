@@ -9,7 +9,6 @@
  "engine": "InnoDB",
  "field_order": [
   "supplier_section",
-  "title",
   "naming_series",
   "supplier",
   "supplier_name",
@@ -111,12 +110,13 @@
   "column_break_85",
   "select_print_heading",
   "language",
-  "subscription_section",
+  "auto_repeat_section",
   "auto_repeat",
   "update_auto_repeat_reference",
   "more_info",
   "is_subcontracted",
   "column_break_57",
+  "title",
   "opportunity",
   "connections_tab"
  ],
@@ -127,10 +127,9 @@
    "options": "fa fa-user"
   },
   {
-   "default": "{supplier_name}",
+   "allow_on_submit": 1,
    "fieldname": "title",
    "fieldtype": "Data",
-   "hidden": 1,
    "label": "Title",
    "no_copy": 1,
    "print_hide": 1,
@@ -737,11 +736,6 @@
    "read_only": 1
   },
   {
-   "fieldname": "subscription_section",
-   "fieldtype": "Section Break",
-   "label": "Auto Repeat"
-  },
-  {
    "fieldname": "auto_repeat",
    "fieldtype": "Link",
    "label": "Auto Repeat",
@@ -938,7 +932,13 @@
    "hidden": 1,
    "label": "Item Wise Tax Details",
    "no_copy": 1,
-   "options": "Item Wise Tax Detail"
+   "options": "Item Wise Tax Detail",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "auto_repeat_section",
+   "fieldtype": "Section Break",
+   "label": "Auto Repeat"
   }
  ],
  "grid_page_length": 50,
@@ -947,7 +947,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-07-23 02:22:43.526822",
+ "modified": "2026-05-28 12:29:37.509487",
  "modified_by": "Administrator",
  "module": "Buying",
  "name": "Supplier Quotation",
@@ -1015,5 +1015,5 @@
  "sort_order": "DESC",
  "states": [],
  "timeline_field": "supplier",
- "title_field": "title"
+ "title_field": "supplier_name"
 }

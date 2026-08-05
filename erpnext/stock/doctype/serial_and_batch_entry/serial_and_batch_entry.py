@@ -17,7 +17,9 @@ class SerialandBatchEntry(Document):
 		batch_no: DF.Link | None
 		delivered_qty: DF.Float
 		incoming_rate: DF.Float
+		is_cancelled: DF.Check
 		is_outward: DF.Check
+		item_code: DF.Link | None
 		outgoing_rate: DF.Float
 		parent: DF.Data
 		parentfield: DF.Data
@@ -40,3 +42,4 @@ class SerialandBatchEntry(Document):
 
 def on_doctype_update():
 	frappe.db.add_index("Serial and Batch Entry", ["warehouse", "batch_no", "posting_datetime"])
+	frappe.db.add_index("Serial and Batch Entry", ["warehouse", "serial_no", "posting_datetime"])

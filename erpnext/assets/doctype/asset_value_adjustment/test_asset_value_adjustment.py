@@ -1,24 +1,21 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, cstr, get_last_day, getdate, nowdate
 
 from erpnext.assets.doctype.asset.asset import get_asset_value_after_depreciation
 from erpnext.assets.doctype.asset.depreciation import post_depreciation_entries
-from erpnext.assets.doctype.asset.test_asset import create_asset_data
 from erpnext.assets.doctype.asset_depreciation_schedule.asset_depreciation_schedule import (
 	get_asset_depr_schedule_doc,
 )
 from erpnext.assets.doctype.asset_repair.test_asset_repair import create_asset_repair
 from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestAssetValueAdjustment(IntegrationTestCase):
+class TestAssetValueAdjustment(ERPNextTestSuite):
 	def setUp(self):
-		create_asset_data()
 		frappe.db.set_value(
 			"Company", "_Test Company", "capital_work_in_progress_account", "CWIP Account - _TC"
 		)
@@ -97,11 +94,12 @@ class TestAssetValueAdjustment(IntegrationTestCase):
 			("_Test Fixed Asset - _TC", 0.0, 4625.29),
 		)
 
-		gle = frappe.db.sql(
-			"""select account, debit, credit from `tabGL Entry`
-			where voucher_type='Journal Entry' and voucher_no = %s
-			order by account""",
-			adj_doc.journal_entry,
+		gle = frappe.get_all(
+			"GL Entry",
+			filters={"voucher_type": "Journal Entry", "voucher_no": adj_doc.journal_entry},
+			fields=["account", "debit", "credit"],
+			order_by="account",
+			as_list=True,
 		)
 
 		self.assertSequenceEqual(gle, expected_gle)
@@ -187,11 +185,12 @@ class TestAssetValueAdjustment(IntegrationTestCase):
 			("_Test Fixed Asset - _TC", 0.0, 5175.29),
 		)
 
-		gle = frappe.db.sql(
-			"""select account, debit, credit from `tabGL Entry`
-			where voucher_type='Journal Entry' and voucher_no = %s
-			order by account""",
-			adj_doc.journal_entry,
+		gle = frappe.get_all(
+			"GL Entry",
+			filters={"voucher_type": "Journal Entry", "voucher_no": adj_doc.journal_entry},
+			fields=["account", "debit", "credit"],
+			order_by="account",
+			as_list=True,
 		)
 
 		self.assertSequenceEqual(gle, expected_gle)

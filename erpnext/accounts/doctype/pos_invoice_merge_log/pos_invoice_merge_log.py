@@ -70,7 +70,7 @@ class POSInvoiceMergeLog(Document):
 		for d in self.pos_invoices:
 			if d.customer != self.customer:
 				frappe.throw(
-					_("Row #{}: POS Invoice {} is not against customer {}").format(
+					_("Row #{0}: POS Invoice {1} is not against customer {2}").format(
 						d.idx, d.pos_invoice, self.customer
 					)
 				)
@@ -85,11 +85,11 @@ class POSInvoiceMergeLog(Document):
 			bold_status = frappe.bold(status)
 			if docstatus != 1:
 				frappe.throw(
-					_("Row #{}: POS Invoice {} is not submitted yet").format(d.idx, bold_pos_invoice)
+					_("Row #{0}: POS Invoice {1} is not submitted yet").format(d.idx, bold_pos_invoice)
 				)
 			if status == "Consolidated":
 				frappe.throw(
-					_("Row #{}: POS Invoice {} has been {}").format(d.idx, bold_pos_invoice, bold_status)
+					_("Row #{0}: POS Invoice {1} has been {2}").format(d.idx, bold_pos_invoice, bold_status)
 				)
 			if (
 				is_return
@@ -101,14 +101,14 @@ class POSInvoiceMergeLog(Document):
 				if return_against_status != "Consolidated":
 					# if return entry is not getting merged in the current pos closing and if it is not consolidated
 					msg = _(
-						"Row #{}: The original Invoice {} of return invoice {} is not consolidated."
+						"Row #{0}: The original Invoice {1} of return invoice {2} is not consolidated."
 					).format(d.idx, bold_return_against, bold_pos_invoice)
 					msg += " "
 					msg += _(
 						"The original invoice should be consolidated before or along with the return invoice."
 					)
 					msg += "<br><br>"
-					msg += _("You can add the original invoice {} manually to proceed.").format(
+					msg += _("You can add the original invoice {0} manually to proceed.").format(
 						bold_return_against
 					)
 					frappe.throw(msg)
@@ -283,7 +283,7 @@ class POSInvoiceMergeLog(Document):
 			base_rounding_adjustment += doc.base_rounding_adjustment
 			base_rounded_total += doc.base_rounded_total
 
-			for d in doc.get("item_wise_tax_details"):
+			for d in doc.get("item_wise_tax_details") or []:
 				row = frappe._dict(
 					item=old_new_item_map[d.item_row],
 					tax=old_new_tax_map[d.tax_row],
@@ -330,7 +330,7 @@ class POSInvoiceMergeLog(Document):
 
 			if not dimension_value and (dimension.mandatory_for_pl or dimension.mandatory_for_bs):
 				frappe.throw(
-					_("Please set Accounting Dimension {} in {}").format(
+					_("Please set Accounting Dimension {0} in {1}").format(
 						frappe.bold(dimension.label),
 						frappe.get_desk_link("POS Profile", invoice.pos_profile),
 					)
@@ -572,7 +572,7 @@ def split_invoices(invoices):
 
 
 def create_merge_logs(invoice_by_customer, closing_entry=None):
-	try:
+	def merge_and_close():
 		for customer, invoices_acc_dim in invoice_by_customer.items():
 			for invoices in invoices_acc_dim.values():
 				for _invoices in split_invoices(invoices):
@@ -594,25 +594,30 @@ def create_merge_logs(invoice_by_customer, closing_entry=None):
 			closing_entry.db_set("error_message", "")
 			closing_entry.update_opening_entry()
 
-	except Exception as e:
-		frappe.db.rollback()
-		message_log = frappe.message_log.pop() if frappe.message_log else str(e)
-		error_message = get_error_message(message_log)
+	if frappe.in_test:
+		merge_and_close()
+	else:
+		try:
+			merge_and_close()
+		except Exception as e:
+			frappe.db.rollback()
+			message_log = frappe.message_log.pop() if frappe.message_log else str(e)
+			error_message = get_error_message(message_log)
 
-		if closing_entry:
-			closing_entry.set_status(update=True, status="Failed")
-			if isinstance(error_message, list):
-				error_message = json.dumps(error_message)
-			closing_entry.db_set("error_message", error_message)
-		raise
+			if closing_entry:
+				closing_entry.set_status(update=True, status="Failed")
+				if isinstance(error_message, list):
+					error_message = json.dumps(error_message)
+				closing_entry.db_set("error_message", error_message)
+			raise
 
-	finally:
-		frappe.db.commit()
-		frappe.publish_realtime("closing_process_complete", user=frappe.session.user)
+		finally:
+			frappe.db.commit()
+			frappe.publish_realtime("closing_process_complete", user=frappe.session.user)
 
 
 def cancel_merge_logs(merge_logs, closing_entry=None):
-	try:
+	def merge_cancel_and_close():
 		for log in merge_logs:
 			merge_log = frappe.get_doc("POS Invoice Merge Log", log)
 			if merge_log.docstatus == 2:
@@ -626,19 +631,24 @@ def cancel_merge_logs(merge_logs, closing_entry=None):
 			closing_entry.db_set("error_message", "")
 			closing_entry.update_opening_entry(for_cancel=True)
 
-	except Exception as e:
-		frappe.db.rollback()
-		message_log = frappe.message_log.pop() if frappe.message_log else str(e)
-		error_message = get_error_message(message_log)
+	if frappe.flags.in_test:
+		merge_cancel_and_close()
+	else:
+		try:
+			merge_cancel_and_close()
+		except Exception as e:
+			frappe.db.rollback()
+			message_log = frappe.message_log.pop() if frappe.message_log else str(e)
+			error_message = get_error_message(message_log)
 
-		if closing_entry:
-			closing_entry.set_status(update=True, status="Submitted")
-			closing_entry.db_set("error_message", error_message)
-		raise
+			if closing_entry:
+				closing_entry.set_status(update=True, status="Submitted")
+				closing_entry.db_set("error_message", error_message)
+			raise
 
-	finally:
-		frappe.db.commit()
-		frappe.publish_realtime("closing_process_complete", user=frappe.session.user)
+		finally:
+			frappe.db.commit()
+			frappe.publish_realtime("closing_process_complete", user=frappe.session.user)
 
 
 def enqueue_job(job, **kwargs):

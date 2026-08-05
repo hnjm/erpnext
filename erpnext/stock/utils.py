@@ -2,14 +2,18 @@
 # License: GNU General Public License v3. See license.txt
 
 
+import datetime
 import json
 
 import frappe
 from frappe import _
-from frappe.query_builder.functions import CombineDatetime, IfNull, Sum
+from frappe.query_builder import Case
+from frappe.query_builder.functions import Abs, IfNull, Sum
 from frappe.utils import cstr, flt, get_link_to_form, get_time, getdate, nowdate, nowtime
+from frappe.utils.data import DateTimeLikeObject
 
 import erpnext
+from erpnext.stock.doctype.inventory_dimension.inventory_dimension import get_inventory_dimensions
 from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import get_available_serial_nos
 from erpnext.stock.doctype.warehouse.warehouse import get_child_warehouses
 from erpnext.stock.serial_batch_bundle import BatchNoValuation, SerialNoValuation
@@ -27,32 +31,32 @@ class PendingRepostingError(frappe.ValidationError):
 
 
 def get_stock_value_from_bin(warehouse=None, item_code=None):
-	values = {}
-	conditions = ""
-	if warehouse:
-		conditions += """ and `tabBin`.warehouse in (
-						select w2.name from `tabWarehouse` w1
-						join `tabWarehouse` w2 on
-						w1.name = %(warehouse)s
-						and w2.lft between w1.lft and w1.rgt
-						) """
-
-		values["warehouse"] = warehouse
-
-	if item_code:
-		conditions += " and `tabBin`.item_code = %(item_code)s"
-
-		values["item_code"] = item_code
+	bin_dt = frappe.qb.DocType("Bin")
+	item = frappe.qb.DocType("Item")
 
 	query = (
-		"""select sum(stock_value) from `tabBin`, `tabItem` where 1 = 1
-		and `tabItem`.name = `tabBin`.item_code and ifnull(`tabItem`.disabled, 0) = 0 %s"""
-		% conditions
+		frappe.qb.from_(bin_dt)
+		.inner_join(item)
+		.on(item.name == bin_dt.item_code)
+		.select(Sum(bin_dt.stock_value))
+		.where((item.disabled == 0) | item.disabled.isnull())
 	)
 
-	stock_value = frappe.db.sql(query, values)
+	if warehouse:
+		w1 = frappe.qb.DocType("Warehouse").as_("w1")
+		w2 = frappe.qb.DocType("Warehouse").as_("w2")
+		descendants = (
+			frappe.qb.from_(w1)
+			.join(w2)
+			.on((w1.name == warehouse) & (w2.lft >= w1.lft) & (w2.lft <= w1.rgt))
+			.select(w2.name)
+		)
+		query = query.where(bin_dt.warehouse.isin(descendants))
 
-	return stock_value
+	if item_code:
+		query = query.where(bin_dt.item_code == item_code)
+
+	return query.run()
 
 
 def get_stock_value_on(
@@ -93,13 +97,13 @@ def get_stock_value_on(
 
 @frappe.whitelist()
 def get_stock_balance(
-	item_code,
-	warehouse,
-	posting_date=None,
-	posting_time=None,
-	with_valuation_rate=False,
-	with_serial_no=False,
-	inventory_dimensions_dict=None,
+	item_code: str,
+	warehouse: str | None,
+	posting_date: DateTimeLikeObject | None = None,
+	posting_time: DateTimeLikeObject | datetime.timedelta | None = None,
+	with_valuation_rate: bool = False,
+	with_serial_no: bool = False,
+	inventory_dimensions_dict: dict | None = None,
 ):
 	"""Returns stock balance quantity at given warehouse on given posting date or current date.
 
@@ -122,11 +126,19 @@ def get_stock_balance(
 	}
 
 	extra_cond = ""
+
 	if inventory_dimensions_dict:
+		inventory_dimensions_fieldname = [d.get("fieldname") for d in get_inventory_dimensions()]
+
 		for field, value in inventory_dimensions_dict.items():
-			column = frappe.utils.sanitize_column(field)
+			if field not in inventory_dimensions_fieldname:
+				frappe.throw(
+					_("{0} is not a valid {1} fieldname.").format(
+						frappe.bold(field), frappe.bold("Inventory Dimension")
+					)
+				)
 			args[field] = value
-			extra_cond += f" and {column} = %({field})s"
+			extra_cond += f" and {field} = %({field})s"
 
 	last_entry = get_previous_sle(args, extra_cond=extra_cond)
 
@@ -165,37 +177,29 @@ def get_serial_nos_data(serial_nos):
 
 
 @frappe.whitelist()
-def get_latest_stock_qty(item_code, warehouse=None):
-	values, condition = [item_code], ""
+def get_latest_stock_qty(item_code: str, warehouse: str | None = None):
+	bin_dt = frappe.qb.DocType("Bin")
+	query = frappe.qb.from_(bin_dt).select(Sum(bin_dt.actual_qty)).where(bin_dt.item_code == item_code)
+
 	if warehouse:
 		lft, rgt, is_group = frappe.db.get_value("Warehouse", warehouse, ["lft", "rgt", "is_group"])
 
 		if is_group:
-			values.extend([lft, rgt])
-			condition += "and exists (\
-				select name from `tabWarehouse` wh where wh.name = tabBin.warehouse\
-				and wh.lft >= %s and wh.rgt <= %s)"
-
+			wh = frappe.qb.DocType("Warehouse")
+			query = query.where(
+				bin_dt.warehouse.isin(
+					frappe.qb.from_(wh).select(wh.name).where((wh.lft >= lft) & (wh.rgt <= rgt))
+				)
+			)
 		else:
-			values.append(warehouse)
-			condition += " AND warehouse = %s"
+			query = query.where(bin_dt.warehouse == warehouse)
 
-	actual_qty = frappe.db.sql(
-		f"""select sum(actual_qty) from tabBin
-		where item_code=%s {condition}""",
-		values,
-	)[0][0]
-
-	return actual_qty
+	return query.run()[0][0]
 
 
 def get_latest_stock_balance():
 	bin_map = {}
-	for d in frappe.db.sql(
-		"""SELECT item_code, warehouse, stock_value as stock_value
-		FROM tabBin""",
-		as_dict=1,
-	):
+	for d in frappe.get_all("Bin", fields=["item_code", "warehouse", "stock_value"]):
 		bin_map.setdefault(d.warehouse, {}).setdefault(d.item_code, flt(d.stock_value))
 
 	return bin_map
@@ -237,12 +241,11 @@ def _create_bin(item_code, warehouse):
 
 
 @frappe.whitelist()
-def get_incoming_rate(args, raise_error_if_no_rate=True):
+def get_incoming_rate(args: dict | str, raise_error_if_no_rate: bool = True, fallbacks: bool = True):
 	"""Get Incoming Rate based on valuation method"""
 	from erpnext.stock.stock_ledger import get_previous_sle, get_valuation_rate
 
-	if isinstance(args, str):
-		args = json.loads(args)
+	args = frappe.parse_json(args)
 
 	if not args.get("posting_datetime") and args.get("posting_date"):
 		args["posting_datetime"] = get_combine_datetime(args.get("posting_date"), args.get("posting_time"))
@@ -325,38 +328,11 @@ def get_incoming_rate(args, raise_error_if_no_rate=True):
 			args.get("allow_zero_valuation"),
 			currency=erpnext.get_company_currency(args.get("company")),
 			company=args.get("company"),
+			fallbacks=fallbacks,
 			raise_error_if_no_rate=raise_error_if_no_rate,
 		)
 
 	return flt(in_rate)
-
-
-def get_batch_incoming_rate(item_code, warehouse, batch_no, posting_date, posting_time, creation=None):
-	sle = frappe.qb.DocType("Stock Ledger Entry")
-
-	timestamp_condition = CombineDatetime(sle.posting_date, sle.posting_time) < CombineDatetime(
-		posting_date, posting_time
-	)
-	if creation:
-		timestamp_condition |= (
-			CombineDatetime(sle.posting_date, sle.posting_time) == CombineDatetime(posting_date, posting_time)
-		) & (sle.creation < creation)
-
-	batch_details = (
-		frappe.qb.from_(sle)
-		.select(Sum(sle.stock_value_difference).as_("batch_value"), Sum(sle.actual_qty).as_("batch_qty"))
-		.where(
-			(sle.item_code == item_code)
-			& (sle.warehouse == warehouse)
-			& (sle.batch_no == batch_no)
-			& (sle.serial_and_batch_bundle.isnull())
-			& (sle.is_cancelled == 0)
-		)
-		.where(timestamp_condition)
-	).run(as_dict=True)
-
-	if batch_details and batch_details[0].batch_qty:
-		return batch_details[0].batch_value / batch_details[0].batch_qty
 
 
 def get_avg_purchase_rate(serial_nos):
@@ -364,12 +340,9 @@ def get_avg_purchase_rate(serial_nos):
 
 	serial_nos = get_valid_serial_nos(serial_nos)
 	return flt(
-		frappe.db.sql(
-			"""select avg(purchase_rate) from `tabSerial No`
-		where name in (%s)"""
-			% ", ".join(["%s"] * len(serial_nos)),
-			tuple(serial_nos),
-		)[0][0]
+		frappe.get_all(
+			"Serial No", filters={"name": ["in", serial_nos]}, fields=[{"AVG": "purchase_rate", "as": "rate"}]
+		)[0].rate
 	)
 
 
@@ -536,13 +509,19 @@ def add_additional_uom_columns(columns, result, include_uom, conversion_factors)
 
 
 def get_incoming_outgoing_rate_for_cancel(item_code, voucher_type, voucher_no, voucher_detail_no):
-	outgoing_rate = frappe.db.sql(
-		"""SELECT CASE WHEN actual_qty = 0 THEN 0 ELSE abs(stock_value_difference / actual_qty) END
-		FROM `tabStock Ledger Entry`
-		WHERE voucher_type = %s and voucher_no = %s
-			and item_code = %s and voucher_detail_no = %s
-			ORDER BY CREATION DESC limit 1""",
-		(voucher_type, voucher_no, item_code, voucher_detail_no),
+	sle = frappe.qb.DocType("Stock Ledger Entry")
+	outgoing_rate = (
+		frappe.qb.from_(sle)
+		.select(Case().when(sle.actual_qty == 0, 0).else_(Abs(sle.stock_value_difference / sle.actual_qty)))
+		.where(
+			(sle.voucher_type == voucher_type)
+			& (sle.voucher_no == voucher_no)
+			& (sle.item_code == item_code)
+			& (sle.voucher_detail_no == voucher_detail_no)
+		)
+		.orderby(sle.creation, order=frappe.qb.desc)
+		.limit(1)
+		.run()
 	)
 
 	outgoing_rate = outgoing_rate[0][0] if outgoing_rate else 0.0
@@ -560,7 +539,7 @@ def is_reposting_item_valuation_in_progress():
 		)
 
 
-def check_pending_reposting(posting_date: str, throw_error: bool = True) -> bool:
+def check_pending_reposting(posting_date: str, company: str | None = None, throw_error: bool = True) -> bool:
 	"""Check if there are pending reposting job till the specified posting date."""
 
 	filters = {
@@ -568,6 +547,8 @@ def check_pending_reposting(posting_date: str, throw_error: bool = True) -> bool
 		"status": ["in", ["Queued", "In Progress"]],
 		"posting_date": ["<=", posting_date],
 	}
+	if company:
+		filters["company"] = company
 
 	reposting_pending = frappe.db.exists("Repost Item Valuation", filters)
 	if reposting_pending and throw_error:

@@ -10,6 +10,8 @@
   "barcode",
   "has_item_scanned",
   "item_code",
+  "is_product_bundle",
+  "product_bundle",
   "col_break1",
   "item_name",
   "customer_item_code",
@@ -43,13 +45,16 @@
   "rate",
   "amount",
   "item_tax_template",
+  "tax_withholding_category",
   "col_break3",
   "base_rate",
   "base_amount",
   "pricing_rules",
   "stock_uom_rate",
   "is_free_item",
+  "apply_tds",
   "grant_commission",
+  "allow_zero_valuation_rate",
   "section_break_21",
   "net_rate",
   "net_amount",
@@ -86,10 +91,11 @@
   "serial_and_batch_bundle",
   "use_serial_batch_fields",
   "col_break5",
-  "allow_zero_valuation_rate",
   "incoming_rate",
   "item_tax_rate",
   "actual_batch_qty",
+  "serial_batch_entries_section",
+  "serial_batch_entries_html",
   "section_break_eoec",
   "serial_no",
   "column_break_ytgd",
@@ -102,6 +108,7 @@
   "sales_order",
   "so_detail",
   "sales_invoice_item",
+  "pick_list_item",
   "column_break_74",
   "delivery_note",
   "dn_detail",
@@ -110,6 +117,7 @@
   "pos_invoice",
   "pos_invoice_item",
   "scio_detail",
+  "against_pick_list",
   "internal_transfer_section",
   "purchase_order",
   "column_break_92",
@@ -139,6 +147,23 @@
    "oldfieldtype": "Link",
    "options": "Item",
    "search_index": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_product_bundle",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Is Product Bundle",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.is_product_bundle",
+   "fieldname": "product_bundle",
+   "fieldtype": "Link",
+   "label": "Product Bundle",
+   "options": "Product Bundle",
+   "read_only_depends_on": "eval:doc.so_detail || doc.dn_detail"
   },
   {
    "fieldname": "col_break1",
@@ -205,6 +230,7 @@
    "fieldtype": "Link",
    "label": "Stock UOM",
    "options": "UOM",
+   "print_hide": 1,
    "read_only": 1
   },
   {
@@ -308,7 +334,8 @@
    "fieldname": "discount_amount",
    "fieldtype": "Currency",
    "label": "Discount Amount",
-   "options": "currency"
+   "options": "currency",
+   "print_hide": 1
   },
   {
    "depends_on": "eval:doc.margin_type && doc.price_list_rate && doc.margin_rate_or_amount",
@@ -578,6 +605,7 @@
   {
    "collapsible": 1,
    "collapsible_depends_on": "eval:doc.serial_no || doc.batch_no",
+   "depends_on": "eval:parent.update_stock",
    "fieldname": "warehouse_and_reference",
    "fieldtype": "Section Break",
    "label": "Stock Details"
@@ -593,7 +621,7 @@
    "print_hide": 1
   },
   {
-   "depends_on": "eval: parent.is_internal_customer && parent.update_stock",
+   "depends_on": "eval: parent.is_internal_customer",
    "fieldname": "target_warehouse",
    "fieldtype": "Link",
    "hidden": 1,
@@ -611,7 +639,6 @@
    "options": "Quality Inspection"
   },
   {
-   "depends_on": "eval: doc.use_serial_batch_fields === 1 && parent.update_stock === 1",
    "fieldname": "batch_no",
    "fieldtype": "Link",
    "label": "Batch No",
@@ -624,6 +651,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:parent.update_stock",
    "fieldname": "allow_zero_valuation_rate",
    "fieldtype": "Check",
    "label": "Allow Zero Valuation Rate",
@@ -631,7 +659,6 @@
    "print_hide": 1
   },
   {
-   "depends_on": "eval: doc.use_serial_batch_fields === 1 && parent.update_stock === 1",
    "fieldname": "serial_no",
    "fieldtype": "Text",
    "label": "Serial No",
@@ -841,6 +868,7 @@
    "fieldtype": "Currency",
    "label": "Incoming Rate (Costing)",
    "no_copy": 1,
+   "non_negative": 1,
    "options": "Company:company:default_currency",
    "print_hide": 1
   },
@@ -851,6 +879,7 @@
    "label": "Rate of Stock UOM",
    "no_copy": 1,
    "options": "currency",
+   "print_hide": 1,
    "read_only": 1
   },
   {
@@ -866,6 +895,7 @@
    "fieldname": "grant_commission",
    "fieldtype": "Check",
    "label": "Grant Commission",
+   "print_hide": 1,
    "read_only": 1
   },
   {
@@ -904,7 +934,7 @@
    "read_only": 1
   },
   {
-   "depends_on": "eval:parent.update_stock == 1 && (doc.use_serial_batch_fields === 0 || doc.docstatus === 1)",
+   "depends_on": "eval:doc.use_serial_batch_fields === 0 || doc.docstatus === 1",
    "fieldname": "serial_and_batch_bundle",
    "fieldtype": "Link",
    "label": "Serial and Batch Bundle",
@@ -914,7 +944,7 @@
    "search_index": 1
   },
   {
-   "depends_on": "eval:parent.update_stock === 1",
+   "depends_on": "eval:doc.use_serial_batch_fields === 0 && doc.docstatus === 0",
    "fieldname": "pick_serial_and_batch",
    "fieldtype": "Button",
    "label": "Pick Serial / Batch No"
@@ -923,7 +953,17 @@
    "default": "0",
    "fieldname": "use_serial_batch_fields",
    "fieldtype": "Check",
-   "label": "Use Serial No / Batch Fields"
+   "label": "Use Serial No / Batch Fields",
+   "print_hide": 1
+  },
+  {
+   "fieldname": "serial_batch_entries_section",
+   "fieldtype": "Section Break",
+   "label": "Serial / Batch Entries"
+  },
+  {
+   "fieldname": "serial_batch_entries_html",
+   "fieldtype": "HTML"
   },
   {
    "depends_on": "eval:doc.use_serial_batch_fields === 1 && parent.update_stock === 1",
@@ -938,7 +978,9 @@
    "fieldname": "distributed_discount_amount",
    "fieldtype": "Currency",
    "label": "Distributed Discount Amount",
-   "options": "currency"
+   "options": "currency",
+   "print_hide": 1,
+   "read_only": 1
   },
   {
    "fieldname": "available_quantity_section",
@@ -986,13 +1028,45 @@
    "hidden": 1,
    "label": "SCIO Detail",
    "read_only": 1
+  },
+  {
+   "fieldname": "tax_withholding_category",
+   "fieldtype": "Link",
+   "label": "Tax Withholding Category",
+   "options": "Tax Withholding Category",
+   "print_hide": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "apply_tds",
+   "fieldtype": "Check",
+   "label": "Consider for Tax Withholding",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "against_pick_list",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Against Pick List",
+   "no_copy": 1,
+   "options": "Pick List",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pick_list_item",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Pick List Item",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-09-04 11:08:25.583561",
+ "modified": "2026-07-18 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Sales Invoice Item",

@@ -4,7 +4,7 @@ import frappe
 from frappe import _, qb
 from frappe.query_builder import Criterion
 from frappe.query_builder.functions import IfNull, Sum
-from frappe.utils import flt, fmt_money, get_link_to_form
+from frappe.utils import fmt_money
 
 from erpnext.accounts.doctype.budget.budget import BudgetError, get_accumulated_monthly_budget
 from erpnext.accounts.utils import get_fiscal_year
@@ -260,7 +260,11 @@ class BudgetValidation:
 				qb.from_(mr)
 				.inner_join(mri)
 				.on(mr.name == mri.parent)
-				.select((Sum(IfNull(mri.stock_qty, 0) - IfNull(mri.ordered_qty, 0)) * mri.rate).as_("amount"))
+				.select(
+					Sum((IfNull(mri.stock_qty, 0) - IfNull(mri.ordered_qty, 0)) * IfNull(mri.rate, 0)).as_(
+						"amount"
+					)
+				)
 				.where(Criterion.all(conditions))
 				.run(as_dict=True)
 			):

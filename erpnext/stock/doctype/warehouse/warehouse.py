@@ -3,6 +3,7 @@
 
 
 import json
+from typing import Any
 
 import frappe
 from frappe import _, throw
@@ -14,7 +15,7 @@ from frappe.utils.caching import request_cache
 from frappe.utils.nestedset import NestedSet
 from pypika.terms import ExistsCriterion
 
-from erpnext.stock import get_warehouse_account
+from erpnext.stock import get_warehouse_account, get_warehouse_account_map
 
 
 class Warehouse(NestedSet):
@@ -109,49 +110,23 @@ class Warehouse(NestedSet):
 	def warn_about_multiple_warehouse_account(self):
 		"If Warehouse value is split across multiple accounts, warn."
 
-		def get_accounts_where_value_is_booked(name):
-			sle = frappe.qb.DocType("Stock Ledger Entry")
-			gle = frappe.qb.DocType("GL Entry")
-			ac = frappe.qb.DocType("Account")
-
-			return (
-				frappe.qb.from_(sle)
-				.join(gle)
-				.on(sle.voucher_no == gle.voucher_no)
-				.join(ac)
-				.on(ac.name == gle.account)
-				.select(gle.account)
-				.distinct()
-				.where((sle.warehouse == name) & (ac.account_type == "Stock"))
-				.orderby(sle.creation)
-				.run(as_dict=True)
-			)
-
-		if self.is_new():
+		if not frappe.db.count("Stock Ledger Entry", {"warehouse": self.name}):
 			return
 
-		old_wh_account = frappe.db.get_value("Warehouse", self.name, "account")
+		doc_before_save = self.get_doc_before_save()
+		old_wh_account = doc_before_save.account if doc_before_save else None
 
-		# WH account is being changed or set get all accounts against which wh value is booked
-		if self.account != old_wh_account:
-			accounts = get_accounts_where_value_is_booked(self.name)
-			accounts = [d.account for d in accounts]
+		if self.is_new() or (self.account and old_wh_account == self.account):
+			return
 
-			if not accounts or (len(accounts) == 1 and self.account in accounts):
-				# if same singular account has stock value booked ignore
-				return
-
-			warning = _("Warehouse's Stock Value has already been booked in the following accounts:")
-			account_str = "<br>" + ", ".join(frappe.bold(ac) for ac in accounts)
-			reason = "<br><br>" + _(
-				"Booking stock value across multiple accounts will make it harder to track stock and account value."
-			)
-
-			frappe.msgprint(
-				warning + account_str + reason,
-				title=_("Multiple Warehouse Accounts"),
-				indicator="orange",
-			)
+		frappe.msgprint(
+			title=_("Warning: Account changed for warehouse"),
+			indicator="orange",
+			msg=_(
+				"Stock entries exist with the old account. Changing the account may lead to a mismatch between the warehouse closing balance and the account closing balance. The overall closing balance will still match, but not for the specific account."
+			),
+			alert=True,
+		)
 
 	def check_if_sle_exists(self, non_cancelled_only=False):
 		filters = {"warehouse": self.name}
@@ -191,12 +166,17 @@ class Warehouse(NestedSet):
 
 
 @frappe.whitelist()
-def get_children(doctype, parent=None, company=None, is_root=False, include_disabled=False):
+def get_children(
+	doctype: str,
+	parent: str | None = None,
+	company: str | None = None,
+	is_root: bool = False,
+	include_disabled: bool | str = False,
+):
 	if is_root:
 		parent = ""
 
-	if isinstance(include_disabled, str):
-		include_disabled = json.loads(include_disabled)
+	include_disabled = frappe.parse_json(include_disabled)
 
 	fields = ["name as value", "is_group as expandable"]
 
@@ -211,7 +191,7 @@ def get_children(doctype, parent=None, company=None, is_root=False, include_disa
 	return frappe.get_list(doctype, fields=fields, filters=filters, order_by="name")
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def add_node():
 	from frappe.desk.treeview import make_tree_args
 
@@ -224,7 +204,7 @@ def add_node():
 
 
 @frappe.whitelist()
-def convert_to_group_or_ledger(docname=None):
+def convert_to_group_or_ledger(docname: str | None = None):
 	if not docname:
 		docname = frappe.form_dict.docname
 	return frappe.get_doc("Warehouse", docname).convert_to_group_or_ledger()
@@ -240,11 +220,19 @@ def get_child_warehouses(warehouse):
 
 def get_warehouses_based_on_account(account, company=None):
 	warehouses = []
+	warehouse_account_map = None
 	for d in frappe.get_all(
 		"Warehouse", fields=["name", "is_group"], filters={"account": account, "disabled": 0}
 	):
 		if d.is_group:
-			warehouses.extend(get_child_warehouses(d.name))
+			# Keep only children whose effective account matches; a child can override the group's account
+			if warehouse_account_map is None:
+				warehouse_account_map = get_warehouse_account_map(company)
+			warehouses.extend(
+				w
+				for w in get_child_warehouses(d.name)
+				if (warehouse_account_map.get(w) or {}).get("account") == account
+			)
 		else:
 			warehouses.append(d.name)
 
@@ -295,3 +283,27 @@ def apply_warehouse_filter(query, sle, filters):
 	query = query.where(ExistsCriterion(child_query))
 
 	return query
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_warehouses_for_reorder(
+	doctype: str, txt: Any, searchfield: Any, start: int, page_len: int, filters: dict
+):
+	filters = frappe._dict(filters or {})
+
+	if filters.warehouse and not frappe.db.exists("Warehouse", filters.warehouse):
+		frappe.throw(_("Warehouse {0} does not exist").format(filters.warehouse))
+
+	doctype = frappe.qb.DocType("Warehouse")
+
+	warehouses = (
+		frappe.qb.from_(doctype)
+		.select(doctype.name)
+		.where(doctype.disabled == 0)
+		.where((doctype.is_group == 1) | (doctype.name == filters.warehouse))
+		.orderby(doctype.name)
+		.run(as_list=True)
+	)
+
+	return warehouses

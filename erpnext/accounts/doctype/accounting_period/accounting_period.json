@@ -12,6 +12,7 @@
   "column_break_4",
   "company",
   "disabled",
+  "exempted_role",
   "section_break_7",
   "closed_documents"
  ],
@@ -19,7 +20,6 @@
   {
    "fieldname": "period_name",
    "fieldtype": "Data",
-   "in_list_view": 1,
    "label": "Period Name",
    "reqd": 1,
    "unique": 1
@@ -67,10 +67,18 @@
    "label": "Closed Documents",
    "options": "Closed Document",
    "reqd": 1
+  },
+  {
+   "description": "Role allowed to bypass period restrictions.",
+   "fieldname": "exempted_role",
+   "fieldtype": "Link",
+   "label": "Exempted Role",
+   "link_filters": "[[\"Role\",\"disabled\",\"=\",0]]",
+   "options": "Role"
   }
  ],
  "links": [],
- "modified": "2025-10-06 15:00:15.568067",
+ "modified": "2026-03-09 17:15:33.577217",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Accounting Period",

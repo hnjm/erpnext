@@ -30,6 +30,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 	refresh: (frm) => {
 		frappe.dynamic_link = { doc: frm.doc, fieldname: "supplier", doctype: "Supplier" };
 
+		erpnext.toggle_serial_batch_fields(frm);
 		if (frm.doc.docstatus === 1) {
 			frm.add_custom_button(
 				__("Stock Ledger"),
@@ -67,7 +68,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 					__("Purchase Receipt"),
 					() => {
 						frappe.model.open_mapped_doc({
-							method: "erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt.make_purchase_receipt",
+							method: "erpnext.subcontracting.doctype.subcontracting_receipt.mapper.make_purchase_receipt",
 							frm: frm,
 							freeze: true,
 							freeze_message: __("Creating Purchase Receipt ..."),
@@ -84,7 +85,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 				() => {
 					const make_standard_return = () => {
 						frappe.model.open_mapped_doc({
-							method: "erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt.make_subcontract_return",
+							method: "erpnext.subcontracting.doctype.subcontracting_receipt.mapper.make_subcontract_return",
 							frm: frm,
 						});
 					};
@@ -108,7 +109,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 							function (values) {
 								if (values.return_for_rejected_warehouse) {
 									frappe.call({
-										method: "erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt.make_subcontract_return_against_rejected_warehouse",
+										method: "erpnext.subcontracting.doctype.subcontracting_receipt.mapper.make_subcontract_return_against_rejected_warehouse",
 										args: {
 											source_name: frm.doc.name,
 										},
@@ -142,7 +143,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 					if (!frm.doc.supplier) {
 						frappe.throw({
 							title: __("Mandatory"),
-							message: __("Please Select a Supplier"),
+							message: __("Please select a supplier"),
 						});
 					}
 
@@ -173,6 +174,7 @@ frappe.ui.form.on("Subcontracting Receipt", {
 
 		frm.trigger("setup_quality_inspection");
 		frm.trigger("set_route_options_for_new_doc");
+		frm.set_df_property("items", "cannot_add_rows", true);
 	},
 
 	set_warehouse: (frm) => {
@@ -183,15 +185,15 @@ frappe.ui.form.on("Subcontracting Receipt", {
 		set_warehouse_in_children(frm.doc.items, "rejected_warehouse", frm.doc.rejected_warehouse);
 	},
 
-	get_scrap_items: (frm) => {
+	get_secondary_items: (frm) => {
 		frappe.call({
 			doc: frm.doc,
-			method: "get_scrap_items",
+			method: "get_secondary_items",
 			args: {
 				recalculate_rate: true,
 			},
 			freeze: true,
-			freeze_message: __("Getting Scrap Items"),
+			freeze_message: __("Getting Secondary Items"),
 			callback: (r) => {
 				if (!r.exc) {
 					frm.refresh();
@@ -421,11 +423,25 @@ frappe.ui.form.on("Subcontracting Receipt Item", {
 		set_missing_values(frm);
 	},
 
+	rejected_qty(frm) {
+		set_missing_values(frm);
+	},
+
+	process_loss_qty(frm) {
+		set_missing_values(frm);
+	},
+
 	rate(frm) {
 		set_missing_values(frm);
 	},
 
-	items_delete: (frm) => {
+	before_items_remove(frm, cdt, cdn) {
+		const filtered_rows = frm.doc.supplied_items.filter((item) => item.reference_name !== cdn);
+		frm.doc.supplied_items = filtered_rows;
+		frm.refresh_field("supplied_items");
+	},
+
+	items_delete(frm) {
 		set_missing_values(frm);
 	},
 

@@ -1,23 +1,21 @@
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
 from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.accounts.report.accounts_receivable_summary.accounts_receivable_summary import execute
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestAccountsReceivable(AccountsTestMixin, IntegrationTestCase):
+class TestAccountsReceivable(ERPNextTestSuite, AccountsTestMixin):
 	def setUp(self):
 		self.maxDiff = None
-		self.create_company()
-		self.create_customer()
-		self.create_item()
-		self.clear_old_entries()
-
-	def tearDown(self):
-		frappe.db.rollback()
+		self.company = "_Test Company"
+		self.customer = "_Test Customer"
+		self.item = "_Test Item"
+		self.debit_to = "Debtors - _TC"
+		self.cost_center = "Main - _TC"
 
 	def test_01_receivable_summary_output(self):
 		"""
@@ -112,7 +110,7 @@ class TestAccountsReceivable(AccountsTestMixin, IntegrationTestCase):
 		self.assertEqual(len(rpt_output), 1)
 		self.assertDictEqual(rpt_output[0], expected_data)
 
-	@IntegrationTestCase.change_settings("Selling Settings", {"cust_master_name": "Naming Series"})
+	@ERPNextTestSuite.change_settings("Selling Settings", {"cust_master_name": "Naming Series"})
 	def test_02_various_filters_and_output(self):
 		filters = {
 			"company": self.company,
@@ -193,3 +191,42 @@ class TestAccountsReceivable(AccountsTestMixin, IntegrationTestCase):
 		report = execute(filters)
 		rpt_output = report[1]
 		self.assertEqual(len(rpt_output), 0)
+
+	def test_03_summary_sales_partner_column(self):
+		partner = "_Test AR Summary Sales Partner"
+		if not frappe.db.exists("Sales Partner", partner):
+			frappe.get_doc(
+				{
+					"doctype": "Sales Partner",
+					"partner_name": partner,
+					"commission_rate": 0,
+					"territory": "All Territories",
+				}
+			).insert()
+
+		si = create_sales_invoice(
+			item=self.item,
+			company=self.company,
+			customer=self.customer,
+			debit_to=self.debit_to,
+			posting_date=today(),
+			parent_cost_center=self.cost_center,
+			cost_center=self.cost_center,
+			rate=200,
+			price_list_rate=200,
+			do_not_submit=True,
+		)
+		si.sales_partner = partner
+		si.save().submit()
+
+		filters = {
+			"company": self.company,
+			"customer": self.customer,
+			"posting_date": today(),
+			"range": "30, 60, 90, 120",
+			"sales_partner": partner,
+		}
+
+		rpt_output = execute(filters)[1]
+		self.assertEqual(len(rpt_output), 1)
+		self.assertEqual(rpt_output[0].get("sales_partner"), partner)

@@ -11,8 +11,10 @@ import frappe.defaults
 from frappe import _, qb, throw
 from frappe.desk.reportview import build_match_conditions
 from frappe.model.meta import get_field_precision
+from frappe.model.naming import determine_consecutive_week_number
 from frappe.query_builder import AliasedQuery, Case, Criterion, Field, Table
-from frappe.query_builder.functions import Count, IfNull, Max, Round, Sum
+from frappe.query_builder.custom import ConstantColumn
+from frappe.query_builder.functions import Count, IfNull, Max, Min, Round, Sum
 from frappe.query_builder.utils import DocType
 from frappe.utils import (
 	add_days,
@@ -25,9 +27,11 @@ from frappe.utils import (
 	get_number_format_info,
 	getdate,
 	now,
+	now_datetime,
 	nowdate,
 )
 from frappe.utils.caching import site_cache
+from frappe.utils.data import DateTimeLikeObject
 from pypika import Order
 from pypika.functions import Coalesce
 from pypika.terms import ExistsCriterion
@@ -38,9 +42,11 @@ import erpnext
 from erpnext.accounts.doctype.account.account import get_account_currency
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_dimensions
 from erpnext.stock import get_warehouse_account_map
-from erpnext.stock.utils import get_stock_value_on
+from erpnext.stock.utils import get_combine_datetime, get_stock_value_on
 
 if TYPE_CHECKING:
+	from frappe.model.document import Document
+
 	from erpnext.stock.doctype.repost_item_valuation.repost_item_valuation import RepostItemValuation
 
 
@@ -58,14 +64,15 @@ OUTSTANDING_DOCTYPES = frozenset(["Sales Invoice", "Purchase Invoice", "Fees"])
 
 @frappe.whitelist()
 def get_fiscal_year(
-	date=None,
-	fiscal_year=None,
-	label="Date",
-	verbose=1,
-	company=None,
-	as_dict=False,
-	boolean=None,
-	raise_on_missing=True,
+	date: DateTimeLikeObject | None = None,
+	fiscal_year: str | None = None,
+	label: str = "Date",
+	verbose: int = 1,
+	company: str | None = None,
+	as_dict: bool = False,
+	boolean: str | bool | None = None,
+	raise_on_missing: bool = True,
+	truncate: bool = False,
 ):
 	if isinstance(raise_on_missing, str):
 		raise_on_missing = loads(raise_on_missing)
@@ -79,18 +86,25 @@ def get_fiscal_year(
 	fiscal_years = get_fiscal_years(
 		date, fiscal_year, label, verbose, company, as_dict=as_dict, raise_on_missing=raise_on_missing
 	)
-	return False if not fiscal_years else fiscal_years[0]
+
+	if fiscal_years:
+		fiscal_year = fiscal_years[0]
+		if truncate:
+			return ("-".join(y[-2:] for y in fiscal_year[0].split("-")), fiscal_year[1], fiscal_year[2])
+		return fiscal_year
+
+	return False
 
 
 def get_fiscal_years(
-	transaction_date=None,
-	fiscal_year=None,
-	label="Date",
-	verbose=1,
-	company=None,
-	as_dict=False,
-	boolean=None,
-	raise_on_missing=True,
+	transaction_date: str | None = None,
+	fiscal_year: str | None = None,
+	label: str = "Date",
+	verbose: int = 1,
+	company: str | None = None,
+	as_dict: bool = False,
+	boolean: str | None = None,
+	raise_on_missing: bool = True,
 ):
 	if transaction_date:
 		transaction_date = getdate(transaction_date)
@@ -161,7 +175,7 @@ def _get_fiscal_years(company=None):
 
 
 @frappe.whitelist()
-def get_fiscal_year_filter_field(company=None):
+def get_fiscal_year_filter_field(company: str | None = None):
 	field = {"fieldtype": "Select", "options": [], "operator": "Between", "query_value": True}
 	fiscal_years = get_fiscal_years(company=company)
 	for fiscal_year in fiscal_years:
@@ -187,18 +201,19 @@ def validate_fiscal_year(date, fiscal_year, company, label="Date", doc=None):
 			throw(_("{0} '{1}' not in Fiscal Year {2}").format(_(label), formatdate(date), fiscal_year))
 
 
-@frappe.whitelist()
 def get_balance_on(
-	account=None,
-	date=None,
-	party_type=None,
-	party=None,
-	company=None,
-	in_account_currency=True,
-	cost_center=None,
-	ignore_account_permission=False,
-	account_type=None,
-	start_date=None,
+	account: str | None = None,
+	date: DateTimeLikeObject | None = None,
+	party_type: str | None = None,
+	party: str | None = None,
+	company: str | None = None,
+	in_account_currency: bool = True,
+	cost_center: str | None = None,
+	ignore_account_permission: bool = False,
+	account_type: str | None = None,
+	start_date: str | None = None,
+	finance_book: str | None = None,
+	include_default_fb_balances: bool = False,
 ):
 	if not account and frappe.form_dict.get("account"):
 		account = frappe.form_dict.get("account")
@@ -289,12 +304,36 @@ def get_balance_on(
 		)
 
 	if party_type and party:
+		frappe.has_permission(party_type, "read", party, throw=True)
 		cond.append(
 			f"""gle.party_type = {frappe.db.escape(party_type)} and gle.party = {frappe.db.escape(party)} """
 		)
 
+	default_finance_book = None
 	if company:
 		cond.append("""gle.company = %s """ % (frappe.db.escape(company)))
+		default_finance_book = frappe.get_cached_value("Company", company, "default_finance_book")
+
+	if finance_book:
+		if default_finance_book and include_default_fb_balances:
+			cond.append(
+				f"""(gle.finance_book IN (
+						{frappe.db.escape(finance_book)},
+						{frappe.db.escape(default_finance_book)}
+					) OR gle.finance_book IS NULL
+				)"""
+			)
+		else:
+			cond.append(f"(gle.finance_book = {frappe.db.escape(finance_book)} OR gle.finance_book IS NULL)")
+
+	elif default_finance_book and include_default_fb_balances:
+		# No finance book passed → fall back to default
+		cond.append(
+			f"""(
+				gle.finance_book = {frappe.db.escape(default_finance_book)}
+				OR gle.finance_book IS NULL
+			)"""
+		)
 
 	if account or (party_type and party) or account_type:
 		precision = get_currency_precision()
@@ -373,10 +412,9 @@ def get_count_on(account, fieldname, date):
 			else:
 				dr_or_cr = "debit" if fieldname == "invoiced_amount" else "credit"
 				cr_or_dr = "credit" if fieldname == "invoiced_amount" else "debit"
-				select_fields = (
-					"ifnull(sum(credit-debit),0)"
-					if fieldname == "invoiced_amount"
-					else "ifnull(sum(debit-credit),0)"
+				gl = frappe.qb.DocType("GL Entry")
+				amount_expr = (
+					Sum(gl.credit - gl.debit) if fieldname == "invoiced_amount" else Sum(gl.debit - gl.credit)
 				)
 
 				if (
@@ -384,14 +422,21 @@ def get_count_on(account, fieldname, date):
 					or (gle.against_voucher_type in ["Sales Order", "Purchase Order"])
 					or (gle.against_voucher == gle.voucher_no and gle.get(dr_or_cr) > 0)
 				):
-					payment_amount = frappe.db.sql(
-						f"""
-						SELECT {select_fields}
-						FROM `tabGL Entry` gle
-						WHERE docstatus < 2 and posting_date <= %(date)s and against_voucher = %(voucher_no)s
-						and party = %(party)s and name != %(name)s""",
-						{"date": date, "voucher_no": gle.voucher_no, "party": gle.party, "name": gle.name},
-					)[0][0]
+					payment_amount = (
+						(
+							frappe.qb.from_(gl)
+							.select(amount_expr)
+							.where(
+								(gl.docstatus < 2)
+								& (gl.posting_date <= date)
+								& (gl.against_voucher == gle.voucher_no)
+								& (gl.party == gle.party)
+								& (gl.name != gle.name)
+							)
+							.run()[0][0]
+						)
+						or 0
+					)
 
 					outstanding_amount = flt(gle.get(dr_or_cr)) - flt(gle.get(cr_or_dr)) - payment_amount
 					currency_precision = get_currency_precision() or 2
@@ -402,21 +447,19 @@ def get_count_on(account, fieldname, date):
 
 
 @frappe.whitelist()
-def add_ac(args=None):
+def add_ac(args: frappe._dict | None = None):
 	from frappe.desk.treeview import make_tree_args
 
 	if not args:
 		args = frappe.local.form_dict
 
+	args.pop("ignore_permissions", None)
+	frappe.has_permission("Account", "create", throw=True)
+
 	args.doctype = "Account"
 	args = make_tree_args(**args)
 
 	ac = frappe.new_doc("Account")
-
-	if args.get("ignore_permissions"):
-		ac.flags.ignore_permissions = True
-		args.pop("ignore_permissions")
-
 	ac.update(args)
 
 	if not ac.parent_account:
@@ -434,7 +477,7 @@ def add_ac(args=None):
 
 
 @frappe.whitelist()
-def add_cc(args=None):
+def add_cc(args: frappe._dict | None = None):
 	from frappe.desk.treeview import make_tree_args
 
 	if not args:
@@ -465,7 +508,8 @@ def _build_dimensions_dict_for_exc_gain_loss(
 	dimensions_dict = frappe._dict()
 	if entry and active_dimensions:
 		for dim in active_dimensions:
-			dimensions_dict[dim.fieldname] = entry.get(dim.fieldname)
+			if entry_dimension := entry.get(dim.fieldname):
+				dimensions_dict[dim.fieldname] = entry_dimension
 	return dimensions_dict
 
 
@@ -510,7 +554,7 @@ def reconcile_against_document(
 					skip_ref_details_update_for_pe=skip_ref_details_update_for_pe,
 					dimensions_dict=dimensions_dict,
 				)
-				if referenced_row.get("outstanding_amount"):
+				if referenced_row.get("outstanding_amount") and entry.get("outstanding_amount") is None:
 					referenced_row.outstanding_amount -= flt(entry.allocated_amount)
 
 				reposting_rows.append(referenced_row)
@@ -522,6 +566,7 @@ def reconcile_against_document(
 				doc.make_advance_gl_entries(entry=row)
 		else:
 			_delete_pl_entries(voucher_type, voucher_no)
+			_delete_adv_pl_entries(voucher_type, voucher_no)
 			gl_map = doc.build_gl_map()
 			# Make sure there is no overallocation
 			from erpnext.accounts.general_ledger import process_debit_credit_difference
@@ -637,6 +682,7 @@ def update_reference_in_journal_entry(d, journal_entry, do_not_save=False):
 		d["allocated_amount"] = d["allocated_amount"] * -1
 		d["unadjusted_amount"] = d["unadjusted_amount"] * -1
 
+	insert_position = -1
 	if flt(d["unadjusted_amount"]) - flt(d["allocated_amount"]) != 0:
 		# adjust the unreconciled balance
 		amount_in_account_currency = flt(d["unadjusted_amount"]) - flt(d["allocated_amount"])
@@ -648,9 +694,10 @@ def update_reference_in_journal_entry(d, journal_entry, do_not_save=False):
 		)
 	else:
 		journal_entry.remove(jv_detail)
+		insert_position += jv_detail.idx
 
 	# new row with references
-	new_row = journal_entry.append("accounts")
+	new_row = journal_entry.append("accounts", position=insert_position)
 
 	# Copy field values into new row
 	[
@@ -1115,13 +1162,13 @@ def remove_ref_doc_link_from_pe(
 
 
 @frappe.whitelist()
-def get_company_default(company, fieldname, ignore_validation=False):
+def get_company_default(company: str, fieldname: str, ignore_validation: bool = False):
 	value = frappe.get_cached_value("Company", company, fieldname)
 
 	if not ignore_validation and not value:
 		throw(
 			_("Please set default {0} in Company {1}").format(
-				frappe.get_meta("Company").get_label(fieldname), company
+				_(frappe.get_meta("Company").get_label(fieldname)), company
 			)
 		)
 
@@ -1129,26 +1176,27 @@ def get_company_default(company, fieldname, ignore_validation=False):
 
 
 def fix_total_debit_credit():
-	vouchers = frappe.db.sql(
-		"""select voucher_type, voucher_no,
-		sum(debit) - sum(credit) as diff
-		from `tabGL Entry`
-		group by voucher_type, voucher_no
-		having sum(debit) != sum(credit)""",
-		as_dict=1,
+	gle = frappe.qb.DocType("GL Entry")
+	vouchers = (
+		frappe.qb.from_(gle)
+		.select(gle.voucher_type, gle.voucher_no, (Sum(gle.debit) - Sum(gle.credit)).as_("diff"))
+		.groupby(gle.voucher_type, gle.voucher_no)
+		.having(Sum(gle.debit) != Sum(gle.credit))
+		.run(as_dict=1)
 	)
 
 	for d in vouchers:
 		if abs(d.diff) > 0:
 			dr_or_cr = d.voucher_type == "Sales Invoice" and "credit" or "debit"
 
-			frappe.db.sql(
-				"""update `tabGL Entry` set {} = {} + {}
-				where voucher_type = {} and voucher_no = {} and {} > 0 limit 1""".format(
-					dr_or_cr, dr_or_cr, "%s", "%s", "%s", dr_or_cr
-				),
-				(d.diff, d.voucher_type, d.voucher_no),
+			gle = frappe.qb.DocType("GL Entry")
+			name = frappe.db.get_value(
+				"GL Entry",
+				{"voucher_type": d.voucher_type, "voucher_no": d.voucher_no, dr_or_cr: [">", 0]},
+				"name",
 			)
+			if name:
+				frappe.qb.update(gle).set(gle[dr_or_cr], gle[dr_or_cr] + d.diff).where(gle.name == name).run()
 
 
 def get_currency_precision():
@@ -1190,11 +1238,12 @@ def get_held_invoices(party_type, party):
 	held_invoices = None
 
 	if party_type == "Supplier":
-		held_invoices = frappe.db.sql(
-			"select name from `tabPurchase Invoice` where on_hold = 1 and release_date IS NOT NULL and release_date > CURDATE()",
-			as_dict=1,
+		held_invoices = frappe.get_all(
+			"Purchase Invoice",
+			filters={"on_hold": 1, "release_date": [">", nowdate()]},
+			pluck="name",
 		)
-		held_invoices = set(d["name"] for d in held_invoices)
+		held_invoices = set(held_invoices)
 
 	return held_invoices
 
@@ -1300,7 +1349,9 @@ def get_companies():
 
 
 @frappe.whitelist()
-def get_children(doctype, parent, company, is_root=False, include_disabled=False):
+def get_children(
+	doctype: str, parent: str, company: str, is_root: bool = False, include_disabled: bool = False
+):
 	if isinstance(include_disabled, str):
 		include_disabled = loads(include_disabled)
 	from erpnext.accounts.report.financial_statements import sort_accounts
@@ -1333,7 +1384,12 @@ def get_children(doctype, parent, company, is_root=False, include_disabled=False
 
 
 @frappe.whitelist()
-def get_account_balances(accounts, company):
+def get_account_balances(
+	accounts: str | list,
+	company: str,
+	finance_book: str | None = None,
+	include_default_fb_balances: bool = False,
+):
 	if isinstance(accounts, str):
 		accounts = loads(accounts)
 
@@ -1344,11 +1400,93 @@ def get_account_balances(accounts, company):
 
 	for account in accounts:
 		account["company_currency"] = company_currency
-		account["balance"] = flt(get_balance_on(account["value"], in_account_currency=False, company=company))
+		account["balance"] = flt(
+			get_balance_on(
+				account=account["value"],
+				in_account_currency=False,
+				company=company,
+				finance_book=finance_book,
+				include_default_fb_balances=include_default_fb_balances,
+			)
+		)
+
 		if account["account_currency"] and account["account_currency"] != company_currency:
-			account["balance_in_account_currency"] = flt(get_balance_on(account["value"], company=company))
+			account["balance_in_account_currency"] = flt(
+				get_balance_on(
+					account=account["value"],
+					company=company,
+					finance_book=finance_book,
+					include_default_fb_balances=include_default_fb_balances,
+				)
+			)
 
 	return accounts
+
+
+@frappe.whitelist()
+def get_account_balances_coa(company: str, include_default_fb_balances: bool = False):
+	company_currency = frappe.get_cached_value("Company", company, "default_currency")
+
+	account_list = frappe.get_list(
+		"Account",
+		fields=["name", "parent_account", "account_currency"],
+		filters={"company": company},
+		order_by="lft",
+	)
+
+	account_balances_cc = {account.get("name"): 0 for account in account_list}
+
+	account_balances_ac = {account.get("name"): 0 for account in account_list}
+
+	GLEntry = DocType("GL Entry")
+	precision = get_currency_precision()
+	get_ledger_balances_query = (
+		frappe.get_query(GLEntry, fields=[GLEntry.account], ignore_permissions=False)
+		.select(
+			(Sum(Round(GLEntry.debit, precision)) - Sum(Round(GLEntry.credit, precision))).as_("balance"),
+			(
+				Sum(Round(GLEntry.debit_in_account_currency, precision))
+				- Sum(Round(GLEntry.credit_in_account_currency, precision))
+			).as_("balance_in_account_currency"),
+		)
+		.groupby(GLEntry.account)
+	)
+
+	conditions = [GLEntry.company == company, GLEntry.is_cancelled == 0]
+
+	default_finance_book = None
+
+	if include_default_fb_balances:
+		default_finance_book = frappe.get_cached_value("Company", company, "default_finance_book")
+
+	if default_finance_book:
+		conditions.append((GLEntry.finance_book == default_finance_book) | (GLEntry.finance_book.isnull()))
+
+	get_ledger_balances_query = get_ledger_balances_query.where(Criterion.all(conditions))
+
+	ledger_balances = get_ledger_balances_query.run(as_dict=True)
+
+	for ledger_entry in ledger_balances:
+		account_balances_cc[ledger_entry.get("account")] = ledger_entry.get("balance")
+		account_balances_ac[ledger_entry.get("account")] = ledger_entry.get("balance_in_account_currency")
+
+	for account in reversed(account_list):
+		parent = account.get("parent_account")
+		if parent:
+			account_balances_cc[parent] += account_balances_cc.get(account.get("name"))
+
+	accounts_data = [
+		{
+			"value": account.get("name"),
+			"company_currency": company_currency,
+			"balance": account_balances_cc.get(account.get("name")),
+			"account_currency": account.get("account_currency"),
+			"balance_in_account_currency": account_balances_ac.get(account.get("name")),
+		}
+		for account in account_list
+	]
+
+	return accounts_data
 
 
 def create_payment_gateway_account(gateway, payment_channel="Email", company=None):
@@ -1410,11 +1548,14 @@ def create_payment_gateway_account(gateway, payment_channel="Email", company=Non
 
 
 @frappe.whitelist()
-def update_cost_center(docname, cost_center_name, cost_center_number, company, merge):
+def update_cost_center(
+	docname: str, cost_center_name: str, cost_center_number: str, company: str, merge: bool
+):
 	"""
 	Renames the document by adding the number as a prefix to the current name and updates
 	all transaction where it was present.
 	"""
+	frappe.has_permission("Cost Center", "write", doc=docname, throw=True)
 	validate_field_number("Cost Center", docname, cost_center_number, company, "cost_center_number")
 
 	if cost_center_number:
@@ -1459,14 +1600,14 @@ def get_autoname_with_number(number_value, doc_title, company):
 
 
 def parse_naming_series_variable(doc, variable):
-	if variable == "FY":
+	if variable in ["FY", "TFY"]:
 		if doc:
 			date = doc.get("posting_date") or doc.get("transaction_date") or getdate()
 			company = doc.get("company")
 		else:
 			date = getdate()
 			company = None
-		return get_fiscal_year(date=date, company=company)[0]
+		return get_fiscal_year(date=date, company=company, truncate=variable == "TFY")[0]
 
 	elif variable == "ABBR":
 		if doc:
@@ -1476,9 +1617,25 @@ def parse_naming_series_variable(doc, variable):
 
 		return frappe.db.get_value("Company", company, "abbr") if company else ""
 
+	else:
+		data = {"YY": "%y", "YYYY": "%Y", "MM": "%m", "DD": "%d", "JJJ": "%j"}
+
+		if doc and doc.doctype in ["Batch", "Serial No"] and doc.reference_doctype and doc.reference_name:
+			doc = frappe.get_doc(doc.reference_doctype, doc.reference_name)
+
+		date = (
+			(
+				getdate(doc.get("posting_date") or doc.get("transaction_date") or doc.get("posting_datetime"))
+				or now_datetime()
+			)
+			if doc and frappe.get_single_value("Global Defaults", "use_posting_datetime_for_naming_documents")
+			else now_datetime()
+		)
+		return date.strftime(data[variable]) if variable in data else determine_consecutive_week_number(date)
+
 
 @frappe.whitelist()
-def get_coa(doctype, parent, is_root=None, chart=None):
+def get_coa(doctype: str, parent: str, is_root: bool | None = None, chart: str | None = None):
 	from erpnext.accounts.doctype.account.chart_of_accounts.chart_of_accounts import (
 		build_tree_from_json,
 	)
@@ -1588,13 +1745,15 @@ def sort_stock_vouchers_by_posting_date(
 	sle = frappe.qb.DocType("Stock Ledger Entry")
 	voucher_nos = [v[1] for v in stock_vouchers]
 
+	# only voucher_type/voucher_no are used downstream; order by Min() of the (per-voucher constant)
+	# posting_datetime so postgres accepts the GROUP BY without selecting non-aggregated columns
 	sles = (
 		frappe.qb.from_(sle)
-		.select(sle.voucher_type, sle.voucher_no, sle.posting_date, sle.posting_time, sle.creation)
+		.select(sle.voucher_type, sle.voucher_no)
 		.where((sle.is_cancelled == 0) & (sle.voucher_no.isin(voucher_nos)))
 		.groupby(sle.voucher_type, sle.voucher_no)
-		.orderby(sle.posting_datetime)
-		.orderby(sle.creation)
+		.orderby(Min(sle.posting_datetime))
+		.orderby(Min(sle.creation))
 	)
 
 	if company:
@@ -1611,31 +1770,44 @@ def sort_stock_vouchers_by_posting_date(
 
 
 def get_future_stock_vouchers(posting_date, posting_time, for_warehouses=None, for_items=None, company=None):
-	values = []
-	condition = ""
+	posting_datetime = get_combine_datetime(posting_date, posting_time)
+
+	SLE = DocType("Stock Ledger Entry")
+
+	conditions = (SLE.posting_datetime >= posting_datetime) & (SLE.is_cancelled == 0)
 	if for_items:
-		condition += " and item_code in ({})".format(", ".join(["%s"] * len(for_items)))
-		values += for_items
-
+		conditions &= SLE.item_code.isin(for_items)
 	if for_warehouses:
-		condition += " and warehouse in ({})".format(", ".join(["%s"] * len(for_warehouses)))
-		values += for_warehouses
-
+		conditions &= SLE.warehouse.isin(for_warehouses)
 	if company:
-		condition += " and company = %s"
-		values.append(company)
+		conditions &= SLE.company == company
 
-	future_stock_vouchers = frappe.db.sql(
-		f"""select distinct sle.voucher_type, sle.voucher_no
-		from `tabStock Ledger Entry` sle
-		where
-			timestamp(sle.posting_date, sle.posting_time) >= timestamp(%s, %s)
-			and is_cancelled = 0
-			{condition}
-		order by timestamp(sle.posting_date, sle.posting_time) asc, creation asc for update""",
-		tuple([posting_date, posting_time, *values]),
-		as_dict=True,
+	# These SLE rows must stay locked for the duration of the repost so a concurrent stock
+	# transaction can't modify them mid-flight (the original DISTINCT ... FOR UPDATE did this).
+	# MariaDB carries the lock on the grouped query below; postgres rejects FOR UPDATE alongside
+	# GROUP BY, so lock the matching rows in a separate pass first -- the row locks are held until
+	# the surrounding transaction ends, giving the same protection. Select a constant, not the
+	# name: a deep backdated repost can match millions of rows and only the locks are needed.
+	if frappe.db.db_type == "postgres":
+		frappe.qb.from_(SLE).select(ConstantColumn(1)).where(conditions).for_update().run()
+
+	# distinct vouchers in chronological order; expressed as GROUP BY + Min() so it's valid on
+	# postgres (SELECT DISTINCT can't ORDER BY non-selected cols, and FOR UPDATE is invalid with both).
+	# posting_datetime is constant per voucher, so the ordering is unchanged vs the DISTINCT form.
+	query = (
+		frappe.qb.from_(SLE)
+		.select(SLE.voucher_type, SLE.voucher_no)
+		.where(conditions)
+		.groupby(SLE.voucher_type, SLE.voucher_no)
+		.orderby(Min(SLE.posting_datetime))
+		.orderby(Min(SLE.creation))
 	)
+
+	# lock scanned rows on MariaDB; on postgres they were already locked above
+	if frappe.db.db_type != "postgres":
+		query = query.for_update()
+
+	future_stock_vouchers = query.run(as_dict=True)
 
 	return [(d.voucher_type, d.voucher_no) for d in future_stock_vouchers]
 
@@ -1655,14 +1827,11 @@ def get_voucherwise_gl_entries(future_stock_vouchers, posting_date):
 
 	voucher_nos = [d[1] for d in future_stock_vouchers]
 
-	gles = frappe.db.sql(
-		"""
-		select name, account, credit, debit, cost_center, project, voucher_type, voucher_no
-			from `tabGL Entry`
-		where
-			posting_date >= {} and voucher_no in ({})""".format("%s", ", ".join(["%s"] * len(voucher_nos))),
-		tuple([posting_date, *voucher_nos]),
-		as_dict=1,
+	gles = frappe.get_all(
+		"GL Entry",
+		filters={"posting_date": [">=", posting_date], "voucher_no": ["in", voucher_nos]},
+		fields=["name", "account", "credit", "debit", "cost_center", "project", "voucher_type", "voucher_no"],
+		limit=0,
 	)
 
 	for d in gles:
@@ -1905,6 +2074,7 @@ def get_payment_ledger_entries(gl_entries, cancel=0):
 					account=gle.account,
 					party_type=gle.party_type,
 					party=gle.party,
+					project=gle.project,
 					cost_center=gle.cost_center,
 					finance_book=gle.finance_book,
 					due_date=gle.due_date,
@@ -1988,10 +2158,12 @@ def create_payment_ledger_entry(
 			ple = frappe.get_doc(entry)
 
 			if cancel:
-				delink_original_entry(ple, partial_cancel=partial_cancel)
-				if is_immutable_ledger_enabled():
+				if not is_immutable_ledger_enabled():
+					delink_original_entry(ple, partial_cancel=partial_cancel)
+				else:
 					ple.delinked = 0
 					ple.posting_date = frappe.form_dict.get("posting_date") or getdate()
+				ple.flags.ignore_links = True
 
 			ple.flags.ignore_permissions = 1
 			ple.flags.adv_adj = adv_adj
@@ -2078,6 +2250,7 @@ def delink_original_entry(pl_entry, partial_cancel=False):
 			qb.update(ple)
 			.set(ple.modified, now())
 			.set(ple.modified_by, frappe.session.user)
+			.set(ple.delinked, 1)  # smallint column; postgres rejects boolean true
 			.where(
 				(ple.company == pl_entry.company)
 				& (ple.account_type == pl_entry.account_type)
@@ -2093,9 +2266,6 @@ def delink_original_entry(pl_entry, partial_cancel=False):
 
 		if partial_cancel:
 			query = query.where(ple.voucher_detail_no == pl_entry.voucher_detail_no)
-
-		if not is_immutable_ledger_enabled():
-			query = query.set(ple.delinked, True)
 
 		query.run()
 
@@ -2195,8 +2365,10 @@ class QueryPaymentLedger:
 				.where(Criterion.all(self.dimensions_filter))
 				.where(Criterion.all(self.voucher_posting_date))
 				.groupby(ple.against_voucher_type, ple.against_voucher_no, ple.party_type, ple.party)
-				.orderby(ple.invoice_date, ple.voucher_no)
-				.having(qb.Field("amount_in_account_currency") > 0)
+				# order by the select aliases (postgres can't ORDER BY a non-existent ple column)
+				.orderby(qb.Field("invoice_date"), qb.Field("voucher_no"))
+				# postgres HAVING can't reference a select alias; use the aggregate expression
+				.having(Sum(ple.amount_in_account_currency) > 0)
 				.limit(self.limit)
 				.run()
 			)
@@ -2207,7 +2379,13 @@ class QueryPaymentLedger:
 				)
 
 		# build query for voucher amount
-		query_voucher_amount = (
+		# account is grouped, not aggregated: it is a join key against the outstanding CTE below, and
+		# it fixes the currency the amounts are summed in. The two CTEs aggregate over different row
+		# sets, so two Max() picks could disagree and the join would silently miss, leaving the
+		# outstanding NULL. posting_date/due_date are dates, so Max() there cannot depend on
+		# collation. cost_center and remarks are free text that genuinely varies per row, so they
+		# come off one real row instead -- see representative below.
+		grouped_voucher_amount = (
 			qb.from_(ple)
 			.select(
 				ple.account,
@@ -2215,41 +2393,64 @@ class QueryPaymentLedger:
 				ple.voucher_no,
 				ple.party_type,
 				ple.party,
-				ple.posting_date,
-				ple.due_date,
-				ple.account_currency.as_("currency"),
-				ple.cost_center.as_("cost_center"),
+				Max(ple.posting_date).as_("posting_date"),
+				Max(ple.due_date).as_("due_date"),
+				Max(ple.account_currency).as_("currency"),
 				Sum(ple.amount).as_("amount"),
 				Sum(ple.amount_in_account_currency).as_("amount_in_account_currency"),
-				ple.remarks,
+				Min(ple.name).as_("representative"),
 			)
 			.where(ple.delinked == 0)
 			.where(Criterion.all(filter_on_voucher_no))
 			.where(Criterion.all(self.common_filter))
 			.where(Criterion.all(self.dimensions_filter))
 			.where(Criterion.all(self.voucher_posting_date))
-			.groupby(ple.voucher_type, ple.voucher_no, ple.party_type, ple.party)
+			.groupby(ple.account, ple.voucher_type, ple.voucher_no, ple.party_type, ple.party)
+		).as_("grouped")
+
+		# Payment Ledger Entry has no autoname rule, so frappe names it by hash -- lower-case, which
+		# keeps Min(name) free of the collation divergence that picking Max() over free text has.
+		representative_ple = qb.DocType("Payment Ledger Entry").as_("representative_ple")
+		query_voucher_amount = (
+			qb.from_(grouped_voucher_amount)
+			.inner_join(representative_ple)
+			.on(representative_ple.name == grouped_voucher_amount.representative)
+			.select(
+				grouped_voucher_amount.account,
+				grouped_voucher_amount.voucher_type,
+				grouped_voucher_amount.voucher_no,
+				grouped_voucher_amount.party_type,
+				grouped_voucher_amount.party,
+				grouped_voucher_amount.posting_date,
+				grouped_voucher_amount.due_date,
+				grouped_voucher_amount.currency,
+				grouped_voucher_amount.amount,
+				grouped_voucher_amount.amount_in_account_currency,
+				representative_ple.cost_center.as_("cost_center"),
+				representative_ple.remarks.as_("remarks"),
+			)
 		)
 
 		# build query for voucher outstanding
 		query_voucher_outstanding = (
 			qb.from_(ple)
 			.select(
+				# grouped, not aggregated: this is the other side of the join key -- see above
 				ple.account,
 				ple.against_voucher_type.as_("voucher_type"),
 				ple.against_voucher_no.as_("voucher_no"),
 				ple.party_type,
 				ple.party,
-				ple.posting_date,
-				ple.due_date,
-				ple.account_currency.as_("currency"),
+				Max(ple.posting_date).as_("posting_date"),
+				Max(ple.due_date).as_("due_date"),
+				Max(ple.account_currency).as_("currency"),
 				Sum(ple.amount).as_("amount"),
 				Sum(ple.amount_in_account_currency).as_("amount_in_account_currency"),
 			)
 			.where(ple.delinked == 0)
 			.where(Criterion.all(filter_on_against_voucher_no))
 			.where(Criterion.all(self.common_filter))
-			.groupby(ple.against_voucher_type, ple.against_voucher_no, ple.party_type, ple.party)
+			.groupby(ple.account, ple.against_voucher_type, ple.against_voucher_no, ple.party_type, ple.party)
 		)
 
 		# build CTE for combining voucher amount and outstanding
@@ -2291,17 +2492,19 @@ class QueryPaymentLedger:
 
 		# build CTE filter
 		# only fetch invoices
+		# The combined CTE query has no GROUP BY, so these are row filters. MariaDB tolerates HAVING
+		# on a select alias here, but postgres does not; express them as WHERE on the source column.
 		if self.get_invoices:
 			self.cte_query_voucher_amount_and_outstanding = (
-				self.cte_query_voucher_amount_and_outstanding.having(
-					qb.Field("outstanding_in_account_currency") > 0
+				self.cte_query_voucher_amount_and_outstanding.where(
+					Table("outstanding").amount_in_account_currency > 0
 				)
 			)
 		# only fetch payments
 		elif self.get_payments:
 			self.cte_query_voucher_amount_and_outstanding = (
-				self.cte_query_voucher_amount_and_outstanding.having(
-					qb.Field("outstanding_in_account_currency") < 0
+				self.cte_query_voucher_amount_and_outstanding.where(
+					Table("outstanding").amount_in_account_currency < 0
 				)
 			)
 
@@ -2371,6 +2574,7 @@ def create_gain_loss_journal(
 	ref2_detail_no,
 	cost_center,
 	dimensions,
+	project=None,
 ) -> str:
 	journal_entry = frappe.new_doc("Journal Entry")
 	journal_entry.voucher_type = "Exchange Gain Or Loss"
@@ -2382,7 +2586,7 @@ def create_gain_loss_journal(
 	party_account_currency = frappe.get_cached_value("Account", party_account, "account_currency")
 
 	if not gain_loss_account:
-		frappe.throw(_("Please set default Exchange Gain/Loss Account in Company {}").format(company))
+		frappe.throw(_("Please set default Exchange Gain/Loss Account in Company {0}").format(company))
 	gain_loss_account_currency = get_account_currency(gain_loss_account)
 	company_currency = frappe.get_cached_value("Company", company, "default_currency")
 
@@ -2397,6 +2601,7 @@ def create_gain_loss_journal(
 			"account_currency": party_account_currency,
 			"exchange_rate": 0,
 			"cost_center": cost_center or erpnext.get_default_cost_center(company),
+			"project": project,
 			"reference_type": ref1_dt,
 			"reference_name": ref1_dn,
 			"reference_detail_no": ref1_detail_no,
@@ -2414,6 +2619,7 @@ def create_gain_loss_journal(
 			"account_currency": gain_loss_account_currency,
 			"exchange_rate": 1,
 			"cost_center": cost_center or erpnext.get_default_cost_center(company),
+			"project": project,
 			"reference_type": ref2_dt,
 			"reference_name": ref2_dn,
 			"reference_detail_no": ref2_detail_no,
@@ -2566,3 +2772,130 @@ def build_qb_match_conditions(doctype, user=None) -> list:
 
 def is_immutable_ledger_enabled():
 	return frappe.get_single_value("Accounts Settings", "enable_immutable_ledger")
+
+
+PRE_SUBMIT_DOCTYPE_CONFIG = {
+	"Sales Invoice": {
+		"check_prev_docstatus": True,
+		"check_credit_limit": True,
+	},
+	"Purchase Invoice": {
+		"check_prev_docstatus": True,
+	},
+	"Delivery Note": {
+		"check_prev_docstatus": True,
+		"check_credit_limit": True,
+		"check_packed_qty": True,
+	},
+	"Purchase Receipt": {
+		"check_prev_docstatus": True,
+	},
+	"Sales Order": {
+		"check_credit_limit": True,
+	},
+}
+
+
+def pre_submit_validation(doc, method=None):
+	cfg = PRE_SUBMIT_DOCTYPE_CONFIG.get(doc.doctype)
+	if (
+		doc.docstatus != 0
+		or not frappe.get_cached_value("Accounts Settings", None, "preview_mode")
+		or not cfg
+		or not doc.company
+	):
+		return
+	_run_pre_submit_checks(doc, cfg)
+
+
+def _run_pre_submit_checks(doc, cfg):
+	if cfg.get("check_prev_docstatus"):
+		_check_prev_docstatus(doc)
+
+	if cfg.get("check_credit_limit"):
+		_check_credit_limit_warn(doc)
+
+	if cfg.get("check_packed_qty"):
+		_check_packed_qty_warn(doc)
+
+
+def _check_prev_docstatus(doc):
+	try:
+		if hasattr(doc, "check_prev_docstatus"):
+			doc.check_prev_docstatus()
+	except Exception as e:
+		frappe.msgprint(str(e), title=_("Pre-Submit Warning"), indicator="orange")
+
+
+def _check_credit_limit_warn(doc):
+	if doc.get("is_return") or not doc.get("customer"):
+		return
+
+	from erpnext.selling.doctype.customer.customer import check_credit_limit
+
+	try:
+		bypass = cint(
+			frappe.db.get_value(
+				"Customer Credit Limit",
+				filters={"parent": doc.customer, "parenttype": "Customer", "company": doc.company},
+				fieldname="bypass_credit_limit_check",
+			)
+			or 0
+		)
+
+		if doc.doctype == "Sales Invoice":
+			validate_against_credit_limit = bypass or any(
+				not (d.sales_order or d.delivery_note) for d in doc.get("items")
+			)
+			if validate_against_credit_limit:
+				check_credit_limit(doc.customer, doc.company, bypass, extra_amount=flt(doc.base_grand_total))
+
+		elif doc.doctype == "Sales Order":
+			if not bypass:
+				check_credit_limit(doc.customer, doc.company, extra_amount=flt(doc.base_grand_total))
+
+		elif doc.doctype == "Delivery Note":
+			if doc.per_billed == 100:
+				return
+
+			if bypass:
+				doc.check_credit_limit()
+			else:
+				unlinked = [
+					d for d in doc.get("items") if not (d.against_sales_order or d.against_sales_invoice)
+				]
+				if unlinked and flt(doc.base_net_total):
+					unlinked_net = sum(flt(d.base_amount) for d in unlinked)
+					extra_amount = (unlinked_net / flt(doc.base_net_total)) * flt(doc.base_grand_total)
+					if extra_amount:
+						check_credit_limit(doc.customer, doc.company, False, extra_amount=extra_amount)
+
+	except frappe.ValidationError as e:
+		frappe.msgprint(
+			_("Credit limit warning — submission may be blocked: {0}").format(str(e)),
+			title=_("Pre-Submit Warning: Credit Limit"),
+			indicator="orange",
+		)
+
+
+def _check_packed_qty_warn(doc):
+	try:
+		if hasattr(doc, "validate_packed_qty"):
+			doc.validate_packed_qty()
+	except frappe.ValidationError as e:
+		frappe.msgprint(
+			str(e),
+			title=_("Pre-Submit Warning: Packed Qty"),
+			indicator="orange",
+		)
+
+
+def update_subscription_on_invoice_update(doc: "Document", method: str | None = None) -> None:
+	if doc.get("subscription"):
+		refresh_subscription_status(doc.subscription)
+
+
+def refresh_subscription_status(name: str) -> None:
+	subscription = frappe.get_doc("Subscription", name)
+	subscription.set_subscription_status()
+	subscription.save(ignore_permissions=True)

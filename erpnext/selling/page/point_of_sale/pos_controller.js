@@ -40,15 +40,6 @@ erpnext.PointOfSale.Controller = class {
 				in_list_view: 1,
 				label: __("Opening Amount"),
 				options: "company:company_currency",
-				onchange: function () {
-					dialog.fields_dict.balance_details.df.data.some((d) => {
-						if (d.idx == this.doc.idx) {
-							d.opening_amount = this.value;
-							dialog.fields_dict.balance_details.grid.refresh();
-							return true;
-						}
-					});
-				},
 			},
 		];
 		const fetch_pos_payment_methods = () => {
@@ -217,7 +208,7 @@ erpnext.PointOfSale.Controller = class {
 	set_opening_entry_status() {
 		this.page.set_title_sub(
 			`<span class="indicator orange">
-				<a class="text-muted" href="#Form/POS%20Opening%20Entry/${this.pos_opening}">
+				<a class="text-muted" href="#Form/POS%20Opening%20Entry/${encodeURIComponent(this.pos_opening)}">
 					Opened at ${frappe.datetime.str_to_user(this.pos_opening_time)}
 				</a>
 			</span>`
@@ -258,33 +249,6 @@ erpnext.PointOfSale.Controller = class {
 		this.page.clear_icons();
 		this.page.set_primary_action(__("New Invoice"), this.new_invoice_event.bind(this));
 		this.page.set_secondary_action(__("Recent Orders"), this.toggle_recent_order.bind(this));
-		this.page.add_action_icon(
-			"fullscreen",
-			this.bind_fullscreen_events.bind(this),
-			"btn-fullscreen",
-			"Fullscreen"
-		);
-		this.page.add_action_icon(
-			"minimize",
-			this.bind_fullscreen_events.bind(this),
-			"btn-minimize hide",
-			"Minimize"
-		);
-	}
-
-	bind_fullscreen_events() {
-		if (!document.fullscreenElement) {
-			document.documentElement.requestFullscreen();
-			this.toggle_fullscreen_btn(".btn-minimize", ".btn-fullscreen");
-		} else if (document.exitFullscreen) {
-			document.exitFullscreen();
-			this.toggle_fullscreen_btn(".btn-fullscreen", ".btn-minimize");
-		}
-	}
-
-	toggle_fullscreen_btn(show, hide) {
-		this.page.page_actions.find(hide).addClass("hide");
-		this.page.page_actions.find(show).removeClass("hide");
 	}
 
 	open_form_view() {
@@ -644,7 +608,7 @@ erpnext.PointOfSale.Controller = class {
 			method:
 				doc.doctype == "POS Invoice"
 					? "erpnext.accounts.doctype.pos_invoice.pos_invoice.make_sales_return"
-					: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_sales_return",
+					: "erpnext.accounts.doctype.sales_invoice.mapper.make_sales_return",
 			args: {
 				source_name: doc.name,
 				target_doc: this.frm.doc,
@@ -678,6 +642,9 @@ erpnext.PointOfSale.Controller = class {
 
 	async on_cart_update(args) {
 		frappe.dom.freeze();
+		if (this.frm.doc.set_warehouse !== this.settings.warehouse) {
+			this.frm.set_value("set_warehouse", this.settings.warehouse);
+		}
 		let item_row = undefined;
 		try {
 			let { field, value, item } = args;
@@ -857,7 +824,7 @@ erpnext.PointOfSale.Controller = class {
 		} else if (is_stock_item && available_qty < qty_needed) {
 			frappe.throw({
 				message: __(
-					"Stock quantity not enough for Item Code: {0} under warehouse {1}. Available quantity {2} {3}.",
+					"Stock quantity is not enough for Item Code: {0} under warehouse {1}. Available quantity {2} {3}.",
 					[bold_item_code, bold_warehouse, bold_available_qty, bold_uom]
 				),
 				indicator: "orange",

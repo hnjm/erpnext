@@ -10,7 +10,6 @@ from frappe.utils import (
 	getdate,
 )
 
-import erpnext
 from erpnext.assets.doctype.asset_depreciation_schedule.deppreciation_schedule_controller import (
 	DepreciationScheduleController,
 )
@@ -195,6 +194,9 @@ def reschedule_depreciation(asset_doc, notes, disposal_date=None):
 	for row in asset_doc.get("finance_books"):
 		current_schedule = get_asset_depr_schedule_doc(asset_doc.name, None, row.finance_book)
 
+		if disposal_date and flt(row.value_after_depreciation) <= flt(row.expected_value_after_useful_life):
+			continue
+
 		if current_schedule:
 			if current_schedule.docstatus == 1:
 				new_schedule = frappe.copy_doc(current_schedule)
@@ -272,7 +274,7 @@ def get_asset_shift_factors_map():
 
 
 @frappe.whitelist()
-def get_depr_schedule(asset_name, status, finance_book=None):
+def get_depr_schedule(asset_name: str, status: str, finance_book: str | None = None):
 	asset_depr_schedule_doc = get_asset_depr_schedule_doc(asset_name, status, finance_book)
 
 	if not asset_depr_schedule_doc:
@@ -282,13 +284,13 @@ def get_depr_schedule(asset_name, status, finance_book=None):
 
 
 @frappe.whitelist()
-def get_asset_depr_schedule_doc(asset_name, status=None, finance_book=None):
+def get_asset_depr_schedule_doc(asset_name: str, status: str | None = None, finance_book: str | None = None):
 	asset_depr_schedule = get_asset_depr_schedule_name(asset_name, status, finance_book)
 
 	if not asset_depr_schedule:
 		return
 
-	asset_depr_schedule_doc = frappe.get_doc("Asset Depreciation Schedule", asset_depr_schedule[0].name)
+	asset_depr_schedule_doc = frappe.get_doc("Asset Depreciation Schedule", asset_depr_schedule)
 
 	return asset_depr_schedule_doc
 
@@ -300,20 +302,22 @@ def get_asset_depr_schedule_name(asset_name, status=None, finance_book=None):
 	]
 
 	if status:
-		if isinstance(status, str):
-			status = [status]
-		filters.append(["status", "in", status])
+		status_list = [status] if isinstance(status, str) else status
+		filters.append(["status", "in", status_list])
 
-	if finance_book:
-		filters.append(["finance_book", "=", finance_book])
-	else:
-		filters.append(["finance_book", "is", "not set"])
+	finance_book_filter = (
+		["finance_book", "=", finance_book] if finance_book else ["finance_book", "is", "not set"]
+	)
+	filters.append(finance_book_filter)
 
-	return frappe.get_all(
+	depreciation_schedules = frappe.get_all(
 		doctype="Asset Depreciation Schedule",
 		filters=filters,
+		fields=["name"],
 		limit=1,
 	)
+
+	return depreciation_schedules[0].name if depreciation_schedules else None
 
 
 def is_first_day_of_the_month(date):

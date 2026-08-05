@@ -1,10 +1,6 @@
-import unittest
-
-import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils.make_random import get_random
 
-from erpnext.tests.utils import ReportFilters, ReportName, execute_script_report
+from erpnext.tests.utils import ERPNextTestSuite, ReportFilters, ReportName, execute_script_report
 
 DEFAULT_FILTERS = {
 	"company": "_Test Company",
@@ -67,8 +63,9 @@ REPORT_FILTER_TEST_CASES: list[tuple[ReportName, ReportFilters]] = [
 	("Incorrect Stock Value Report", {"company": "_Test Company with perpetual inventory"}),
 	("Incorrect Serial No Valuation", {}),
 	("Incorrect Balance Qty After Transaction", {}),
-	("Supplier-Wise Sales Analytics", {}),
+	("Item Wise Consumption", {}),
 	("Item Prices", {"items": "Enabled Items only"}),
+	("Item Where Used", {"item": "_Test Item", "_optional": True}),
 	("Delayed Item Report", {"based_on": "Sales Invoice"}),
 	("Delayed Item Report", {"based_on": "Delivery Note"}),
 	("Stock Ageing", {"range": "30, 60, 90", "_optional": True}),
@@ -84,7 +81,7 @@ OPTIONAL_FILTERS = {
 }
 
 
-class TestReports(IntegrationTestCase):
+class TestReports(ERPNextTestSuite):
 	def test_execute_all_stock_reports(self):
 		"""Test that all script report in stock modules are executable with supported filters"""
 		for report, filter in REPORT_FILTER_TEST_CASES:

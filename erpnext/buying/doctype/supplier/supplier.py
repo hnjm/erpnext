@@ -14,8 +14,12 @@ from frappe.model.naming import set_name_by_naming_series, set_name_from_naming_
 from erpnext.accounts.party import (
 	get_dashboard_info,
 	validate_party_accounts,
+	validate_party_currency_before_merging,
 )
-from erpnext.controllers.website_list_for_contact import add_role_for_portal_user
+from erpnext.controllers.website_list_for_contact import (
+	add_role_for_portal_user,
+	link_portal_users_to_contacts,
+)
 from erpnext.utilities.transaction_base import TransactionBase
 
 
@@ -35,11 +39,14 @@ class Supplier(TransactionBase):
 		from erpnext.buying.doctype.customer_number_at_supplier.customer_number_at_supplier import (
 			CustomerNumberAtSupplier,
 		)
+		from erpnext.stock.doctype.company_restriction.company_restriction import CompanyRestriction
 		from erpnext.utilities.doctype.portal_user.portal_user import PortalUser
 
 		accounts: DF.Table[PartyAccount]
+		alias: DF.Data | None
 		allow_purchase_invoice_creation_without_purchase_order: DF.Check
 		allow_purchase_invoice_creation_without_purchase_receipt: DF.Check
+		allowed_companies: DF.TableMultiSelect[CompanyRestriction]
 		companies: DF.Table[AllowedToTransactWith]
 		country: DF.Link | None
 		customer_numbers: DF.Table[CustomerNumberAtSupplier]
@@ -48,7 +55,8 @@ class Supplier(TransactionBase):
 		default_price_list: DF.Link | None
 		disabled: DF.Check
 		email_id: DF.ReadOnly | None
-		hold_type: DF.Literal["", "All", "Invoices", "Payments"]
+		gender: DF.Link | None
+		hold_type: DF.Literal["All", "Invoices", "Payments"]
 		image: DF.AttachImage | None
 		is_frozen: DF.Check
 		is_internal_supplier: DF.Check
@@ -61,9 +69,10 @@ class Supplier(TransactionBase):
 		portal_users: DF.Table[PortalUser]
 		prevent_pos: DF.Check
 		prevent_rfqs: DF.Check
-		primary_address: DF.Text | None
+		primary_address: DF.TextEditor | None
 		release_date: DF.Date | None
 		represents_company: DF.Link | None
+		restrict_to_companies: DF.Check
 		supplier_details: DF.Text | None
 		supplier_group: DF.Link | None
 		supplier_name: DF.Data
@@ -73,6 +82,7 @@ class Supplier(TransactionBase):
 		tax_category: DF.Link | None
 		tax_id: DF.Data | None
 		tax_withholding_category: DF.Link | None
+		tax_withholding_group: DF.Link | None
 		warn_pos: DF.Check
 		warn_rfqs: DF.Check
 		website: DF.Data | None
@@ -85,7 +95,6 @@ class Supplier(TransactionBase):
 
 	def before_save(self):
 		if not self.on_hold:
-			self.hold_type = ""
 			self.release_date = ""
 		elif self.on_hold and not self.hold_type:
 			self.hold_type = "All"
@@ -106,6 +115,7 @@ class Supplier(TransactionBase):
 	def on_update(self):
 		self.create_primary_contact()
 		self.create_primary_address()
+		link_portal_users_to_contacts(self)
 
 	def add_role_for_user(self):
 		for portal_user in self.portal_users:
@@ -159,8 +169,6 @@ class Supplier(TransactionBase):
 		if doc.payment_terms:
 			self.payment_terms = doc.payment_terms
 
-		self.save()
-
 	def validate_internal_supplier(self):
 		if not self.is_internal_supplier:
 			self.represents_company = ""
@@ -183,7 +191,7 @@ class Supplier(TransactionBase):
 			)
 
 	def create_primary_contact(self):
-		from erpnext.selling.doctype.customer.customer import make_contact
+		from erpnext.selling.doctype.customer.mapper import make_contact
 
 		if not self.supplier_primary_contact:
 			if self.mobile_no or self.email_id:
@@ -195,7 +203,7 @@ class Supplier(TransactionBase):
 	def create_primary_address(self):
 		from frappe.contacts.doctype.address.address import get_address_display
 
-		from erpnext.selling.doctype.customer.customer import make_address
+		from erpnext.selling.doctype.customer.mapper import make_address
 
 		if self.flags.is_new_doc and self.get("address_line1"):
 			address = make_address(self)
@@ -212,6 +220,10 @@ class Supplier(TransactionBase):
 
 		delete_contact_and_address("Supplier", self.name)
 
+	def before_rename(self, olddn, newdn, merge=False):
+		if merge:
+			validate_party_currency_before_merging("Supplier", olddn, newdn)
+
 	def after_rename(self, olddn, newdn, merge=False):
 		if frappe.defaults.get_global_default("supp_master_name") == "Supplier Name":
 			self.db_set("supplier_name", newdn)
@@ -219,7 +231,9 @@ class Supplier(TransactionBase):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_supplier_primary(doctype, txt, searchfield, start, page_len, filters):
+def get_supplier_primary(
+	doctype: str | None, txt: str, searchfield: str | None, start: int, page_len: int, filters: dict
+):
 	supplier = filters.get("supplier")
 	type = filters.get("type")
 	type_doctype = frappe.qb.DocType(type)

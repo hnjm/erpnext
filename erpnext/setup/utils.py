@@ -4,43 +4,10 @@
 import frappe
 from frappe import _
 from frappe.utils import add_days, flt, get_datetime_str, nowdate
-from frappe.utils.data import getdate, now_datetime
+from frappe.utils.data import DateTimeLikeObject
 from frappe.utils.nestedset import get_root_of
 
 from erpnext import get_default_company
-
-
-def before_tests():
-	frappe.clear_cache()
-	# complete setup if missing
-	from frappe.desk.page.setup_wizard.setup_wizard import setup_complete
-
-	if not frappe.db.a_row_exists("Company"):
-		current_year = now_datetime().year
-		setup_complete(
-			{
-				"currency": "USD",
-				"full_name": "Test User",
-				"company_name": "Wind Power LLC",
-				"timezone": "America/New_York",
-				"company_abbr": "WP",
-				"industry": "Manufacturing",
-				"country": "United States",
-				"fy_start_date": f"{current_year}-01-01",
-				"fy_end_date": f"{current_year}-12-31",
-				"language": "english",
-				"company_tagline": "Testing",
-				"email": "test@erpnext.com",
-				"password": "test",
-				"chart_of_accounts": "Standard",
-			}
-		)
-
-	_enable_all_roles_for_admin()
-
-	set_defaults_for_tests()
-
-	frappe.db.commit()
 
 
 def get_pegged_currencies():
@@ -92,7 +59,12 @@ def get_pegged_rate(pegged_map, from_currency, to_currency, transaction_date=Non
 
 
 @frappe.whitelist()
-def get_exchange_rate(from_currency, to_currency, transaction_date=None, args=None):
+def get_exchange_rate(
+	from_currency: str,
+	to_currency: str,
+	transaction_date: DateTimeLikeObject | None = None,
+	args: str | None = None,
+):
 	if not (from_currency and to_currency):
 		# manqala 19/09/2016: Should this be an empty return or should it throw and exception?
 		return
@@ -123,12 +95,16 @@ def get_exchange_rate(from_currency, to_currency, transaction_date=None, args=No
 
 	# cksgb 19/09/2016: get last entry in Currency Exchange with from_currency and to_currency.
 	entries = frappe.get_all(
-		"Currency Exchange", fields=["exchange_rate"], filters=filters, order_by="date desc", limit=1
+		"Currency Exchange",
+		fields=["exchange_rate"],
+		filters=filters,
+		order_by="date desc, name desc",
+		limit=1,
 	)
 	if entries:
 		return flt(entries[0].exchange_rate)
 
-	if frappe.get_cached_value("Currency Exchange Settings", "Currency Exchange Settings", "disabled"):
+	if frappe.get_single_value("Currency Exchange Settings", "disabled"):
 		return 0.00
 
 	pegged_currencies = {}
@@ -202,7 +178,7 @@ def enable_all_roles_and_domains():
 def _enable_all_roles_for_admin():
 	from frappe.desk.page.setup_wizard.setup_wizard import add_all_roles_to
 
-	all_roles = set(frappe.db.get_values("Role", pluck="name"))
+	all_roles = set(frappe.get_all("Role", pluck="name"))
 	admin_roles = set(
 		frappe.db.get_values("Has Role", {"parent": "Administrator"}, fieldname="role", pluck="role")
 	)
@@ -220,6 +196,8 @@ def set_defaults_for_tests():
 	for key, value in defaults.items():
 		frappe.db.set_default(key, value)
 	frappe.db.set_single_value("Stock Settings", "auto_insert_price_list_rate_if_missing", 0)
+
+	frappe.db.set_single_value("Stock Settings", "enable_serial_and_batch_no_for_item", 1)
 
 
 def insert_record(records):

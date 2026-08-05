@@ -34,15 +34,6 @@ frappe.ui.form.on("Request for Quotation", {
 		});
 	},
 
-	onload: function (frm) {
-		if (!frm.doc.message_for_supplier) {
-			frm.set_value(
-				"message_for_supplier",
-				__("Please supply the specified items at the best possible rates")
-			);
-		}
-	},
-
 	refresh: function (frm, cdt, cdn) {
 		if (frm.doc.docstatus === 1) {
 			frm.add_custom_button(
@@ -109,6 +100,7 @@ frappe.ui.form.on("Request for Quotation", {
 								fieldname: "print_format",
 								options: "Print Format",
 								placeholder: "Standard",
+								default: frappe.get_meta("Request for Quotation").default_print_format || "",
 								get_query: () => {
 									return {
 										filters: {
@@ -174,14 +166,10 @@ frappe.ui.form.on("Request for Quotation", {
 	},
 
 	show_supplier_quotation_comparison(frm) {
-		const today = new Date();
-		const oneMonthAgo = new Date(today);
-		oneMonthAgo.setMonth(today.getMonth() - 1);
-
 		frappe.route_options = {
 			company: frm.doc.company,
-			from_date: moment(oneMonthAgo).format("YYYY-MM-DD"),
-			to_date: moment(today).format("YYYY-MM-DD"),
+			from_date: moment(frm.doc.transaction_date).format("YYYY-MM-DD"),
+			to_date: moment(new Date()).format("YYYY-MM-DD"),
 			request_for_quotation: frm.doc.name,
 		};
 		frappe.set_route("query-report", "Supplier Quotation Comparison");
@@ -221,7 +209,7 @@ frappe.ui.form.on("Request for Quotation", {
 
 				return frappe.call({
 					type: "GET",
-					method: "erpnext.buying.doctype.request_for_quotation.request_for_quotation.make_supplier_quotation_from_rfq",
+					method: "erpnext.buying.doctype.request_for_quotation.mapper.make_supplier_quotation_from_rfq",
 					args: {
 						source_name: doc.name,
 						for_supplier: args.supplier,
@@ -247,6 +235,32 @@ frappe.ui.form.on("Request for Quotation", {
 			});
 		}
 		refresh_field("items");
+	},
+
+	email_template(frm) {
+		if (frm.doc.email_template) {
+			frappe.db
+				.get_value("Email Template", frm.doc.email_template, [
+					"use_html",
+					"response",
+					"response_html",
+					"subject",
+				])
+				.then((r) => {
+					if (r.message.use_html) {
+						frm.set_value({
+							mfs_html: r.message.response_html,
+							use_html: 1,
+						});
+					} else {
+						frm.set_value({
+							message_for_supplier: r.message.response,
+							use_html: 0,
+						});
+					}
+					frm.set_value("subject", r.message.subject);
+				});
+		}
 	},
 	preview: (frm) => {
 		let dialog = new frappe.ui.Dialog({
@@ -347,7 +361,7 @@ erpnext.buying.RequestforQuotationController = class RequestforQuotationControll
 				__("Material Request"),
 				function () {
 					erpnext.utils.map_current_doc({
-						method: "erpnext.stock.doctype.material_request.material_request.make_request_for_quotation",
+						method: "erpnext.stock.doctype.material_request.mapper.make_request_for_quotation",
 						source_doctype: "Material Request",
 						target: me.frm,
 						setters: {
@@ -371,7 +385,7 @@ erpnext.buying.RequestforQuotationController = class RequestforQuotationControll
 				__("Opportunity"),
 				function () {
 					erpnext.utils.map_current_doc({
-						method: "erpnext.crm.doctype.opportunity.opportunity.make_request_for_quotation",
+						method: "erpnext.crm.doctype.opportunity.mapper.make_request_for_quotation",
 						source_doctype: "Opportunity",
 						target: me.frm,
 						setters: {
@@ -411,7 +425,7 @@ erpnext.buying.RequestforQuotationController = class RequestforQuotationControll
 							dialog.hide();
 
 							erpnext.utils.map_current_doc({
-								method: "erpnext.buying.doctype.request_for_quotation.request_for_quotation.get_item_from_material_requests_based_on_supplier",
+								method: "erpnext.buying.doctype.request_for_quotation.mapper.get_item_from_material_requests_based_on_supplier",
 								source_name: args.supplier,
 								target: me.frm,
 								setters: {
@@ -551,7 +565,10 @@ erpnext.buying.RequestforQuotationController = class RequestforQuotationControll
 				} else if (args.supplier_group) {
 					frappe.db
 						.get_list("Supplier", {
-							filters: { supplier_group: args.supplier_group },
+							filters: {
+								supplier_group: args.supplier_group,
+								disabled: 0,
+							},
 							limit: 100,
 							order_by: "name",
 						})

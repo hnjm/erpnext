@@ -7,10 +7,10 @@ import json
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.query_builder.functions import Coalesce, Concat, Date, Round
 from frappe.utils import flt, get_datetime, getdate
 from frappe.utils.deprecations import deprecated
 
-from erpnext.controllers.queries import get_match_cond
 from erpnext.setup.utils import get_exchange_rate
 
 
@@ -51,7 +51,9 @@ class Timesheet(Document):
 		per_billed: DF.Percent
 		sales_invoice: DF.Link | None
 		start_date: DF.Date | None
-		status: DF.Literal["Draft", "Submitted", "Billed", "Payslip", "Completed", "Cancelled"]
+		status: DF.Literal[
+			"Draft", "Submitted", "Partially Billed", "Billed", "Payslip", "Completed", "Cancelled"
+		]
 		time_logs: DF.Table[TimesheetDetail]
 		title: DF.Data | None
 		total_billable_amount: DF.Currency
@@ -72,6 +74,14 @@ class Timesheet(Document):
 		self.calculate_total_amounts()
 		self.calculate_percentage_billed()
 		self.set_dates()
+
+	def on_discard(self):
+		self.db_set("status", "Cancelled")
+
+	def on_update_after_submit(self):
+		self.validate_mandatory_fields()
+		self.update_task_and_project()
+		self.validate_time_logs()
 
 	def calculate_hours(self):
 		for row in self.time_logs:
@@ -119,6 +129,9 @@ class Timesheet(Document):
 
 		if flt(self.per_billed, self.precision("per_billed")) >= 100.0:
 			self.status = "Billed"
+
+		if 0.0 < flt(self.per_billed, self.precision("per_billed")) < 100.0:
+			self.status = "Partially Billed"
 
 		if self.sales_invoice:
 			self.status = "Completed"
@@ -289,46 +302,51 @@ class Timesheet(Document):
 
 
 @frappe.whitelist()
-def get_projectwise_timesheet_data(project=None, parent=None, from_time=None, to_time=None):
-	condition = ""
+def get_projectwise_timesheet_data(
+	project: str | None = None,
+	parent: str | None = None,
+	from_time: str | None = None,
+	to_time: str | None = None,
+):
+	tsd = frappe.qb.DocType("Timesheet Detail")
+	ts = frappe.qb.DocType("Timesheet")
+
+	query = (
+		frappe.qb.from_(tsd)
+		.inner_join(ts)
+		.on(ts.name == tsd.parent)
+		.select(
+			tsd.name.as_("name"),
+			tsd.parent.as_("time_sheet"),
+			tsd.from_time.as_("from_time"),
+			tsd.to_time.as_("to_time"),
+			tsd.billing_hours.as_("billing_hours"),
+			tsd.billing_amount.as_("billing_amount"),
+			tsd.activity_type.as_("activity_type"),
+			tsd.description.as_("description"),
+			ts.currency.as_("currency"),
+			tsd.project_name.as_("project_name"),
+		)
+		.where(
+			(tsd.parenttype == "Timesheet")
+			& (tsd.docstatus == 1)
+			& (tsd.is_billable == 1)
+			& tsd.sales_invoice.isnull()
+		)
+	)
+
 	if project:
-		condition += "AND tsd.project = %(project)s "
+		query = query.where(tsd.project == project)
 	if parent:
-		condition += "AND tsd.parent = %(parent)s "
+		query = query.where(tsd.parent == parent)
 	if from_time and to_time:
-		condition += "AND CAST(tsd.from_time as DATE) BETWEEN %(from_time)s AND %(to_time)s"
+		query = query.where(Date(tsd.from_time).between(from_time, to_time))
 
-	query = f"""
-		SELECT
-			tsd.name as name,
-			tsd.parent as time_sheet,
-			tsd.from_time as from_time,
-			tsd.to_time as to_time,
-			tsd.billing_hours as billing_hours,
-			tsd.billing_amount as billing_amount,
-			tsd.activity_type as activity_type,
-			tsd.description as description,
-			ts.currency as currency,
-			tsd.project_name as project_name
-		FROM `tabTimesheet Detail` tsd
-			INNER JOIN `tabTimesheet` ts
-			ON ts.name = tsd.parent
-		WHERE
-			tsd.parenttype = 'Timesheet'
-			AND tsd.docstatus = 1
-			AND tsd.is_billable = 1
-			AND tsd.sales_invoice is NULL
-			{condition}
-		ORDER BY tsd.from_time ASC
-	"""
-
-	filters = {"project": project, "parent": parent, "from_time": from_time, "to_time": to_time}
-
-	return frappe.db.sql(query, filters, as_dict=1)
+	return query.orderby(tsd.from_time).run(as_dict=1)
 
 
 @frappe.whitelist()
-def get_timesheet_detail_rate(timelog, currency):
+def get_timesheet_detail_rate(timelog: str, currency: str):
 	ts = frappe.qb.DocType("Timesheet")
 	ts_detail = frappe.qb.DocType("Timesheet Detail")
 
@@ -350,32 +368,35 @@ def get_timesheet_detail_rate(timelog, currency):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_timesheet(doctype, txt, searchfield, start, page_len, filters):
+def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict):
 	if not filters:
 		filters = {}
 
-	condition = ""
-	if filters.get("project"):
-		condition = "and tsd.project = %(project)s"
+	tsd = frappe.qb.DocType("Timesheet Detail")
+	ts = frappe.qb.DocType("Timesheet")
 
-	return frappe.db.sql(
-		f"""select distinct tsd.parent from `tabTimesheet Detail` tsd,
-			`tabTimesheet` ts where
-			ts.status in ('Submitted', 'Payslip') and tsd.parent = ts.name and
-			tsd.docstatus = 1 and ts.total_billable_amount > 0
-			and tsd.parent LIKE %(txt)s {condition}
-			order by tsd.parent limit %(page_len)s offset %(start)s""",
-		{
-			"txt": "%" + txt + "%",
-			"start": start,
-			"page_len": page_len,
-			"project": filters.get("project"),
-		},
+	query = (
+		frappe.qb.from_(tsd)
+		.inner_join(ts)
+		.on(tsd.parent == ts.name)
+		.select(tsd.parent)
+		.distinct()
+		.where(
+			ts.status.isin(["Submitted", "Payslip"])
+			& (tsd.docstatus == 1)
+			& (ts.total_billable_amount > 0)
+			& tsd.parent.like(f"%{txt}%")
+		)
 	)
+
+	if filters.get("project"):
+		query = query.where(tsd.project == filters.get("project"))
+
+	return query.orderby(tsd.parent).limit(page_len).offset(start).run()
 
 
 @frappe.whitelist()
-def get_timesheet_data(name, project):
+def get_timesheet_data(name: str, project: str):
 	data = None
 	if project and project != "":
 		data = get_projectwise_timesheet_data(project, name)
@@ -383,7 +404,7 @@ def get_timesheet_data(name, project):
 		data = frappe.get_all(
 			"Timesheet",
 			fields=[
-				"(total_billable_amount - total_billed_amount) as billing_amt",
+				{"SUB": ["total_billable_amount", "total_billed_amount"], "as": "billing_amt"},
 				"total_billable_hours as billing_hours",
 			],
 			filters={"name": name},
@@ -396,7 +417,9 @@ def get_timesheet_data(name, project):
 
 
 @frappe.whitelist()
-def make_sales_invoice(source_name, item_code=None, customer=None, currency=None):
+def make_sales_invoice(
+	source_name: str, item_code: str | None = None, customer: str | None = None, currency: str | None = None
+):
 	target = frappe.new_doc("Sales Invoice")
 	timesheet = frappe.get_doc("Timesheet", source_name)
 
@@ -425,7 +448,7 @@ def make_sales_invoice(source_name, item_code=None, customer=None, currency=None
 		target.append("items", {"item_code": item_code, "qty": hours, "rate": billing_rate})
 
 	for time_log in timesheet.time_logs:
-		if time_log.is_billable:
+		if time_log.is_billable and not time_log.sales_invoice:
 			target.append(
 				"timesheets",
 				{
@@ -448,7 +471,9 @@ def make_sales_invoice(source_name, item_code=None, customer=None, currency=None
 
 
 @frappe.whitelist()
-def get_activity_cost(employee=None, activity_type=None, currency=None):
+def get_activity_cost(
+	employee: str | None = None, activity_type: str | None = None, currency: str | None = None
+):
 	base_currency = frappe.defaults.get_global_default("currency")
 	rate = frappe.db.get_values(
 		"Activity Cost",
@@ -472,32 +497,42 @@ def get_activity_cost(employee=None, activity_type=None, currency=None):
 
 
 @frappe.whitelist()
-def get_events(start, end, filters=None):
+def get_events(start: str, end: str, filters: str | list | dict | None = None):
 	"""Returns events for Gantt / Calendar view rendering.
 	:param start: Start date-time.
 	:param end: End date-time.
 	:param filters: Filters (JSON).
 	"""
-	filters = json.loads(filters)
-	from frappe.desk.calendar import get_event_conditions
+	from erpnext.utilities.query import get_event_conditions_qb
 
-	conditions = get_event_conditions("Timesheet", filters)
+	filters = frappe.parse_json(filters) if filters else {}
 
-	return frappe.db.sql(
-		"""select `tabTimesheet Detail`.name as name,
-			`tabTimesheet Detail`.docstatus as status, `tabTimesheet Detail`.parent as parent,
-			from_time as start_date, hours, activity_type,
-			`tabTimesheet Detail`.project, to_time as end_date,
-			CONCAT(`tabTimesheet Detail`.parent, ' (', ROUND(hours,2),' hrs)') as title
-		from `tabTimesheet Detail`, `tabTimesheet`
-		where `tabTimesheet Detail`.parent = `tabTimesheet`.name
-			and `tabTimesheet`.docstatus < 2
-			and (from_time <= %(end)s and to_time >= %(start)s) {conditions} {match_cond}
-		""".format(conditions=conditions, match_cond=get_match_cond("Timesheet")),
-		{"start": start, "end": end},
-		as_dict=True,
-		update={"allDay": 0},
+	tsd = frappe.qb.DocType("Timesheet Detail")
+	ts = frappe.qb.DocType("Timesheet")
+
+	query = (
+		frappe.qb.from_(tsd)
+		.inner_join(ts)
+		.on(tsd.parent == ts.name)
+		.select(
+			tsd.name.as_("name"),
+			tsd.docstatus.as_("status"),
+			tsd.parent.as_("parent"),
+			tsd.from_time.as_("start_date"),
+			tsd.hours,
+			tsd.activity_type,
+			tsd.project,
+			tsd.to_time.as_("end_date"),
+			Concat(tsd.parent, " (", Round(tsd.hours, 2), " hrs)").as_("title"),
+		)
+		.where((ts.docstatus < 2) & (tsd.from_time <= end) & (tsd.to_time >= start))
 	)
+
+	# user-permission match conditions + calendar filters on Timesheet (query-builder form)
+	for condition in get_event_conditions_qb("Timesheet", filters):
+		query = query.where(condition)
+
+	return query.run(as_dict=True, update={"allDay": 0})
 
 
 def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20, order_by="creation"):
@@ -527,7 +562,7 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 				child_table.activity_type,
 				table.status,
 				child_table.billing_hours,
-				(table.sales_invoice | child_table.sales_invoice).as_("sales_invoice"),
+				Coalesce(table.sales_invoice, child_table.sales_invoice).as_("sales_invoice"),
 				child_table.project,
 			)
 			.orderby(table.end_date)
@@ -559,4 +594,5 @@ def get_list_context(context=None):
 		"title": _("Timesheets"),
 		"get_list": get_timesheets_list,
 		"row_template": "templates/includes/timesheet/timesheet_row.html",
+		"list_template": "templates/includes/list/list.html",
 	}

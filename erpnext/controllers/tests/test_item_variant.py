@@ -1,22 +1,38 @@
 import json
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
 
-from erpnext.controllers.item_variant import copy_attributes_to_variant, make_variant_item_code
+from erpnext.controllers.item_variant import (
+	copy_attributes_to_variant,
+	generate_keyed_value_combinations,
+	make_variant_item_code,
+)
 from erpnext.stock.doctype.item.test_item import set_item_variant_settings
 from erpnext.stock.doctype.quality_inspection.test_quality_inspection import (
 	create_quality_inspection_parameter,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestItemVariant(IntegrationTestCase):
+class TestItemVariant(ERPNextTestSuite):
 	def test_tables_in_template_copied_to_variant(self):
 		fields = [{"field_name": "quality_inspection_template"}]
 		set_item_variant_settings(fields)
 		variant = make_item_variant()
 		self.assertEqual(variant.get("quality_inspection_template"), "_Test QC Template")
+
+	def test_generate_keyed_value_combinations_ignores_empty_attributes(self):
+		combinations = generate_keyed_value_combinations(
+			{"Test Colour": ["Red", "Blue"], "Test Size": ["Small", "Large"], "Test Fit": []}
+		)
+
+		self.assertEqual(len(combinations), 4)
+		self.assertNotIn("Test Fit", combinations[0])
+
+		single_attribute_combinations = generate_keyed_value_combinations(
+			{"Test Colour": ["Red", "Blue"], "Test Size": []}
+		)
+		self.assertEqual(single_attribute_combinations, [{"Test Colour": "Red"}, {"Test Colour": "Blue"}])
 
 
 def create_variant_with_tables(item, args):

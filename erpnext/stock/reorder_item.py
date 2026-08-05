@@ -2,12 +2,11 @@
 # License: GNU General Public License v3. See license.txt
 
 
-import json
 from math import ceil
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, nowdate
+from frappe.utils import add_days, cint, escape_html, flt, nowdate
 
 import erpnext
 
@@ -25,14 +24,9 @@ def reorder_item():
 def _reorder_item():
 	material_requests = {"Purchase": {}, "Transfer": {}, "Material Issue": {}, "Manufacture": {}}
 	warehouse_company = frappe._dict(
-		frappe.db.sql(
-			"""select name, company from `tabWarehouse`
-		where disabled=0"""
-		)
+		frappe.get_all("Warehouse", filters={"disabled": 0}, fields=["name", "company"], as_list=True)
 	)
-	default_company = (
-		erpnext.get_default_company() or frappe.db.sql("""select name from tabCompany limit 1""")[0][0]
-	)
+	default_company = erpnext.get_default_company() or frappe.db.get_value("Company", {}, "name")
 
 	items_to_consider = get_items_for_reorder()
 
@@ -60,6 +54,7 @@ def _reorder_item():
 		else:
 			projected_qty = flt(item_warehouse_projected_qty.get(kwargs.item_code, {}).get(kwargs.warehouse))
 
+		original_reorder_qty = reorder_qty
 		if (reorder_level or reorder_qty) and projected_qty <= reorder_level:
 			deficiency = reorder_level - projected_qty
 			if deficiency > reorder_qty:
@@ -73,6 +68,9 @@ def _reorder_item():
 					"warehouse": kwargs.warehouse,
 					"reorder_qty": reorder_qty,
 					"item_details": kwargs.item_details,
+					"projected_on_hand": projected_qty,
+					"reorder_level": reorder_level,
+					"original_reorder_qty": original_reorder_qty,
 				}
 			)
 
@@ -107,6 +105,16 @@ def _reorder_item():
 		return create_material_request(material_requests)
 
 
+def _item_is_alive(item_table):
+	# An item counts as alive when end_of_life is unset, in the future, or the MariaDB zero-date
+	# '0000-00-00'. On postgres '0000-00-00' is an invalid date literal and a "not set" end_of_life
+	# is NULL (already covered by IS NULL), so add the zero-date term on MariaDB only.
+	alive = item_table.end_of_life.isnull() | (item_table.end_of_life > nowdate())
+	if frappe.db.db_type != "postgres":
+		alive |= item_table.end_of_life == "0000-00-00"
+	return alive
+
+
 def get_items_for_reorder() -> dict[str, list]:
 	reorder_table = frappe.qb.DocType("Item Reorder")
 	item_table = frappe.qb.DocType("Item")
@@ -132,15 +140,7 @@ def get_items_for_reorder() -> dict[str, list]:
 			item_table.has_variants,
 			item_table.lead_time_days,
 		)
-		.where(
-			(item_table.disabled == 0)
-			& (item_table.is_stock_item == 1)
-			& (
-				(item_table.end_of_life.isnull())
-				| (item_table.end_of_life > nowdate())
-				| (item_table.end_of_life == "0000-00-00")
-			)
-		)
+		.where((item_table.disabled == 0) & (item_table.is_stock_item == 1) & _item_is_alive(item_table))
 	)
 
 	data = query.run(as_dict=True)
@@ -165,11 +165,7 @@ def get_reorder_levels_for_variants(itemwise_reorder):
 		.where(
 			(item_table.disabled == 0)
 			& (item_table.is_stock_item == 1)
-			& (
-				(item_table.end_of_life.isnull())
-				| (item_table.end_of_life > nowdate())
-				| (item_table.end_of_life == "0000-00-00")
-			)
+			& _item_is_alive(item_table)
 			& (item_table.variant_of.notnull())
 		)
 	)
@@ -186,13 +182,15 @@ def get_item_warehouse_projected_qty(items_to_consider):
 	item_warehouse_projected_qty = {}
 	items_to_consider = list(items_to_consider.keys())
 
-	for item_code, warehouse, projected_qty in frappe.db.sql(
-		"""select item_code, warehouse, projected_qty
-		from tabBin where item_code in ({})
-			and (warehouse != '' and warehouse is not null)""".format(
-			", ".join(["%s"] * len(items_to_consider))
-		),
-		items_to_consider,
+	warehouse_parent_map = frappe._dict(
+		frappe.get_all("Warehouse", fields=["name", "parent_warehouse"], as_list=True)
+	)
+
+	for item_code, warehouse, projected_qty in frappe.get_all(
+		"Bin",
+		filters={"item_code": ["in", items_to_consider], "warehouse": ["is", "set"]},
+		fields=["item_code", "warehouse", "projected_qty"],
+		as_list=True,
 	):
 		if item_code not in item_warehouse_projected_qty:
 			item_warehouse_projected_qty.setdefault(item_code, {})
@@ -200,16 +198,14 @@ def get_item_warehouse_projected_qty(items_to_consider):
 		if warehouse not in item_warehouse_projected_qty.get(item_code):
 			item_warehouse_projected_qty[item_code][warehouse] = flt(projected_qty)
 
-		warehouse_doc = frappe.get_doc("Warehouse", warehouse)
+		parent_warehouse = warehouse_parent_map.get(warehouse)
 
-		while warehouse_doc.parent_warehouse:
-			if not item_warehouse_projected_qty.get(item_code, {}).get(warehouse_doc.parent_warehouse):
-				item_warehouse_projected_qty.setdefault(item_code, {})[warehouse_doc.parent_warehouse] = flt(
-					projected_qty
-				)
+		while parent_warehouse:
+			if not item_warehouse_projected_qty.get(item_code, {}).get(parent_warehouse):
+				item_warehouse_projected_qty.setdefault(item_code, {})[parent_warehouse] = flt(projected_qty)
 			else:
-				item_warehouse_projected_qty[item_code][warehouse_doc.parent_warehouse] += flt(projected_qty)
-			warehouse_doc = frappe.get_doc("Warehouse", warehouse_doc.parent_warehouse)
+				item_warehouse_projected_qty[item_code][parent_warehouse] += flt(projected_qty)
+			parent_warehouse = warehouse_parent_map.get(parent_warehouse)
 
 	return item_warehouse_projected_qty
 
@@ -219,18 +215,10 @@ def create_material_request(material_requests):
 	mr_list = []
 	exceptions_list = []
 
-	def _log_exception(mr):
-		if frappe.local.message_log:
-			exceptions_list.extend(frappe.local.message_log)
-			frappe.local.message_log = []
-		else:
-			exceptions_list.append(frappe.get_traceback(with_context=True))
-
-		mr.log_error("Unable to create material request")
-
 	company_wise_mr = frappe._dict({})
 	for request_type in material_requests:
 		for company in material_requests[request_type]:
+			frappe.db.savepoint("reorder_mr")
 			try:
 				items = material_requests[request_type][company]
 				if not items:
@@ -240,6 +228,7 @@ def create_material_request(material_requests):
 				mr.update(
 					{
 						"company": company,
+						"auto_created_via_reorder": 1,
 						"transaction_date": nowdate(),
 						"material_request_type": "Material Transfer"
 						if request_type == "Transfer"
@@ -285,6 +274,9 @@ def create_material_request(material_requests):
 							"description": item.description,
 							"item_group": item.item_group,
 							"brand": item.brand,
+							"reorder_qty": d.original_reorder_qty,
+							"projected_on_hand": d.projected_on_hand,
+							"reorder_level": d.reorder_level,
 						},
 					)
 
@@ -297,8 +289,10 @@ def create_material_request(material_requests):
 
 				company_wise_mr.setdefault(company, []).append(mr)
 
-			except Exception:
-				_log_exception(mr)
+			except Exception as exception:
+				frappe.db.rollback(save_point="reorder_mr")
+				exceptions_list.append(exception)
+				frappe.log_error(title="Unable to create material request")
 
 	if company_wise_mr:
 		if getattr(frappe.local, "reorder_email_notify", None) is None:
@@ -383,13 +377,10 @@ def notify_errors(exceptions_list):
 
 	for exception in exceptions_list:
 		try:
-			exception = json.loads(exception)
-			error_message = """<div class='small text-muted'>{}</div><br>""".format(
-				_(exception.get("message"))
-			)
+			error_message = f"<div class='small text-muted'>{escape_html(str(exception))}</div><br>"
 			content += error_message
 		except Exception:
-			pass
+			frappe.log_error(title="Failed to format auto reorder exception", message=frappe.get_traceback())
 
 	content += _("Regards,") + "<br>" + _("Administrator")
 

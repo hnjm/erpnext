@@ -8,8 +8,6 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from erpnext.setup.utils import get_exchange_rate
-
 
 def execute(filters=None):
 	if not filters:
@@ -297,7 +295,8 @@ def get_message():
 
 
 @frappe.whitelist()
-def set_default_supplier(item_code, supplier, company):
+def set_default_supplier(item_code: str, supplier: str, company: str):
+	frappe.has_permission("Item", "write", doc=item_code, throw=True)
 	frappe.db.set_value(
 		"Item Default",
 		{"parent": item_code, "company": company},

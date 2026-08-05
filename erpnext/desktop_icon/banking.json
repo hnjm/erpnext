@@ -8,13 +8,14 @@
  "icon_type": "Link",
  "idx": 5,
  "label": "Banking",
- "link_to": "Bank Reconciliation Tool",
- "link_type": "DocType",
- "modified": "2025-11-19 15:57:20.139306",
+ "link_to": "Banking",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-02-12 12:29:48.687545",
  "modified_by": "Administrator",
  "name": "Banking",
  "owner": "Administrator",
- "parent_icon": "Accounts",
+ "parent_icon": "Accounting",
+ "restrict_removal": 0,
  "roles": [],
  "standard": 1
 }

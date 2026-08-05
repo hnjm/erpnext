@@ -3,7 +3,8 @@
 
 import frappe
 from frappe import _, qb
-from frappe.query_builder import Column, functions
+from frappe.query_builder import functions
+from frappe.query_builder.custom import ConstantColumn
 from frappe.utils import add_days, date_diff, flt, get_first_day, get_last_day, getdate, rounded
 
 from erpnext.accounts.report.financial_statements import get_period_list
@@ -48,6 +49,9 @@ class Deferred_Item:
 		Generate report data for output
 		"""
 		ret_data = frappe._dict({"name": self.item_name})
+		ret_data.service_start_date = self.service_start_date
+		ret_data.service_end_date = self.service_end_date
+		ret_data.amount = self.base_net_amount
 		for period in self.period_total:
 			ret_data[period.key] = period.total
 			ret_data.indent = 1
@@ -205,6 +209,9 @@ class Deferred_Invoice:
 		for item in self.uniq_items:
 			self.items.append(Deferred_Item(item, self, [x for x in items if x.item == item]))
 
+		# roll-up amount from all deferred items
+		self.amount_total = sum(item.base_net_amount for item in self.items)
+
 	def calculate_invoice_revenue_expense_for_period(self):
 		"""
 		calculate deferred revenue/expense for all items in invoice
@@ -232,7 +239,7 @@ class Deferred_Invoice:
 		generate report data for invoice, includes invoice total
 		"""
 		ret_data = []
-		inv_total = frappe._dict({"name": self.name})
+		inv_total = frappe._dict({"name": self.name, "amount": self.amount_total})
 		for x in self.period_total:
 			inv_total[x.key] = x.total
 			inv_total.indent = 0
@@ -294,8 +301,10 @@ class Deferred_Revenue_and_Expense_Report:
 		Get all sales and purchase invoices which has deferred revenue/expense items
 		"""
 		gle = qb.DocType("GL Entry")
-		# column doesn't have an alias option
-		posted = Column("posted")
+		# a literal marker: real GL rows are "posted" (dummy/simulated future entries use "not").
+		# ConstantColumn renders a single-quoted string literal, valid on both backends -- a plain
+		# Column rendered as "posted", which MySQL reads as the string but postgres as an identifier.
+		posted = ConstantColumn("posted").as_("posted")
 
 		if self.filters.type == "Revenue":
 			inv = qb.DocType("Sales Invoice")
@@ -321,13 +330,15 @@ class Deferred_Revenue_and_Expense_Report:
 			)
 			.select(
 				inv.name.as_("doc"),
-				inv.posting_date,
+				# non-grouped columns are constant per grouped invoice / invoice item -> Max() keeps the
+				# GROUP BY valid on postgres while returning the same value MySQL picked.
+				functions.Max(inv.posting_date).as_("posting_date"),
 				inv_item.name.as_("item"),
-				inv_item.item_name,
-				inv_item.service_start_date,
-				inv_item.service_end_date,
-				inv_item.base_net_amount,
-				deferred_account_field,
+				functions.Max(inv_item.item_name).as_("item_name"),
+				functions.Max(inv_item.service_start_date).as_("service_start_date"),
+				functions.Max(inv_item.service_end_date).as_("service_end_date"),
+				functions.Max(inv_item.base_net_amount).as_("base_net_amount"),
+				functions.Max(deferred_account_field).as_(deferred_account_field.name),
 				gle.posting_date.as_("gle_posting_date"),
 				functions.Sum(gle.debit).as_("debit"),
 				functions.Sum(gle.credit).as_("credit"),
@@ -386,6 +397,24 @@ class Deferred_Revenue_and_Expense_Report:
 	def get_columns(self):
 		columns = []
 		columns.append({"label": _("Name"), "fieldname": "name", "fieldtype": "Data", "read_only": 1})
+		columns.append(
+			{
+				"label": _("Service Start Date"),
+				"fieldname": "service_start_date",
+				"fieldtype": "Date",
+				"read_only": 1,
+			}
+		)
+		columns.append(
+			{
+				"label": _("Service End Date"),
+				"fieldname": "service_end_date",
+				"fieldtype": "Date",
+				"read_only": 1,
+			}
+		)
+		columns.append({"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "read_only": 1})
+
 		for period in self.period_list:
 			columns.append(
 				{
@@ -414,6 +443,8 @@ class Deferred_Revenue_and_Expense_Report:
 			total_row = frappe._dict({"name": "Total Deferred Income"})
 		elif self.filters.type == "Expense":
 			total_row = frappe._dict({"name": "Total Deferred Expense"})
+
+		total_row["amount"] = sum(inv.amount_total for inv in self.deferred_invoices)
 
 		for idx, period in enumerate(self.period_list, 0):
 			total_row[period.key] = self.period_total[idx].total

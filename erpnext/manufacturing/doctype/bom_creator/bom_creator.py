@@ -4,9 +4,10 @@
 from collections import OrderedDict
 
 import frappe
-from frappe import _
+from frappe import _, bold
 from frappe.model.document import Document
 from frappe.utils import cint, flt, sbool
+from pypika.terms import ValueWrapper
 
 from erpnext.manufacturing.doctype.bom.bom import get_bom_item_rate
 
@@ -51,6 +52,7 @@ class BOMCreator(Document):
 		currency: DF.Link
 		default_warehouse: DF.Link | None
 		error_log: DF.Text | None
+		is_phantom: DF.Check
 		item_code: DF.Link
 		item_group: DF.Link | None
 		item_name: DF.Data | None
@@ -76,7 +78,40 @@ class BOMCreator(Document):
 		self.set_rate_for_items()
 
 	def validate(self):
+		self.validate_finished_good()
 		self.validate_items()
+		self.validate_duplicate_item()
+
+	def validate_duplicate_item(self):
+		# If same items added multiple times under same parent, raise error
+		item_map = {}
+		for row in self.items:
+			if not row.fg_reference_id:
+				continue
+
+			key = (row.item_code, row.fg_reference_id)
+			if key in item_map:
+				parent_item_code = next(
+					item.item_code for item in self.items if item.name == row.fg_reference_id
+				)
+
+				frappe.throw(
+					_(
+						"Item {0} added multiple times under the same parent item {1} at rows {2} and {3}"
+					).format(bold(row.item_code), bold(parent_item_code), item_map[key], row.idx),
+					title=_("Duplicate Item Under Same Parent"),
+				)
+			else:
+				item_map[key] = row.idx
+
+	def validate_finished_good(self):
+		is_stock_item = frappe.get_cached_value("Item", self.item_code, "is_stock_item")
+		if is_stock_item and self.is_phantom:
+			frappe.throw(_("Phantom BOM cannot be created for stock item {0}.").format(self.item_code))
+		elif not is_stock_item and not self.is_phantom:
+			frappe.throw(
+				_("Non-phantom BOM cannot be created for non-stock item {0}.").format(self.item_code)
+			)
 
 	def validate_items(self):
 		for row in self.items:
@@ -125,10 +160,6 @@ class BOMCreator(Document):
 	def on_cancel(self):
 		self.set_status(True)
 
-	def set_conversion_factor(self):
-		for row in self.items:
-			row.conversion_factor = 1.0
-
 	def before_submit(self):
 		self.validate_fields()
 		self.set_status()
@@ -159,10 +190,11 @@ class BOMCreator(Document):
 		amount = self.get_raw_material_cost()
 		self.raw_material_cost = amount
 
-	def get_raw_material_cost(self, fg_item=None, amount=0):
+	def get_raw_material_cost(self, fg_item=None):
 		if not fg_item:
 			fg_item = self.item_code
 
+		amount = 0
 		for row in self.items:
 			if row.fg_item != fg_item:
 				continue
@@ -181,14 +213,12 @@ class BOMCreator(Document):
 					},
 					self,
 				)
-
-				row.amount = flt(row.rate) * flt(row.qty)
-
 			else:
-				row.amount = 0.0
-				row.amount = self.get_raw_material_cost(row.item_code, row.amount)
-				row.rate = flt(row.amount) / (flt(row.qty) * flt(row.conversion_factor))
+				row.rate = flt(
+					self.get_raw_material_cost(row.item_code) / flt(row.qty or 1) * row.conversion_factor
+				)
 
+			row.amount = flt(row.rate) * flt(row.qty)
 			amount += flt(row.amount)
 
 		return amount
@@ -200,6 +230,11 @@ class BOMCreator(Document):
 			if row.item_code in fg_items:
 				row.is_expandable = 1
 
+	def set_conversion_factor(self):
+		for row in self.items:
+			if not row.conversion_factor:
+				row.conversion_factor = 1.0
+
 	def validate_fields(self):
 		fields = {
 			"items": "Items",
@@ -210,10 +245,14 @@ class BOMCreator(Document):
 				frappe.throw(_("Please set {0} in BOM Creator {1}").format(_(label), self.name))
 
 	def on_submit(self):
-		self.enqueue_create_boms()
+		self.enqueue_bom_creation()
 
 	@frappe.whitelist()
 	def enqueue_create_boms(self):
+		self.check_permission("submit")
+		self.enqueue_bom_creation()
+
+	def enqueue_bom_creation(self):
 		frappe.enqueue(
 			self.create_boms,
 			queue="short",
@@ -274,6 +313,7 @@ class BOMCreator(Document):
 
 			frappe.msgprint(_("BOMs created successfully"))
 		except Exception:
+			frappe.db.rollback()
 			traceback = frappe.get_traceback(with_context=True)
 			self.db_set(
 				{
@@ -310,10 +350,12 @@ class BOMCreator(Document):
 			}
 		)
 
-		if row.item_code == self.item_code and (self.routing or self.has_operations()):
-			bom.routing = self.routing
-			bom.with_operations = 1
-			bom.transfer_material_against = "Work Order"
+		if row.item_code == self.item_code:
+			bom.is_phantom_bom = self.is_phantom
+			if not self.is_phantom and (self.routing or self.has_operations()):
+				bom.routing = self.routing
+				bom.with_operations = 1
+				bom.transfer_material_against = "Work Order"
 
 		for field in BOM_FIELDS:
 			if self.get(field):
@@ -334,7 +376,6 @@ class BOMCreator(Document):
 				{
 					"bom_no": bom_no,
 					"allow_alternative_item": 1,
-					"allow_scrap_items": not item.get("is_phantom_item"),
 					"include_item_in_manufacturing": 1,
 				}
 			)
@@ -346,6 +387,31 @@ class BOMCreator(Document):
 
 		production_item_wise_rm[(row.item_code, row.name)].bom_no = bom.name
 
+	@frappe.whitelist()
+	def edit_bom_creator(self, docname: str, data: str | dict):
+		if not frappe.db.exists("BOM Creator Item", {"parent": self.name, "name": docname}):
+			frappe.throw(_("BOM Creator Item with name {0} does not exist").format(docname))
+
+		if isinstance(data, str):
+			data = frappe.parse_json(data)
+
+		updated = False
+		for row in self.items:
+			if row.name == docname:
+				for key, value in data.items():
+					if key in BOM_ITEM_FIELDS and row.get(key) != value:
+						row.set(key, value)
+						updated = True
+				break
+
+		if updated:
+			self.set_rate_for_items()
+			self.save()
+
+		frappe.msgprint(_("Updated successfully"), alert=True)
+
+		return self
+
 	def has_operations(self):
 		for row in self.items:
 			if row.operation:
@@ -354,12 +420,153 @@ class BOMCreator(Document):
 		return False
 
 	@frappe.whitelist()
-	def get_default_bom(self, item_code) -> str:
+	def get_default_bom(self, item_code: str):
 		return frappe.get_cached_value("Item", item_code, "default_bom")
+
+	@frappe.whitelist()
+	def add_item(self, **kwargs):
+		if isinstance(kwargs, str):
+			kwargs = frappe.parse_json(kwargs)
+
+		if isinstance(kwargs, dict):
+			kwargs = frappe._dict(kwargs)
+
+		item_info = get_item_details(kwargs.item_code)
+
+		parent_row_no = ""
+		if kwargs.fg_reference_id and self.name != kwargs.fg_reference_id:
+			parent_row_no = get_parent_row_no(self, kwargs.fg_reference_id)
+
+		kwargs.update(
+			{
+				"uom": item_info.stock_uom,
+				"stock_uom": item_info.stock_uom,
+				"conversion_factor": 1,
+			}
+		)
+
+		if parent_row_no:
+			kwargs.update({"parent_row_no": parent_row_no})
+
+		self.append("items", kwargs)
+		self.save()
+
+		return self
+
+	@frappe.whitelist()
+	def add_sub_assembly(self, **kwargs):
+		if isinstance(kwargs, str):
+			kwargs = frappe.parse_json(kwargs)
+
+		if isinstance(kwargs, dict):
+			kwargs = frappe._dict(kwargs)
+
+		bom_item = frappe.parse_json(kwargs.bom_item)
+
+		name = kwargs.fg_reference_id
+		parent_row_no = ""
+
+		if not kwargs.convert_to_sub_assembly:
+			item_info = get_item_details(bom_item.item_code)
+			parent_row_no = get_parent_row_no(self, kwargs.fg_reference_id)
+
+			item_row = self.append(
+				"items",
+				{
+					"item_code": bom_item.item_code,
+					"qty": bom_item.qty,
+					"uom": item_info.stock_uom,
+					"fg_item": kwargs.fg_item,
+					"conversion_factor": 1,
+					"parent_row_no": parent_row_no,
+					"fg_reference_id": name,
+					"stock_qty": bom_item.qty,
+					"do_not_explode": 1,
+					"is_expandable": 1,
+					"stock_uom": item_info.stock_uom,
+					"operation": bom_item.operation,
+					"is_phantom_item": sbool(kwargs.phantom),
+				},
+			)
+
+			parent_row_no = item_row.idx
+			name = ""
+		else:
+			if sbool(kwargs.phantom):
+				parent_row = next(item for item in self.items if item.name == kwargs.fg_reference_id)
+				parent_row.is_phantom_item = 1
+			parent_row_no = get_parent_row_no(self, kwargs.fg_reference_id)
+
+		for row in bom_item.get("items"):
+			row = frappe._dict(row)
+			item_info = get_item_details(row.item_code)
+			self.append(
+				"items",
+				{
+					"item_code": row.item_code,
+					"qty": row.qty,
+					"operation": row.operation,
+					"fg_item": bom_item.item_code,
+					"uom": item_info.stock_uom,
+					"fg_reference_id": name,
+					"parent_row_no": parent_row_no,
+					"conversion_factor": 1,
+					"do_not_explode": 1,
+					"stock_qty": row.qty,
+					"stock_uom": item_info.stock_uom,
+				},
+			)
+
+		self.save()
+
+		return self
+
+	@frappe.whitelist()
+	def delete_node(self, **kwargs):
+		if isinstance(kwargs, str):
+			kwargs = frappe.parse_json(kwargs)
+
+		if isinstance(kwargs, dict):
+			kwargs = frappe._dict(kwargs)
+
+		updated = False
+		if kwargs.docname:
+			row = next((row for row in self.items if row.name == kwargs.docname), None)
+			if not row:
+				frappe.throw(_("BOM Creator Item with name {0} does not exist").format(kwargs.docname))
+
+			row.delete()
+			updated = True
+
+		if self.delete_child_nodes(kwargs.docname or self.name):
+			updated = True
+
+		if updated:
+			self.set_rate_for_items()
+			self.save()
+
+			return self
+
+		return frappe._dict()
+
+	def delete_child_nodes(self, fg_reference_id: str):
+		deleted = False
+		for item in get_children(parent=fg_reference_id, parent_id=self.name):
+			child_row = next((row for row in self.items if row.name == item.name), None)
+			if child_row:
+				child_row.delete()
+
+			deleted = True
+			if item.expandable:
+				self.delete_child_nodes(item.name)
+
+		return deleted
 
 
 @frappe.whitelist()
-def get_children(doctype=None, parent=None, **kwargs):
+def get_children(doctype: str | None = None, parent: str | None = None, **kwargs):
+	frappe.has_permission("BOM Creator", "read", throw=True)
+
 	if isinstance(kwargs, str):
 		kwargs = frappe.parse_json(kwargs)
 
@@ -367,14 +574,15 @@ def get_children(doctype=None, parent=None, **kwargs):
 		kwargs = frappe._dict(kwargs)
 
 	fields = [
-		"item_code as value",
+		"name as value",
 		"item_name as title",
 		"is_expandable as expandable",
 		"parent as parent_id",
 		"qty",
 		"idx",
-		"'BOM Creator Item' as doctype",
+		ValueWrapper("BOM Creator Item").as_("doctype"),
 		"name",
+		"item_code",
 		"uom",
 		"rate",
 		"amount",
@@ -383,7 +591,7 @@ def get_children(doctype=None, parent=None, **kwargs):
 	]
 
 	query_filters = {
-		"fg_item": parent,
+		"fg_reference_id": parent,
 		"parent": kwargs.parent_id,
 	}
 
@@ -391,108 +599,6 @@ def get_children(doctype=None, parent=None, **kwargs):
 		query_filters["name"] = kwargs.name
 
 	return frappe.get_all("BOM Creator Item", fields=fields, filters=query_filters, order_by="idx")
-
-
-@frappe.whitelist()
-def add_item(**kwargs):
-	if isinstance(kwargs, str):
-		kwargs = frappe.parse_json(kwargs)
-
-	if isinstance(kwargs, dict):
-		kwargs = frappe._dict(kwargs)
-
-	doc = frappe.get_doc("BOM Creator", kwargs.parent)
-	item_info = get_item_details(kwargs.item_code)
-
-	parent_row_no = ""
-	if kwargs.fg_reference_id and doc.name != kwargs.fg_reference_id:
-		parent_row_no = get_parent_row_no(doc, kwargs.fg_reference_id)
-
-	kwargs.update(
-		{
-			"uom": item_info.stock_uom,
-			"stock_uom": item_info.stock_uom,
-			"conversion_factor": 1,
-		}
-	)
-
-	if parent_row_no:
-		kwargs.update({"parent_row_no": parent_row_no})
-
-	doc.append("items", kwargs)
-	doc.save()
-
-	return doc
-
-
-@frappe.whitelist()
-def add_sub_assembly(**kwargs):
-	if isinstance(kwargs, str):
-		kwargs = frappe.parse_json(kwargs)
-
-	if isinstance(kwargs, dict):
-		kwargs = frappe._dict(kwargs)
-
-	doc = frappe.get_doc("BOM Creator", kwargs.parent)
-	bom_item = frappe.parse_json(kwargs.bom_item)
-
-	name = kwargs.fg_reference_id
-	parent_row_no = ""
-
-	if not kwargs.convert_to_sub_assembly:
-		item_info = get_item_details(bom_item.item_code)
-		parent_row_no = get_parent_row_no(doc, kwargs.fg_reference_id)
-
-		item_row = doc.append(
-			"items",
-			{
-				"item_code": bom_item.item_code,
-				"qty": bom_item.qty,
-				"uom": item_info.stock_uom,
-				"fg_item": kwargs.fg_item,
-				"conversion_factor": 1,
-				"parent_row_no": parent_row_no,
-				"fg_reference_id": name,
-				"stock_qty": bom_item.qty,
-				"do_not_explode": 1,
-				"is_expandable": 1,
-				"stock_uom": item_info.stock_uom,
-				"operation": bom_item.operation,
-				"is_phantom_item": sbool(kwargs.phantom),
-			},
-		)
-
-		parent_row_no = item_row.idx
-		name = ""
-	else:
-		if sbool(kwargs.phantom):
-			parent_row = next(item for item in doc.items if item.name == kwargs.fg_reference_id)
-			parent_row.db_set("is_phantom_item", 1)
-		parent_row_no = get_parent_row_no(doc, kwargs.fg_reference_id)
-
-	for row in bom_item.get("items"):
-		row = frappe._dict(row)
-		item_info = get_item_details(row.item_code)
-		doc.append(
-			"items",
-			{
-				"item_code": row.item_code,
-				"qty": row.qty,
-				"operation": row.operation,
-				"fg_item": bom_item.item_code,
-				"uom": item_info.stock_uom,
-				"fg_reference_id": name,
-				"parent_row_no": parent_row_no,
-				"conversion_factor": 1,
-				"do_not_explode": 1,
-				"stock_qty": row.qty,
-				"stock_uom": item_info.stock_uom,
-			},
-		)
-
-	doc.save()
-
-	return doc
 
 
 def get_item_details(item_code):
@@ -512,43 +618,3 @@ def get_parent_row_no(doc, name):
 	frappe.msgprint(_("Parent Row No not found for {0}").format(name), alert=True)
 
 	return None
-
-
-@frappe.whitelist()
-def delete_node(**kwargs):
-	if isinstance(kwargs, str):
-		kwargs = frappe.parse_json(kwargs)
-
-	if isinstance(kwargs, dict):
-		kwargs = frappe._dict(kwargs)
-
-	items = get_children(parent=kwargs.fg_item, parent_id=kwargs.parent)
-	if kwargs.docname:
-		frappe.delete_doc("BOM Creator Item", kwargs.docname)
-
-	for item in items:
-		frappe.delete_doc("BOM Creator Item", item.name)
-		if item.expandable:
-			delete_node(fg_item=item.value, parent=item.parent_id)
-
-	doc = frappe.get_doc("BOM Creator", kwargs.parent)
-	doc.set_rate_for_items()
-	doc.save()
-
-	return doc
-
-
-@frappe.whitelist()
-def edit_bom_creator(doctype, docname, data, parent):
-	if isinstance(data, str):
-		data = frappe.parse_json(data)
-
-	frappe.db.set_value(doctype, docname, data)
-
-	doc = frappe.get_doc("BOM Creator", parent)
-	doc.set_rate_for_items()
-	doc.save()
-
-	frappe.msgprint(_("Updated successfully"), alert=True)
-
-	return doc

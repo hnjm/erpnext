@@ -4,7 +4,6 @@ import datetime
 
 import frappe
 from frappe import _, scrub
-from frappe.query_builder.functions import CombineDatetime
 from frappe.utils import get_datetime, get_first_day_of_week, get_quarter_start, getdate
 from frappe.utils import get_first_day as get_first_day_of_month
 from frappe.utils.nestedset import get_descendants_of
@@ -17,14 +16,29 @@ from erpnext.stock.utils import is_reposting_item_valuation_in_progress
 def execute(filters=None):
 	is_reposting_item_valuation_in_progress()
 	filters = frappe._dict(filters or {})
-	columns = get_columns(filters)
+	period_columns = get_period_columns(filters)
+	columns = get_columns(period_columns)
 	data = get_data(filters)
-	chart = get_chart_data(columns)
+	chart = get_chart_data(period_columns)
 
 	return columns, data, None, chart
 
 
-def get_columns(filters):
+def get_period_columns(filters):
+	period_columns = []
+	ranges = get_period_date_ranges(filters)
+
+	for _dummy, end_date in ranges:
+		period = get_period(end_date, filters)
+
+		period_columns.append(
+			{"label": _(period), "fieldname": scrub(period), "fieldtype": "Float", "width": 120}
+		)
+
+	return period_columns
+
+
+def get_columns(period_columns):
 	columns = [
 		{"label": _("Item"), "options": "Item", "fieldname": "name", "fieldtype": "Link", "width": 140},
 		{
@@ -45,12 +59,7 @@ def get_columns(filters):
 		{"label": _("UOM"), "fieldname": "uom", "fieldtype": "Data", "width": 120},
 	]
 
-	ranges = get_period_date_ranges(filters)
-
-	for _dummy, end_date in ranges:
-		period = get_period(end_date, filters)
-
-		columns.append({"label": _(period), "fieldname": scrub(period), "fieldtype": "Float", "width": 120})
+	columns.extend(period_columns)
 
 	return columns
 
@@ -250,8 +259,8 @@ def get_data(filters):
 	return data
 
 
-def get_chart_data(columns):
-	labels = [d.get("label") for d in columns[5:]]
+def get_chart_data(period_columns):
+	labels = [col.get("label") for col in period_columns]
 	chart = {"data": {"labels": labels, "datasets": []}}
 	chart["type"] = "line"
 

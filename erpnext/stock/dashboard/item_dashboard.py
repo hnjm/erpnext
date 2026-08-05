@@ -1,6 +1,6 @@
 import frappe
-from frappe.model.db_query import DatabaseQuery
-from frappe.utils import cint, flt
+from frappe.desk.reportview import build_match_conditions
+from frappe.utils import cint, escape_html, flt
 
 from erpnext.stock.doctype.stock_reservation_entry.stock_reservation_entry import (
 	get_sre_reserved_qty_for_items_and_warehouses as get_reserved_stock_details,
@@ -9,9 +9,17 @@ from erpnext.stock.doctype.stock_reservation_entry.stock_reservation_entry impor
 
 @frappe.whitelist()
 def get_data(
-	item_code=None, warehouse=None, item_group=None, start=0, sort_by="actual_qty", sort_order="desc"
+	item_code: str | None = None,
+	warehouse: str | None = None,
+	item_group: str | None = None,
+	start: int = 0,
+	sort_by: str = "actual_qty",
+	sort_order: str = "desc",
 ):
 	"""Return data to render the item dashboard"""
+	if not frappe.has_permission("Bin", "read"):
+		return []
+
 	filters = []
 	if item_code:
 		filters.append(["item_code", "=", item_code])
@@ -19,21 +27,30 @@ def get_data(
 		filters.append(["warehouse", "=", warehouse])
 	if item_group:
 		lft, rgt = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"])
-		items = frappe.db.sql_list(
-			"""
-			select i.name from `tabItem` i
-			where exists(select name from `tabItem Group`
-				where name=i.item_group and lft >=%s and rgt<=%s)
-		""",
-			(lft, rgt),
+		item = frappe.qb.DocType("Item")
+		item_group_dt = frappe.qb.DocType("Item Group")
+		items = (
+			frappe.qb.from_(item)
+			.select(item.name)
+			.where(
+				item.item_group.isin(
+					frappe.qb.from_(item_group_dt)
+					.select(item_group_dt.name)
+					.where((item_group_dt.lft >= lft) & (item_group_dt.rgt <= rgt))
+				)
+			)
+			.run(pluck="name")
 		)
 		filters.append(["item_code", "in", items])
 	try:
 		# check if user has any restrictions based on user permissions on warehouse
-		if DatabaseQuery("Warehouse", user=frappe.session.user).build_match_conditions():
+		if build_match_conditions("Warehouse", user=frappe.session.user):
 			filters.append(["warehouse", "in", [w.name for w in frappe.get_list("Warehouse")]])
 	except frappe.PermissionError:
-		# user does not have access on warehouse
+		# user does not have access on warehouse; build_match_conditions already queued a
+		# "Not permitted" message via frappe.throw before this was caught, drop it so the
+		# client doesn't show a spurious error for a request that's failing gracefully here
+		frappe.clear_last_message()
 		return []
 
 	items = frappe.db.get_all(
@@ -53,6 +70,11 @@ def get_data(
 			"reserved_qty": ["!=", 0],
 			"reserved_qty_for_production": ["!=", 0],
 			"reserved_qty_for_sub_contract": ["!=", 0],
+			"reserved_qty_for_production_plan": ["!=", 0],
+			"reserved_stock": ["!=", 0],
+			"ordered_qty": ["!=", 0],
+			"indented_qty": ["!=", 0],
+			"planned_qty": ["!=", 0],
 			"actual_qty": ["!=", 0],
 		},
 		filters=filters,
@@ -70,8 +92,10 @@ def get_data(
 	for item in items:
 		item.update(
 			{
-				"item_name": frappe.get_cached_value("Item", item.item_code, "item_name"),
-				"stock_uom": frappe.get_cached_value("Item", item.item_code, "stock_uom"),
+				"item_code": escape_html(item.item_code),
+				"item_name": escape_html(frappe.get_cached_value("Item", item.item_code, "item_name")),
+				"stock_uom": escape_html(frappe.get_cached_value("Item", item.item_code, "stock_uom")),
+				"warehouse": escape_html(item.warehouse),
 				"disable_quick_entry": frappe.get_cached_value("Item", item.item_code, "has_batch_no")
 				or frappe.get_cached_value("Item", item.item_code, "has_serial_no"),
 				"projected_qty": flt(item.projected_qty, precision),

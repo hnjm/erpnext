@@ -34,6 +34,7 @@
   "reference_detail_no",
   "advance_voucher_type",
   "advance_voucher_no",
+  "is_tax_withholding_account",
   "col_break3",
   "is_advance",
   "user_remark",
@@ -42,7 +43,8 @@
  "fields": [
   {
    "bold": 1,
-   "columns": 2,
+   "columns": 4,
+   "fetch_from": "bank_account.account",
    "fieldname": "account",
    "fieldtype": "Link",
    "in_global_search": 1,
@@ -184,20 +186,19 @@
    "fieldtype": "Select",
    "label": "Reference Type",
    "no_copy": 1,
-   "options": "\nSales Invoice\nPurchase Invoice\nJournal Entry\nSales Order\nPurchase Order\nExpense Claim\nAsset\nLoan\nPayroll Entry\nEmployee Advance\nExchange Rate Revaluation\nInvoice Discounting\nFees\nFull and Final Statement\nPayment Entry",
+   "options": "\nSales Invoice\nPurchase Invoice\nJournal Entry\nSales Order\nPurchase Order\nExpense Claim\nAsset\nLoan\nPayroll Entry\nEmployee Advance\nExchange Rate Revaluation\nInvoice Discounting\nFees\nFull and Final Statement\nPayment Entry\nBank Transaction",
    "search_index": 1
   },
   {
    "fieldname": "reference_name",
    "fieldtype": "Dynamic Link",
-   "in_list_view": 1,
    "label": "Reference Name",
    "no_copy": 1,
    "options": "reference_type",
    "search_index": 1
   },
   {
-   "depends_on": "eval:doc.reference_type&&!in_list(doc.reference_type, ['Expense Claim', 'Asset', 'Employee Loan', 'Employee Advance'])",
+   "depends_on": "eval:doc.reference_type&&!in_list(doc.reference_type, ['Expense Claim', 'Asset', 'Employee Loan', 'Employee Advance', 'Bank Transaction'])",
    "fieldname": "reference_due_date",
    "fieldtype": "Date",
    "label": "Reference Due Date",
@@ -281,12 +282,19 @@
    "options": "advance_voucher_type",
    "read_only": 1,
    "search_index": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_tax_withholding_account",
+   "fieldtype": "Check",
+   "label": "Is Tax Withholding Account",
+   "read_only": 1
   }
  ],
  "idx": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-10-27 13:48:32.805100",
+ "modified": "2026-02-19 17:01:22.642454",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Journal Entry Account",

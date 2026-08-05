@@ -3,7 +3,6 @@
 
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, today
 
 from erpnext.accounts.doctype.process_statement_of_accounts.process_statement_of_accounts import (
@@ -12,19 +11,22 @@ from erpnext.accounts.doctype.process_statement_of_accounts.process_statement_of
 )
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestProcessStatementOfAccounts(AccountsTestMixin, IntegrationTestCase):
-	@classmethod
-	def setUpClass(cls):
-		super().setUpClass()
-		cls.enterClassContext(cls.change_settings("Selling Settings", validate_selling_price=0))
-
+class TestProcessStatementOfAccounts(ERPNextTestSuite, AccountsTestMixin):
 	def setUp(self):
-		self.create_company()
-		self.create_customer()
+		frappe.db.set_single_value("Selling Settings", "validate_selling_price", 0)
+		frappe.db.set_value(
+			"Letter Head",
+			"Company Letterhead - Grey",
+			"is_default",
+			0,
+			update_modified=False,
+		)
+
+		self.company = "_Test Company"
 		self.create_customer(customer_name="Other Customer")
-		self.clear_old_entries()
 		self.si = create_sales_invoice()
 		create_sales_invoice(customer="Other Customer")
 
@@ -90,9 +92,6 @@ class TestProcessStatementOfAccounts(AccountsTestMixin, IntegrationTestCase):
 		for age_range in expected_ageing:
 			self.assertEqual(expected_ageing[age_range], ageing.get(age_range))
 
-	def tearDown(self):
-		frappe.db.rollback()
-
 
 def create_process_soa(**args):
 	args = frappe._dict(args)
@@ -114,3 +113,38 @@ def create_process_soa(**args):
 	process_soa.update(soa_dict)
 	process_soa.save()
 	return process_soa
+
+
+class TestProcessStatementOfAccountsValidation(ERPNextTestSuite):
+	"""validate() fills in default subject/body/pdf templates and enforces the
+	basic constraints. Exercised on the document directly (no email/PDF flow)."""
+
+	def make_soa(self, report="Accounts Receivable", with_customer=True, **overrides):
+		doc = frappe.new_doc("Process Statement Of Accounts")
+		doc.report = report
+		doc.company = "_Test Company"
+		if with_customer:
+			doc.append("customers", {"customer": "_Test Customer"})
+		doc.update(overrides)
+		return doc
+
+	def test_customers_are_required(self):
+		self.assertRaises(frappe.ValidationError, self.make_soa(with_customer=False).validate)
+
+	def test_general_ledger_body_uses_a_date_range(self):
+		doc = self.make_soa(report="General Ledger")
+		doc.validate()
+		self.assertIn("from {{ doc.from_date }} to {{ doc.to_date }}", doc.body)
+		# subject and pdf name are also defaulted
+		self.assertTrue(doc.subject)
+		self.assertTrue(doc.pdf_name)
+
+	def test_receivable_body_uses_the_posting_date(self):
+		doc = self.make_soa(report="Accounts Receivable")
+		doc.validate()
+		self.assertIn("until {{ doc.posting_date }}", doc.body)
+
+	def test_account_must_belong_to_company(self):
+		other = frappe.db.get_value("Account", {"company": "_Test Company 1", "is_group": 0}, "name")
+		self.assertTrue(other, "need an account in _Test Company 1")
+		self.assertRaises(frappe.ValidationError, self.make_soa(account=other).validate)

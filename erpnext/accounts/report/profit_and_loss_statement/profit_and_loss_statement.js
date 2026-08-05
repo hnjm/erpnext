@@ -9,6 +9,13 @@ erpnext.utils.add_dimensions(PL_REPORT_NAME, 10);
 
 frappe.query_reports[PL_REPORT_NAME]["filters"].push(
 	{
+		fieldname: "group_by_dimension",
+		label: __("Group by Dimension"),
+		fieldtype: "Select",
+		options: erpnext.financial_statements.get_accounting_dimension_options(),
+		depends_on: "eval: !doc.report_template",
+	},
+	{
 		fieldname: "report_template",
 		label: __("Report Template"),
 		fieldtype: "Link",
@@ -39,7 +46,7 @@ frappe.query_reports[PL_REPORT_NAME]["filters"].push(
 		fieldname: "accumulated_values",
 		label: __("Accumulated Values"),
 		fieldtype: "Check",
-		default: 1,
+		default: 0,
 	},
 	{
 		fieldname: "include_default_book_entries",

@@ -55,7 +55,6 @@ frappe.ui.form.on("Subcontracting Order", {
 				filters: {
 					docstatus: 1,
 					is_subcontracted: 1,
-					is_old_subcontracting_flow: 0,
 				},
 			};
 		});
@@ -146,7 +145,7 @@ frappe.ui.form.on("Subcontracting Order", {
 
 		if (frm.doc.purchase_order) {
 			erpnext.utils.map_current_doc({
-				method: "erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order",
+				method: "erpnext.buying.doctype.purchase_order.mapper.make_subcontracting_order",
 				source_name: frm.doc.purchase_order,
 				target_doc: frm,
 				freeze: true,
@@ -460,12 +459,125 @@ frappe.ui.form.on("Subcontracting Order", {
 		});
 	},
 
+	make_subcontracting_receipt(this_obj) {
+		const doc = this_obj.frm.doc;
+		const has_overtransferred_items = doc.supplied_items.some((item) => {
+			return item.supplied_qty > item.required_qty;
+		});
+		const backflush_based_on = doc.__onload.backflush_based_on;
+		if (has_overtransferred_items && backflush_based_on === "BOM") {
+			const raw_data = doc.supplied_items.map((item) => {
+				const row = doc.items.find((i) => i.name === item.reference_name);
+				const qty = flt(row.qty) - flt(row.received_qty);
+				return {
+					__checked: 1,
+					item_code: row.item_code,
+					warehouse: row.warehouse,
+					bom_no: row.bom,
+					required_by: row.schedule_date,
+					qty: qty > 0 ? qty : null,
+					subcontracting_order_item: row.name,
+				};
+			});
+			const item_names_list = [];
+			const data = [];
+			raw_data.forEach((d) => {
+				if (!item_names_list.includes(d.subcontracting_order_item)) {
+					item_names_list.push(d.subcontracting_order_item);
+					data.push(d);
+				}
+			});
+
+			const dialog = new frappe.ui.Dialog({
+				title: __("Select Items"),
+				size: "extra-large",
+				fields: [
+					{
+						fieldname: "items",
+						fieldtype: "Table",
+						reqd: 1,
+						label: __("Select Items to Receive"),
+						cannot_add_rows: true,
+						fields: [
+							{
+								fieldtype: "Link",
+								fieldname: "item_code",
+								reqd: 1,
+								options: "Item",
+								label: __("Item Code"),
+								in_list_view: 1,
+								read_only: 1,
+							},
+							{
+								fieldtype: "Link",
+								fieldname: "warehouse",
+								options: "Warehouse",
+								label: __("Warehouse"),
+								in_list_view: 1,
+								read_only: 1,
+								reqd: 1,
+							},
+							{
+								fieldtype: "Link",
+								fieldname: "bom_no",
+								options: "BOM",
+								label: __("BOM"),
+								in_list_view: 1,
+								read_only: 1,
+								reqd: 1,
+							},
+							{
+								fieldtype: "Date",
+								fieldname: "required_by",
+								label: __("Required By"),
+								in_list_view: 1,
+								read_only: 1,
+								reqd: 1,
+							},
+							{
+								fieldtype: "Float",
+								fieldname: "qty",
+								reqd: 1,
+								label: __("Qty to Receive"),
+								in_list_view: 1,
+							},
+							{
+								fieldtype: "Data",
+								fieldname: "subcontracting_order_item",
+								reqd: 1,
+								label: __("Subcontracting Order Item"),
+								hidden: 1,
+								read_only: 1,
+								in_list_view: 0,
+							},
+						],
+						data: data,
+					},
+				],
+				primary_action_label: __("Proceed"),
+				primary_action: () => {
+					const values = dialog.fields_dict["items"].grid
+						.get_selected_children()
+						.map((i) => ({ name: i.subcontracting_order_item, qty: i.qty }));
+					if (values.some((i) => !i.qty || i.qty == 0)) {
+						frappe.throw(__("Quantity is mandatory for the selected items."));
+					} else {
+						this_obj.make_subcontracting_receipt(values);
+					}
+				},
+			});
+			dialog.show();
+		} else {
+			this_obj.make_subcontracting_receipt();
+		}
+	},
+
 	company: function (frm) {
 		erpnext.utils.set_letter_head(frm);
 	},
 
 	get_materials_from_supplier: function (frm) {
-		let sco_rm_details = [];
+		const sco_rm_details = [];
 
 		if (frm.doc.status != "Closed" && frm.doc.supplied_items) {
 			frm.doc.supplied_items.forEach((d) => {
@@ -479,21 +591,16 @@ frappe.ui.form.on("Subcontracting Order", {
 			frm.add_custom_button(
 				__("Return of Components"),
 				() => {
-					frm.call({
+					frappe.model.open_mapped_doc({
 						method: "erpnext.controllers.subcontracting_controller.get_materials_from_supplier",
-						freeze: true,
-						freeze_message: __("Creating Stock Entry"),
+						frm: frm,
 						args: {
 							subcontract_order: frm.doc.name,
 							rm_details: sco_rm_details,
-							order_doctype: cur_frm.doc.doctype,
+							order_doctype: frm.doc.doctype,
 						},
-						callback: function (r) {
-							if (r && r.message) {
-								const doc = frappe.model.sync(r.message);
-								frappe.set_route("Form", doc[0].doctype, doc[0].name);
-							}
-						},
+						freeze: true,
+						freeze_message: __("Creating Return of Components ..."),
 					});
 				},
 				__("Create")
@@ -524,11 +631,11 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 		var me = this;
 
 		if (doc.docstatus == 1) {
-			if (!["Closed", "Completed"].includes(doc.status)) {
-				if (flt(doc.per_received) < 100) {
+			if (doc.status != "Closed") {
+				if (flt(doc.per_received) < 100 + doc.__onload.over_delivery_receipt_allowance) {
 					this.frm.add_custom_button(
 						__("Subcontracting Receipt"),
-						this.make_subcontracting_receipt,
+						() => this.frm.events.make_subcontracting_receipt(this),
 						__("Create")
 					);
 					if (me.has_unsupplied_items()) {
@@ -576,10 +683,12 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 		});
 	}
 
-	make_subcontracting_receipt() {
+	make_subcontracting_receipt(items) {
 		frappe.model.open_mapped_doc({
 			method: "erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order.make_subcontracting_receipt",
 			frm: cur_frm,
+			args: { items: items || [] },
+			freeze: true,
 			freeze_message: __("Creating Subcontracting Receipt ..."),
 		});
 	}

@@ -1,27 +1,18 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors and Contributors
 # See license.txt
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
-from frappe.utils import now_datetime, random_string, today
+from frappe.utils import add_days, now_datetime, random_string, today
 
-from erpnext.crm.doctype.lead.lead import make_customer
+from erpnext.crm.doctype.lead.mapper import make_customer
 from erpnext.crm.doctype.lead.test_lead import make_lead
-from erpnext.crm.doctype.opportunity.opportunity import make_quotation
+from erpnext.crm.doctype.opportunity.mapper import make_quotation
+from erpnext.crm.doctype.opportunity.opportunity import auto_close_opportunity, get_item_details
 from erpnext.crm.utils import get_linked_communication_list
 from erpnext.tests.utils import ERPNextTestSuite
 
 
 class TestOpportunity(ERPNextTestSuite):
-	@classmethod
-	def setUpClass(cls):
-		super().setUpClass()
-		# Only first lead is required
-		# TODO: dynamically generate limited test records
-		cls.make_leads()
-		cls.make_opportunities()
-
 	@classmethod
 	def make_opportunities(cls):
 		records = [
@@ -31,6 +22,7 @@ class TestOpportunity(ERPNextTestSuite):
 				"opportunity_from": "Lead",
 				"enquiry_type": "Sales",
 				"party_name": cls.leads[0].name,
+				"company": cls.companies[0].name,
 				"transaction_date": "2013-12-12",
 				"items": [
 					{"item_name": "Test Item", "description": "Some description", "qty": 5, "rate": 100}
@@ -57,7 +49,7 @@ class TestOpportunity(ERPNextTestSuite):
 		self.assertEqual(doc.status, "Quotation")
 
 	def test_make_new_lead_if_required(self):
-		opp_doc = make_opportunity_from_lead()
+		opp_doc = make_opportunity_from_lead("_Test Company")
 
 		self.assertTrue(opp_doc.party_name)
 		self.assertEqual(opp_doc.opportunity_from, "Lead")
@@ -100,8 +92,106 @@ class TestOpportunity(ERPNextTestSuite):
 		create_communication(opp_doc.doctype, opp_doc.name, opp_doc.contact_email)
 		create_communication(opp_doc.doctype, opp_doc.name, opp_doc.contact_email)
 
+	def test_get_notification_email(self):
+		admin_email = frappe.db.get_value("User", "Administrator", "email")
+		opp = frappe.new_doc("Opportunity")
+		opp.opportunity_owner = "Administrator"
+		self.assertEqual(opp.get_notification_email(), admin_email)
 
-def make_opportunity_from_lead():
+		opp.opportunity_owner = None
+		self.assertIsNone(opp.get_notification_email())
+
+	def test_declare_enquiry_lost(self):
+		lost_reason = _ensure_master("Opportunity Lost Reason", "lost_reason", "_Test Lost - Too Expensive")
+		competitor = _ensure_master("Competitor", "competitor_name", "_Test Competitor")
+
+		opp = make_opportunity(with_items=0)
+		opp.declare_enquiry_lost(
+			lost_reasons_list=[{"lost_reason": lost_reason}],
+			competitors=[{"competitor": competitor}],
+			detailed_reason="Budget too high",
+		)
+
+		opp.reload()
+		self.assertEqual(opp.status, "Lost")
+		self.assertEqual(opp.order_lost_reason, "Budget too high")
+		self.assertEqual([d.lost_reason for d in opp.lost_reasons], [lost_reason])
+		self.assertEqual([d.competitor for d in opp.competitors], [competitor])
+
+	def test_declare_lost_blocked_when_quotation_active(self):
+		opp = make_opportunity(with_items=0)
+		quotation = make_quotation(opp.name)
+		quotation.append("items", {"item_code": "_Test Item", "qty": 1})
+		quotation.run_method("set_missing_values")
+		quotation.run_method("calculate_taxes_and_totals")
+		quotation.submit()
+
+		# A submitted, still-active quotation exists, so the opportunity can't be marked lost
+		opp.reload()
+		self.assertRaises(frappe.ValidationError, opp.declare_enquiry_lost, [], [], "x")
+		self.assertNotEqual(opp.status, "Lost")
+
+	def test_get_item_details(self):
+		details = get_item_details("_Test Item")
+		self.assertEqual(details["item_name"], frappe.db.get_value("Item", "_Test Item", "item_name"))
+		self.assertEqual(details["uom"], frappe.db.get_value("Item", "_Test Item", "stock_uom"))
+
+		# an unknown item returns blank fields rather than erroring
+		self.assertEqual(get_item_details("_Non Existent Item XYZ")["item_name"], "")
+
+	def test_auto_close_replied_opportunity(self):
+		days = frappe.db.get_single_value("CRM Settings", "close_opportunity_after_days") or 15
+
+		stale = make_opportunity(with_items=0)
+		fresh = make_opportunity(with_items=0)
+		for opp in (stale, fresh):
+			frappe.db.set_value("Opportunity", opp.name, "status", "Replied", update_modified=False)
+		# age only the stale opportunity past the threshold
+		frappe.db.set_value(
+			"Opportunity",
+			stale.name,
+			"modified",
+			add_days(now_datetime(), -(days + 1)),
+			update_modified=False,
+		)
+
+		auto_close_opportunity()
+
+		self.assertEqual(frappe.db.get_value("Opportunity", stale.name, "status"), "Closed")
+		self.assertEqual(frappe.db.get_value("Opportunity", fresh.name, "status"), "Replied")
+
+	def test_opportunity_synced_to_prospect(self):
+		prospect_name = "_Test Prospect For Opportunity"
+		if not frappe.db.exists("Prospect", prospect_name):
+			frappe.get_doc(
+				{"doctype": "Prospect", "company_name": prospect_name, "company": "_Test Company"}
+			).insert(ignore_permissions=True)
+
+		opp = frappe.get_doc(
+			{
+				"doctype": "Opportunity",
+				"company": "_Test Company",
+				"opportunity_from": "Prospect",
+				"party_name": prospect_name,
+				"opportunity_type": "Sales",
+				"sales_stage": "Prospecting",
+				"transaction_date": today(),
+			}
+		).insert(ignore_permissions=True)
+
+		prospect = frappe.get_doc("Prospect", prospect_name)
+		linked = {d.opportunity: d for d in prospect.opportunities}
+		self.assertIn(opp.name, linked)
+		self.assertEqual(linked[opp.name].stage, "Prospecting")
+
+
+def _ensure_master(doctype, fieldname, value):
+	if not frappe.db.exists(doctype, value):
+		frappe.get_doc({"doctype": doctype, fieldname: value}).insert(ignore_permissions=True)
+	return value
+
+
+def make_opportunity_from_lead(company):
 	new_lead_email_id = f"new{random_string(5)}@example.com"
 	args = {
 		"doctype": "Opportunity",
@@ -109,6 +199,7 @@ def make_opportunity_from_lead():
 		"opportunity_type": "Sales",
 		"with_items": 0,
 		"transaction_date": today(),
+		"company": company,
 	}
 	# new lead should be created against the new.opportunity@example.com
 	opp_doc = frappe.get_doc(args).insert(ignore_permissions=True)

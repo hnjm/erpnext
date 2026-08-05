@@ -7,6 +7,7 @@
 import frappe
 from frappe.model.document import Document
 from frappe.model.rename_doc import bulk_rename
+from frappe.utils.deprecations import deprecated
 
 
 class RenameTool(Document):
@@ -19,22 +20,22 @@ class RenameTool(Document):
 		from frappe.types import DF
 
 		file_to_rename: DF.Attach | None
-		select_doctype: DF.Literal[None]
+		select_doctype: DF.Link | None
 	# end: auto-generated types
 
 	pass
 
 
 @frappe.whitelist()
+@deprecated
 def get_doctypes():
-	return frappe.db.sql_list(
-		"""select name from tabDocType
-		where allow_rename=1 and module!='Core' order by name"""
+	return frappe.get_all(
+		"DocType", filters={"allow_rename": 1, "module": ["!=", "Core"]}, order_by="name", pluck="name"
 	)
 
 
 @frappe.whitelist()
-def upload(select_doctype=None, rows=None):
+def upload(select_doctype: str | None = None):
 	from frappe.utils.csvutils import read_csv_content_from_attached_file
 
 	if not select_doctype:

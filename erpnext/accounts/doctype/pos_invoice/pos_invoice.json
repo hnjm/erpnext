@@ -159,16 +159,18 @@
   "language",
   "column_break_84",
   "select_print_heading",
+  "utm_analytics_section",
+  "utm_source",
+  "utm_medium",
+  "column_break_bhao",
+  "utm_campaign",
   "more_information",
   "inter_company_invoice_reference",
   "customer_group",
   "is_discounted",
   "col_break23",
-  "utm_source",
-  "utm_campaign",
-  "utm_medium",
-  "column_break_gpiw",
   "status",
+  "title",
   "more_info",
   "debit_to",
   "party_account_currency",
@@ -186,7 +188,7 @@
   "subscription_section",
   "from_date",
   "to_date",
-  "column_break_140",
+  "auto_repeat_section",
   "auto_repeat",
   "update_auto_repeat_reference",
   "against_income_account"
@@ -661,6 +663,7 @@
    "fieldname": "total_billing_amount",
    "fieldtype": "Currency",
    "label": "Total Billing Amount",
+   "options": "currency",
    "print_hide": 1,
    "read_only": 1
   },
@@ -1422,19 +1425,23 @@
    "width": "50%"
   },
   {
+   "depends_on": "eval:doc.sales_partner",
    "fetch_from": "sales_partner.commission_rate",
    "fetch_if_empty": 1,
    "fieldname": "commission_rate",
    "fieldtype": "Float",
    "label": "Commission Rate (%)",
+   "no_copy": 1,
    "oldfieldname": "commission_rate",
    "oldfieldtype": "Currency",
    "print_hide": 1
   },
   {
+   "depends_on": "eval:doc.sales_partner",
    "fieldname": "total_commission",
    "fieldtype": "Currency",
    "label": "Total Commission",
+   "no_copy": 1,
    "oldfieldname": "total_commission",
    "oldfieldtype": "Currency",
    "options": "Company:company:default_currency",
@@ -1461,7 +1468,7 @@
   {
    "fieldname": "subscription_section",
    "fieldtype": "Section Break",
-   "label": "Subscription Section"
+   "label": "Subscription"
   },
   {
    "allow_on_submit": 1,
@@ -1478,10 +1485,6 @@
    "label": "To Date",
    "no_copy": 1,
    "print_hide": 1
-  },
-  {
-   "fieldname": "column_break_140",
-   "fieldtype": "Column Break"
   },
   {
    "allow_on_submit": 1,
@@ -1529,9 +1532,12 @@
    "print_hide": 1
   },
   {
+   "depends_on": "eval:doc.sales_partner",
    "fieldname": "amount_eligible_for_commission",
    "fieldtype": "Currency",
    "label": "Amount Eligible for Commission",
+   "no_copy": 1,
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {
@@ -1540,10 +1546,6 @@
    "fieldname": "update_billed_amount_in_delivery_note",
    "fieldtype": "Check",
    "label": "Update Billed Amount in Delivery Note"
-  },
-  {
-   "fieldname": "column_break_gpiw",
-   "fieldtype": "Column Break"
   },
   {
    "fieldname": "utm_medium",
@@ -1610,13 +1612,37 @@
    "hidden": 1,
    "label": "Item Wise Tax Details",
    "no_copy": 1,
-   "options": "Item Wise Tax Detail"
+   "options": "Item Wise Tax Detail",
+   "print_hide": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "utm_analytics_section",
+   "fieldtype": "Section Break",
+   "label": "UTM Analytics"
+  },
+  {
+   "fieldname": "column_break_bhao",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "auto_repeat_section",
+   "fieldtype": "Section Break",
+   "label": "Auto Repeat"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "no_copy": 1,
+   "print_hide": 1
   }
  ],
  "icon": "fa fa-file-text",
  "is_submittable": 1,
  "links": [],
- "modified": "2025-08-04 22:22:31.471752",
+ "modified": "2026-06-21 12:46:13.250145",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Invoice",

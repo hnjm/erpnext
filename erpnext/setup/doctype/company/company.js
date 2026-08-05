@@ -3,6 +3,17 @@
 
 frappe.provide("erpnext.company");
 
+// Static filters (is_group / disabled / warehouse_type) live in the fields' link_filters.
+const WAREHOUSE_DEFAULT_FIELDS = [
+	"default_warehouse",
+	"sample_retention_warehouse",
+	"default_in_transit_warehouse",
+	"default_warehouse_for_sales_return",
+	"default_wip_warehouse",
+	"default_fg_warehouse",
+	"default_scrap_warehouse",
+];
+
 frappe.ui.form.on("Company", {
 	onload: function (frm) {
 		if (frm.doc.__islocal && frm.doc.parent_company) {
@@ -51,21 +62,35 @@ frappe.ui.form.on("Company", {
 			return { filters: { buying: 1 } };
 		});
 
-		frm.set_query("default_in_transit_warehouse", function () {
+		WAREHOUSE_DEFAULT_FIELDS.forEach((fieldname) => {
+			frm.set_query(fieldname, function (doc) {
+				return { filters: { company: doc.name } };
+			});
+		});
+
+		["default_wip_warehouse", "default_fg_warehouse", "default_scrap_warehouse"].forEach((fieldname) => {
+			frm.set_query(fieldname, function (doc) {
+				return {
+					filters: {
+						company: doc.name,
+						is_group: 0,
+					},
+				};
+			});
+		});
+
+		frm.set_query("default_letter_head", function () {
 			return {
 				filters: {
-					warehouse_type: "Transit",
-					is_group: 0,
-					company: frm.doc.company_name,
+					letter_head_for: "DocType",
 				},
 			};
 		});
 
-		frm.set_query("default_warehouse_for_sales_return", function () {
+		frm.set_query("default_letter_head_report", function () {
 			return {
 				filters: {
-					company: frm.doc.name,
-					is_group: 0,
+					letter_head_for: "Report",
 				},
 			};
 		});
@@ -214,12 +239,13 @@ frappe.ui.form.on("Company", {
 								label: __("Please enter the company name to confirm"),
 								reqd: 1,
 								description: __(
-									"Please make sure you really want to delete all the transactions for this company. Your master data will remain as it is. This action cannot be undone."
+									"Please make sure you really want to delete all the transactions for {0}. Your master data will remain as it is. This action cannot be undone.",
+									[frappe.utils.bold(frm.doc.name)]
 								),
 							},
 							function (data) {
 								if (data.company_name !== frm.doc.name) {
-									frappe.msgprint(__("Company name not same"));
+									frappe.msgprint(__("Company name does not match"));
 									return;
 								}
 								frappe.call({
@@ -234,7 +260,7 @@ frappe.ui.form.on("Company", {
 									},
 								});
 							},
-							__("Delete all the Transactions for this Company"),
+							__("Delete all the Transactions for {0}", [frappe.utils.bold(frm.doc.name)]),
 							__("Delete")
 						);
 						d.get_primary_btn().addClass("btn-danger");
@@ -257,7 +283,7 @@ erpnext.company.set_chart_of_accounts_options = function (doc) {
 			callback: function (r) {
 				if (!r.exc) {
 					set_field_options("chart_of_accounts", [""].concat(r.message).join("\n"));
-					if (in_list(r.message, selected_value))
+					if (r.message.includes(selected_value))
 						cur_frm.set_value("chart_of_accounts", selected_value);
 				}
 			},
@@ -274,7 +300,7 @@ erpnext.company.setup_queries = function (frm) {
 			["default_payable_account", { root_type: "Liability", account_type: "Payable" }],
 			["default_expense_account", { root_type: "Expense" }],
 			["default_income_account", { root_type: "Income" }],
-			["round_off_account", { root_type: "Expense" }],
+			["round_off_account", { root_type: ["in", ["Expense", "Income"]] }],
 			["round_off_for_opening", { root_type: "Liability", account_type: "Round Off for Opening" }],
 			["write_off_account", { root_type: "Expense" }],
 			["default_deferred_expense_account", {}],
@@ -306,6 +332,8 @@ erpnext.company.setup_queries = function (frm) {
 			["default_advance_received_account", { root_type: "Liability", account_type: "Receivable" }],
 			["default_advance_paid_account", { root_type: "Asset", account_type: "Payable" }],
 			["service_expense_account", { root_type: "Expense" }],
+			["expenses_added_to_stock_account", { root_type: "Expense" }],
+			["expenses_added_to_stock_contra_account", { root_type: "Expense" }],
 		],
 		function (i, v) {
 			erpnext.company.set_custom_query(frm, v);
@@ -319,6 +347,10 @@ erpnext.company.setup_queries = function (frm) {
 				[
 					"stock_received_but_not_billed",
 					{ root_type: "Liability", account_type: "Stock Received But Not Billed" },
+				],
+				[
+					"stock_delivered_but_not_billed",
+					{ root_type: "Asset", account_type: "Stock Delivered But Not Billed" },
 				],
 				[
 					"service_received_but_not_billed",

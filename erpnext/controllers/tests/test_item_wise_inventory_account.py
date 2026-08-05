@@ -1,29 +1,28 @@
 # Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
-import copy
-from collections import defaultdict
 
 import frappe
-from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, cint, today
+from frappe.utils import add_days, today
 
 from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
+from erpnext.manufacturing.doctype.work_order.mapper import make_stock_entry
 from erpnext.manufacturing.doctype.work_order.test_work_order import make_wo_order_test_record
-from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 from erpnext.stock.doctype.delivery_note.test_delivery_note import create_delivery_note
 from erpnext.stock.doctype.item.test_item import make_item
 from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestItemWiseInventoryAccount(IntegrationTestCase):
+class TestItemWiseInventoryAccount(ERPNextTestSuite):
 	def setUp(self):
-		self.company = make_company()
-		self.company_abbr = frappe.db.get_value("Company", self.company, "abbr")
+		self.company = "_Test Company with perpetual inventory"
+		self.company_abbr = "TCP1"
 		self.default_warehouse = frappe.db.get_value(
 			"Warehouse",
 			{"company": self.company, "is_group": 0, "warehouse_name": ("like", "%Stores%")},
 		)
+		frappe.db.set_value("Company", self.company, "enable_item_wise_inventory_account", 1)
 
 	def test_item_account_for_purchase_receipt_entry(self):
 		items = {
@@ -275,7 +274,7 @@ class TestItemWiseInventoryAccount(IntegrationTestCase):
 		}
 
 		for row in items:
-			self.make_item_group(items[row]["item_group"])
+			self._make_item_group(items[row]["item_group"])
 
 		inventory_account_dict = frappe._dict()
 		for item_name, item_data in items.items():
@@ -359,7 +358,7 @@ class TestItemWiseInventoryAccount(IntegrationTestCase):
 		}
 
 		for row in items:
-			self.make_item_group(items[row]["item_group"])
+			self._make_item_group(items[row]["item_group"])
 
 		inventory_account_dict = frappe._dict()
 		for item_name, item_data in items.items():
@@ -453,7 +452,7 @@ class TestItemWiseInventoryAccount(IntegrationTestCase):
 
 			self.assertEqual(sle_value[0].value, gl_value, f"GL Entry not created for {item_code} correctly")
 
-	def make_item_group(self, item_name):
+	def _make_item_group(self, item_name):
 		if not frappe.db.exists("Item Group", item_name):
 			item_group = frappe.get_doc(
 				{
@@ -579,23 +578,3 @@ class TestItemWiseInventoryAccount(IntegrationTestCase):
 				gl_value = gl_value * -1
 
 			self.assertEqual(sle_value, gl_value, f"GL Entry not created for {item_code} correctly")
-
-
-def make_company():
-	company = "_Test Company for Item Wise Inventory Account"
-	if frappe.db.exists("Company", company):
-		return company
-
-	company = frappe.get_doc(
-		{
-			"doctype": "Company",
-			"company_name": "_Test Company for Item Wise Inventory Account",
-			"abbr": "_TCIWIA",
-			"default_currency": "INR",
-			"country": "India",
-			"enable_perpetual_inventory": 1,
-			"enable_item_wise_inventory_account": 1,
-		}
-	).insert()
-
-	return company.name

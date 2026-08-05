@@ -3,8 +3,8 @@ import json
 from collections import defaultdict
 
 import frappe
-from frappe.query_builder.functions import CombineDatetime, Sum
-from frappe.utils import flt, nowtime
+from frappe.query_builder.functions import Sum
+from frappe.utils import flt
 from pypika import Order
 from pypika.functions import Coalesce
 
@@ -48,9 +48,18 @@ class DeprecatedSerialNoValuation:
 		if not posting_datetime and self.sle.posting_date:
 			posting_datetime = get_combine_datetime(self.sle.posting_date, self.sle.posting_time)
 
+		do_not_fetch_rate = frappe.db.get_single_value(
+			"Stock Reposting Settings", "do_not_fetch_incoming_rate_from_serial_no"
+		)
+
 		for serial_no in serial_nos:
 			sn_details = frappe.db.get_value("Serial No", serial_no, ["purchase_rate", "company"], as_dict=1)
-			if sn_details and sn_details.purchase_rate and sn_details.company == self.sle.company:
+			if (
+				sn_details
+				and sn_details.purchase_rate
+				and sn_details.company == self.sle.company
+				and (not frappe.flags.through_repost_item_valuation or not do_not_fetch_rate)
+			):
 				self.serial_no_incoming_rate[serial_no] += flt(sn_details.purchase_rate)
 				incoming_values += self.serial_no_incoming_rate[serial_no]
 				continue
@@ -66,6 +75,7 @@ class DeprecatedSerialNoValuation:
 						| (table.serial_no.like("%\n" + serial_no))
 						| (table.serial_no.like("%\n" + serial_no + "\n%"))
 					)
+					& (table.item_code == self.sle.item_code)
 					& (table.company == self.sle.company)
 					& (table.warehouse == self.sle.warehouse)
 					& (table.serial_and_batch_bundle.isnull())
@@ -97,7 +107,6 @@ class DeprecatedBatchNoValuation:
 		for ledger in entries:
 			self.stock_value_differece[ledger.batch_no] += flt(ledger.batch_value)
 			self.available_qty[ledger.batch_no] += flt(ledger.batch_qty)
-			self.total_qty[ledger.batch_no] += flt(ledger.batch_qty)
 
 	@deprecated(
 		"erpnext.stock.serial_batch_bundle.BatchNoValuation.get_sle_for_batches",
@@ -106,8 +115,6 @@ class DeprecatedBatchNoValuation:
 		"No known instructions.",
 	)
 	def get_sle_for_batches(self):
-		from erpnext.stock.utils import get_combine_datetime
-
 		if not self.batchwise_valuation_batches:
 			return []
 
@@ -126,6 +133,23 @@ class DeprecatedBatchNoValuation:
 					sle.creation < self.sle.creation
 				)
 
+		conditions = (
+			(sle.item_code == self.sle.item_code)
+			& (sle.warehouse == self.sle.warehouse)
+			& (sle.batch_no.isin(self.batchwise_valuation_batches))
+			& (sle.batch_no.isnotnull())
+			& (sle.is_cancelled == 0)
+		)
+		if timestamp_condition:
+			conditions &= timestamp_condition
+		if self.sle.name:
+			conditions &= sle.name != self.sle.name
+
+		if getattr(self, "stock_closing_from_datetime", None):
+			conditions &= sle.posting_datetime >= self.stock_closing_from_datetime
+
+		# MariaDB carries a row lock on the grouped query below; on postgres the caller
+		# (calculate_avg_rate) serializes via a txn-scoped advisory lock on (item, warehouse).
 		query = (
 			frappe.qb.from_(sle)
 			.select(
@@ -133,22 +157,11 @@ class DeprecatedBatchNoValuation:
 				Sum(sle.stock_value_difference).as_("batch_value"),
 				Sum(sle.actual_qty).as_("batch_qty"),
 			)
-			.where(
-				(sle.item_code == self.sle.item_code)
-				& (sle.warehouse == self.sle.warehouse)
-				& (sle.batch_no.isin(self.batchwise_valuation_batches))
-				& (sle.batch_no.isnotnull())
-				& (sle.is_cancelled == 0)
-			)
-			.for_update()
+			.where(conditions)
 			.groupby(sle.batch_no)
 		)
-
-		if timestamp_condition:
-			query = query.where(timestamp_condition)
-
-		if self.sle.name:
-			query = query.where(sle.name != self.sle.name)
+		if frappe.db.db_type != "postgres":
+			query = query.for_update()
 
 		return query.run(as_dict=True)
 
@@ -245,6 +258,19 @@ class DeprecatedBatchNoValuation:
 				sle.creation < self.sle.creation
 			)
 
+		conditions = (
+			(sle.item_code == self.sle.item_code)
+			& (sle.warehouse == self.sle.warehouse)
+			& (sle.batch_no.isnotnull())
+			& (sle.is_cancelled == 0)
+			& (sle.batch_no.isin(self.non_batchwise_valuation_batches))
+			& timestamp_condition
+		)
+		if self.sle.name:
+			conditions &= sle.name != self.sle.name
+
+		# MariaDB carries a row lock on the grouped query below; on postgres the caller
+		# (calculate_avg_rate) serializes via a txn-scoped advisory lock on (item, warehouse).
 		query = (
 			frappe.qb.from_(sle)
 			.inner_join(batch)
@@ -252,26 +278,33 @@ class DeprecatedBatchNoValuation:
 			.select(
 				sle.batch_no,
 				Sum(sle.actual_qty).as_("batch_qty"),
+				Sum(sle.stock_value_difference).as_("batch_value"),
 			)
-			.where(
-				(sle.item_code == self.sle.item_code)
-				& (sle.warehouse == self.sle.warehouse)
-				& (sle.batch_no.isnotnull())
-				& (sle.is_cancelled == 0)
-				& (sle.batch_no.isin(self.non_batchwise_valuation_batches))
-			)
-			.for_update()
-			.where(timestamp_condition)
+			.where(conditions)
 			.groupby(sle.batch_no)
 		)
 
-		if self.sle.name:
-			query = query.where(sle.name != self.sle.name)
+		# Moving Average items with no Use Batch wise Valuation but want to use batch wise valuation
+		moving_avg_item_non_batch_value = False
+		if valuation_method := self.get_valuation_method(self.sle.item_code):
+			if valuation_method == "Moving Average" and not frappe.db.get_single_value(
+				"Stock Settings", "do_not_use_batchwise_valuation"
+			):
+				query = query.where(batch.use_batchwise_valuation == 0)
+				moving_avg_item_non_batch_value = True
+
+		if frappe.db.db_type != "postgres":
+			query = query.for_update()
 
 		batch_data = query.run(as_dict=True)
 		for d in batch_data:
 			self.available_qty[d.batch_no] += flt(d.batch_qty)
-			self.total_qty[d.batch_no] += flt(d.batch_qty)
+			if moving_avg_item_non_batch_value:
+				self.non_batchwise_balance_qty[d.batch_no] += flt(d.batch_qty)
+				self.non_batchwise_balance_value[d.batch_no] += flt(d.batch_value)
+
+		if moving_avg_item_non_batch_value:
+			return
 
 		for d in batch_data:
 			if self.available_qty.get(d.batch_no):
@@ -350,6 +383,22 @@ class DeprecatedBatchNoValuation:
 				bundle.creation < self.sle.creation
 			)
 
+		conditions = (
+			(bundle.item_code == self.sle.item_code)
+			& (bundle.warehouse == self.sle.warehouse)
+			& (bundle_child.batch_no.isnotnull())
+			& (bundle.is_cancelled == 0)
+			& (bundle.docstatus == 1)
+			& (bundle.type_of_transaction.isin(["Inward", "Outward"]))
+			& (bundle_child.batch_no.isin(self.non_batchwise_valuation_batches))
+			& timestamp_condition
+		)
+		if self.sle.serial_and_batch_bundle:
+			conditions &= bundle.name != self.sle.serial_and_batch_bundle
+		conditions &= bundle.voucher_type != "Pick List"
+
+		# MariaDB carries a row lock on the grouped query below; on postgres the caller
+		# (calculate_avg_rate) serializes via a txn-scoped advisory lock on (item, warehouse).
 		query = (
 			frappe.qb.from_(bundle)
 			.inner_join(bundle_child)
@@ -361,29 +410,31 @@ class DeprecatedBatchNoValuation:
 				Sum(bundle_child.qty).as_("batch_qty"),
 				Sum(bundle_child.stock_value_difference).as_("batch_value"),
 			)
-			.where(
-				(bundle.item_code == self.sle.item_code)
-				& (bundle.warehouse == self.sle.warehouse)
-				& (bundle_child.batch_no.isnotnull())
-				& (bundle.is_cancelled == 0)
-				& (bundle.docstatus == 1)
-				& (bundle.type_of_transaction.isin(["Inward", "Outward"]))
-				& (bundle_child.batch_no.isin(self.non_batchwise_valuation_batches))
-			)
-			.for_update()
-			.where(timestamp_condition)
+			.where(conditions)
 			.groupby(bundle_child.batch_no)
 		)
 
-		if self.sle.serial_and_batch_bundle:
-			query = query.where(bundle.name != self.sle.serial_and_batch_bundle)
+		# Moving Average items with no Use Batch wise Valuation but want to use batch wise valuation
+		moving_avg_item_non_batch_value = False
+		if valuation_method := self.get_valuation_method(self.sle.item_code):
+			if valuation_method == "Moving Average" and not frappe.db.get_single_value(
+				"Stock Settings", "do_not_use_batchwise_valuation"
+			):
+				query = query.where(batch.use_batchwise_valuation == 0)
+				moving_avg_item_non_batch_value = True
 
-		query = query.where(bundle.voucher_type != "Pick List")
+		if frappe.db.db_type != "postgres":
+			query = query.for_update()
 
 		batch_data = query.run(as_dict=True)
 		for d in batch_data:
 			self.available_qty[d.batch_no] += flt(d.batch_qty)
-			self.total_qty[d.batch_no] += flt(d.batch_qty)
+			if moving_avg_item_non_batch_value:
+				self.non_batchwise_balance_qty[d.batch_no] += flt(d.batch_qty)
+				self.non_batchwise_balance_value[d.batch_no] += flt(d.batch_value)
+
+		if moving_avg_item_non_batch_value:
+			return
 
 		if not self.last_sle:
 			return
@@ -391,3 +442,8 @@ class DeprecatedBatchNoValuation:
 		for batch_no in self.available_qty:
 			self.non_batchwise_balance_value[batch_no] = flt(self.last_sle.stock_value)
 			self.non_batchwise_balance_qty[batch_no] = flt(self.last_sle.qty_after_transaction)
+
+	def get_valuation_method(self, item_code):
+		from erpnext.stock.utils import get_valuation_method
+
+		return get_valuation_method(item_code, self.sle.company)

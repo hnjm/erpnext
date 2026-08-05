@@ -7,6 +7,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.model.meta import get_field_precision
 from frappe.model.naming import set_name_from_naming_options
+from frappe.query_builder.functions import Sum
 from frappe.utils import create_batch, flt, fmt_money, now
 
 import erpnext
@@ -100,7 +101,7 @@ class GLEntry(Document):
 			self.validate_account_details(adv_adj)
 			self.validate_dimensions_for_pl_and_bs()
 			validate_balance_type(self.account, adv_adj)
-			validate_frozen_account(self.account, adv_adj)
+			validate_frozen_account(self.company, self.account, adv_adj)
 
 			if (
 				self.voucher_type == "Journal Entry"
@@ -193,7 +194,6 @@ class GLEntry(Document):
 				account_type == "Profit and Loss"
 				and self.company == dimension.company
 				and dimension.mandatory_for_pl
-				and not dimension.disabled
 				and not self.is_cancelled
 			):
 				if not self.get(dimension.fieldname):
@@ -207,7 +207,6 @@ class GLEntry(Document):
 				account_type == "Balance Sheet"
 				and self.company == dimension.company
 				and dimension.mandatory_for_bs
-				and not dimension.disabled
 				and not self.is_cancelled
 			):
 				if not self.get(dimension.fieldname):
@@ -276,7 +275,7 @@ class GLEntry(Document):
 			)
 
 	def validate_party(self):
-		validate_party_frozen_disabled(self.party_type, self.party)
+		validate_party_frozen_disabled(self.company, self.party_type, self.party)
 		validate_account_party_type(self)
 
 	def validate_currency(self):
@@ -333,10 +332,12 @@ def validate_balance_type(account, adv_adj=False):
 	if not adv_adj and account:
 		balance_must_be = frappe.get_cached_value("Account", account, "balance_must_be")
 		if balance_must_be:
-			balance = frappe.db.sql(
-				"""select sum(debit) - sum(credit)
-				from `tabGL Entry` where is_cancelled = 0 and account = %s""",
-				account,
+			gle = frappe.qb.DocType("GL Entry")
+			balance = (
+				frappe.qb.from_(gle)
+				.select(Sum(gle.debit) - Sum(gle.credit))
+				.where((gle.is_cancelled == 0) & (gle.account == account))
+				.run()
 			)[0][0]
 
 			if (balance_must_be == "Debit" and flt(balance) < 0) or (
@@ -350,44 +351,48 @@ def validate_balance_type(account, adv_adj=False):
 def update_outstanding_amt(
 	account, party_type, party, against_voucher_type, against_voucher, on_cancel=False
 ):
+	gle = frappe.qb.DocType("GL Entry")
+
+	conditions = (
+		(gle.against_voucher_type == against_voucher_type)
+		& (gle.against_voucher == against_voucher)
+		& (gle.voucher_type != "Invoice Discounting")
+	)
 	if party_type and party:
-		party_condition = " and party_type={} and party={}".format(
-			frappe.db.escape(party_type), frappe.db.escape(party)
-		)
-	else:
-		party_condition = ""
+		conditions &= (gle.party_type == party_type) & (gle.party == party)
 
 	if against_voucher_type == "Sales Invoice":
 		party_account = frappe.get_cached_value(against_voucher_type, against_voucher, "debit_to")
-		account_condition = f"and account in ({frappe.db.escape(account)}, {frappe.db.escape(party_account)})"
+		conditions &= gle.account.isin([account, party_account])
 	else:
-		account_condition = f" and account = {frappe.db.escape(account)}"
+		conditions &= gle.account == account
 
 	# get final outstanding amt
 	bal = flt(
-		frappe.db.sql(
-			f"""
-		select sum(debit_in_account_currency) - sum(credit_in_account_currency)
-		from `tabGL Entry`
-		where against_voucher_type=%s and against_voucher=%s
-		and voucher_type != 'Invoice Discounting'
-		{party_condition} {account_condition}""",
-			(against_voucher_type, against_voucher),
-		)[0][0]
+		frappe.qb.from_(gle)
+		.select(Sum(gle.debit_in_account_currency) - Sum(gle.credit_in_account_currency))
+		.where(conditions)
+		.run()[0][0]
 		or 0.0
 	)
 
 	if against_voucher_type == "Purchase Invoice":
 		bal = -bal
 	elif against_voucher_type == "Journal Entry":
+		je_conditions = (
+			(gle.voucher_type == "Journal Entry")
+			& (gle.voucher_no == against_voucher)
+			& (gle.account == account)
+			& (gle.against_voucher.isnull() | (gle.against_voucher == ""))
+		)
+		if party_type and party:
+			je_conditions &= (gle.party_type == party_type) & (gle.party == party)
+
 		against_voucher_amount = flt(
-			frappe.db.sql(
-				f"""
-			select sum(debit_in_account_currency) - sum(credit_in_account_currency)
-			from `tabGL Entry` where voucher_type = 'Journal Entry' and voucher_no = %s
-			and account = %s and (against_voucher is null or against_voucher='') {party_condition}""",
-				(against_voucher, account),
-			)[0][0]
+			frappe.qb.from_(gle)
+			.select(Sum(gle.debit_in_account_currency) - Sum(gle.credit_in_account_currency))
+			.where(je_conditions)
+			.run()[0][0]
 		)
 
 		if not against_voucher_amount:
@@ -419,16 +424,16 @@ def update_outstanding_amt(
 		ref_doc.set_status(update=True)
 
 
-def validate_frozen_account(account, adv_adj=None):
+def validate_frozen_account(company, account, adv_adj=None):
 	frozen_account = frappe.get_cached_value("Account", account, "freeze_account")
 	if frozen_account == "Yes" and not adv_adj:
-		frozen_accounts_modifier = frappe.get_cached_value(
-			"Accounts Settings", None, "frozen_accounts_modifier"
+		role_allowed_for_frozen_entries = frappe.get_cached_value(
+			"Company", company, "role_allowed_for_frozen_entries"
 		)
 
-		if not frozen_accounts_modifier:
+		if not role_allowed_for_frozen_entries:
 			frappe.throw(_("Account {0} is frozen").format(account))
-		elif frozen_accounts_modifier not in frappe.get_roles():
+		elif role_allowed_for_frozen_entries not in frappe.get_roles():
 			frappe.throw(_("Not authorized to edit frozen Account {0}").format(account))
 
 
@@ -442,7 +447,7 @@ def update_against_account(voucher_type, voucher_no):
 	if not entries:
 		return
 	company_currency = erpnext.get_company_currency(entries[0].company)
-	precision = get_field_precision(frappe.get_meta("GL Entry").get_field("debit"), company_currency)
+	precision = get_field_precision(frappe.get_meta("GL Entry").get_field("debit"), currency=company_currency)
 
 	accounts_debited, accounts_credited = [], []
 	for d in entries:
@@ -466,6 +471,25 @@ def on_doctype_update():
 	frappe.db.add_index("GL Entry", ["posting_date", "company"])
 	frappe.db.add_index("GL Entry", ["party_type", "party"])
 
+	if frappe.db.db_type == "postgres":
+		# Postgres-only partial/covering indexes for the financial reports (General Ledger, Trial
+		# Balance, Balance Sheet, P&L), which always filter `is_cancelled = 0` and scope by company.
+		# `where`/`include` are no-ops on MariaDB and its optimizer ignores these anyway, so they are
+		# added only on postgres to avoid dead write overhead on this insert-hot table.
+		frappe.db.add_index(
+			"GL Entry",
+			["company", "posting_date", "account"],
+			index_name="gle_active_detail",
+			where="is_cancelled = 0",
+		)
+		frappe.db.add_index(
+			"GL Entry",
+			["company", "account", "posting_date"],
+			index_name="gle_active_cover",
+			where="is_cancelled = 0",
+			include=["debit", "credit"],
+		)
+
 
 def rename_gle_sle_docs():
 	for doctype in ["GL Entry", "Stock Ledger Entry"]:
@@ -482,13 +506,18 @@ def rename_temporarily_named_docs(doctype):
 			oldname = doc.name
 			set_name_from_naming_options(autoname, doc)
 			newname = doc.name
-			frappe.db.sql(
-				f"UPDATE `tab{doctype}` SET name = %s, to_rename = 0, modified = %s where name = %s",
-				(newname, now(), oldname),
-			)
+			dt = frappe.qb.DocType(doctype)
+			(
+				frappe.qb.update(dt)
+				.set(dt.name, newname)
+				.set(dt.to_rename, 0)
+				.set(dt.modified, now())
+				.where(dt.name == oldname)
+			).run()
 
 			for hook_type in ("on_gle_rename", "on_sle_rename"):
 				for hook in frappe.get_hooks(hook_type):
 					frappe.call(hook, newname=newname, oldname=oldname)
 
-		frappe.db.commit()
+		if not frappe.in_test:
+			frappe.db.commit()

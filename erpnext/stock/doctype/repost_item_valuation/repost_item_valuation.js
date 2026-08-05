@@ -69,9 +69,15 @@ frappe.ui.form.on("Repost Item Valuation", {
 			}
 
 			if (frm.doc.status == "In Progress") {
-				frm.doc.current_index = data.current_index;
-				frm.doc.items_to_be_repost = data.items_to_be_repost;
-				frm.doc.total_reposting_count = data.total_reposting_count;
+				if (data.current_index) {
+					frm.doc.current_index = data.current_index;
+					frm.doc.items_to_be_repost = data.items_to_be_repost;
+				}
+
+				if (data.vouchers_posted) {
+					frm.doc.total_vouchers = data.total_vouchers;
+					frm.doc.vouchers_posted = data.vouchers_posted;
+				}
 
 				frm.dashboard.reset();
 				frm.trigger("show_reposting_progress");
@@ -86,6 +92,8 @@ frappe.ui.form.on("Repost Item Valuation", {
 			}).addClass("btn-primary");
 		}
 
+		frm.trigger("show_update_valuation_field");
+
 		if (frm.doc.status !== "Completed") {
 			frm.trigger("show_reposting_progress");
 		}
@@ -93,6 +101,13 @@ frappe.ui.form.on("Repost Item Valuation", {
 		if (frm.doc.status === "Queued" && frm.doc.docstatus === 1) {
 			frm.trigger("execute_reposting");
 		}
+	},
+
+	show_update_valuation_field(frm) {
+		frm.toggle_display(
+			"recalculate_valuation_rate",
+			["Purchase Receipt", "Purchase Invoice", "Stock Entry"].includes(frm.doc.voucher_type)
+		);
 	},
 
 	execute_reposting(frm) {
@@ -108,15 +123,31 @@ frappe.ui.form.on("Repost Item Valuation", {
 
 	show_reposting_progress: function (frm) {
 		var bars = [];
-
+		let title = "";
+		let progress = 0.0;
 		let total_count = frm.doc.items_to_be_repost ? JSON.parse(frm.doc.items_to_be_repost).length : 0;
 
-		if (frm.doc?.total_reposting_count) {
-			total_count = frm.doc.total_reposting_count;
+		if (total_count > 1) {
+			progress = flt((cint(frm.doc.current_index) / total_count) * 100, 2) || 0.5;
+			title = __("Reposting for Item-Wh Completed {0}%", [progress]);
+
+			bars.push({
+				title: title,
+				width: progress + "%",
+				progress_class: "progress-bar-success",
+			});
+
+			frm.dashboard.add_progress(__("Reposting Progress"), bars);
 		}
 
-		let progress = flt((cint(frm.doc.current_index) / total_count) * 100, 2) || 0.5;
-		var title = __("Reposting Completed {0}%", [progress]);
+		if (!frm.doc.vouchers_posted) {
+			return;
+		}
+
+		// Show voucher posting progress if vouchers are being reposted
+		bars = [];
+		progress = flt((cint(frm.doc.vouchers_posted) / cint(frm.doc.total_vouchers)) * 100, 2) || 0.5;
+		title = __("Reposting for Vouchers Completed {0}%", [progress]);
 
 		bars.push({
 			title: title,
@@ -124,7 +155,7 @@ frappe.ui.form.on("Repost Item Valuation", {
 			progress_class: "progress-bar-success",
 		});
 
-		frm.dashboard.add_progress(__("Reposting Progress"), bars);
+		frm.dashboard.add_progress(__("Reposting Vouchers Progress"), bars);
 	},
 
 	restart_reposting: function (frm) {
@@ -139,6 +170,7 @@ frappe.ui.form.on("Repost Item Valuation", {
 
 	voucher_type: function (frm) {
 		frm.trigger("set_company_on_transaction");
+		frm.trigger("show_update_valuation_field");
 	},
 
 	voucher_no: function (frm) {

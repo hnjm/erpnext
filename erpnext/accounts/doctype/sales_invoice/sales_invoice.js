@@ -25,6 +25,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 	company() {
 		super.company();
 		erpnext.accounts.dimensions.update_dimension(this.frm, this.frm.doctype);
+		this.frm.clear_table("tax_withholding_entries");
 	}
 	onload() {
 		var me = this;
@@ -43,6 +44,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 			"Unreconcile Payment Entries",
 			"Serial and Batch Bundle",
 			"Bank Transaction",
+			"Packing Slip",
 		];
 
 		if (!this.frm.doc.__islocal && !this.frm.doc.customer && this.frm.doc.debit_to) {
@@ -92,7 +94,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 			erpnext.accounts.ledger_preview.show_stock_ledger_preview(this.frm);
 		}
 
-		if (doc.docstatus == 1 && doc.outstanding_amount != 0) {
+		if (doc.docstatus == 1 && doc.outstanding_amount != 0 && frappe.model.can_create("Payment Entry")) {
 			this.frm.add_custom_button(__("Payment"), () => this.make_payment_entry(), __("Create"));
 			this.frm.page.set_inner_btn_group_as_primary(__("Create"));
 		}
@@ -114,29 +116,34 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 			}
 
 			if (cint(doc.update_stock) != 1) {
-				// show Make Delivery Note button only if Sales Invoice is not created from Delivery Note
-				var from_delivery_note = false;
-				from_delivery_note = this.frm.doc.items.some(function (item) {
-					return item.delivery_note ? true : false;
-				});
-
-				if (!from_delivery_note && !is_delivered_by_supplier) {
-					this.frm.add_custom_button(
-						__("Delivery"),
-						this.frm.cscript["Make Delivery Note"],
-						__("Create")
+				if (!is_delivered_by_supplier) {
+					const should_create_delivery_note = doc.items.some(
+						(item) =>
+							item.qty - item.delivered_qty > 0 &&
+							!item.scio_detail &&
+							!item.dn_detail &&
+							!item.delivered_by_supplier
 					);
+					if (should_create_delivery_note) {
+						this.frm.add_custom_button(
+							__("Delivery Note"),
+							this.frm.cscript["Make Delivery Note"],
+							__("Create")
+						);
+					}
 				}
 			}
 
 			if (doc.outstanding_amount > 0) {
-				this.frm.add_custom_button(
-					__("Payment Request"),
-					function () {
-						me.make_payment_request();
-					},
-					__("Create")
-				);
+				if (frappe.boot.user.in_create.includes("Payment Request")) {
+					this.frm.add_custom_button(
+						__("Payment Request"),
+						function () {
+							me.make_payment_request_with_schedule();
+						},
+						__("Create")
+					);
+				}
 				this.frm.add_custom_button(
 					__("Invoice Discounting"),
 					this.make_invoice_discounting.bind(this),
@@ -160,13 +167,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 				);
 			}
 		}
-
-		// Show buttons only when pos view is active
-		if (cint(doc.docstatus == 0) && this.frm.page.current_view_name !== "pos" && !doc.is_return) {
-			this.frm.cscript.sales_order_btn();
-			this.frm.cscript.delivery_note_btn();
-			this.frm.cscript.quotation_btn();
-		}
+		this.toggle_get_items();
 
 		this.set_default_print_format();
 		if (doc.docstatus == 1 && !doc.inter_company_invoice_reference) {
@@ -178,12 +179,31 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 						: "Inter Company Purchase Invoice";
 
 				me.frm.add_custom_button(
-					button_label,
+					__(button_label),
 					function () {
 						me.make_inter_company_invoice();
 					},
 					__("Create")
 				);
+
+				frappe.call({
+					method: "erpnext.accounts.doctype.sales_invoice.mapper.get_received_items",
+					args: {
+						reference_name: me.frm.doc.name,
+						doctype: "Purchase Invoice",
+						reference_fieldname: "sales_invoice_item",
+					},
+					callback: function (r) {
+						if (r.exc) return;
+						const received_items = r.message || {};
+						const has_pending_qty = me.frm.doc.items.some(
+							(item) => flt(item.qty) - flt(received_items[item.name] || 0) > 0
+						);
+						if (!has_pending_qty) {
+							me.frm.remove_custom_button(__(button_label), __("Create"));
+						}
+					},
+				});
 			}
 		}
 
@@ -196,21 +216,21 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 
 	make_invoice_discounting() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.create_invoice_discounting",
+			method: "erpnext.accounts.doctype.sales_invoice.mapper.create_invoice_discounting",
 			frm: this.frm,
 		});
 	}
 
 	make_dunning() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.create_dunning",
+			method: "erpnext.accounts.doctype.sales_invoice.mapper.create_dunning",
 			frm: this.frm,
 		});
 	}
 
 	make_maintenance_schedule() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_maintenance_schedule",
+			method: "erpnext.accounts.doctype.sales_invoice.mapper.make_maintenance_schedule",
 			frm: this.frm,
 		});
 	}
@@ -255,6 +275,93 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 		}
 	}
 
+	toggle_get_items() {
+		const buttons = ["Sales Order", "Quotation", "Timesheet", "Delivery Note"];
+
+		buttons.forEach((label) => {
+			this.frm.remove_custom_button(label, "Get Items From");
+		});
+
+		if (cint(this.frm.doc.docstatus) !== 0 || this.frm.page.current_view_name === "pos") {
+			return;
+		}
+
+		if (!this.frm.doc.is_return) {
+			this.frm.cscript.sales_order_btn();
+			this.frm.cscript.quotation_btn();
+			this.frm.cscript.timesheet_btn();
+		}
+
+		this.frm.cscript.delivery_note_btn();
+	}
+
+	timesheet_btn() {
+		var me = this;
+
+		me.frm.add_custom_button(
+			__("Timesheet"),
+			function () {
+				let d = new frappe.ui.Dialog({
+					title: __("Fetch Timesheet"),
+					fields: [
+						{
+							label: __("From"),
+							fieldname: "from_time",
+							fieldtype: "Date",
+							reqd: 1,
+						},
+						{
+							label: __("Item Code"),
+							fieldname: "item_code",
+							fieldtype: "Link",
+							options: "Item",
+							get_query: () => {
+								return {
+									query: "erpnext.controllers.queries.item_query",
+									filters: {
+										is_sales_item: 1,
+										customer: me.frm.doc.customer,
+										has_variants: 0,
+									},
+								};
+							},
+						},
+						{
+							fieldtype: "Column Break",
+							fieldname: "col_break_1",
+						},
+						{
+							label: __("To"),
+							fieldname: "to_time",
+							fieldtype: "Date",
+							reqd: 1,
+						},
+						{
+							label: __("Project"),
+							fieldname: "project",
+							fieldtype: "Link",
+							options: "Project",
+							default: me.frm.doc.project,
+						},
+					],
+					primary_action: function () {
+						const data = d.get_values();
+						me.frm.events.add_timesheet_data(me.frm, {
+							from_time: data.from_time,
+							to_time: data.to_time,
+							project: data.project,
+							item_code: data.item_code,
+						});
+						d.hide();
+					},
+					primary_action_label: __("Get Timesheets"),
+				});
+				d.show();
+			},
+			__("Get Items From")
+		);
+	}
+
 	sales_order_btn() {
 		var me = this;
 
@@ -273,7 +380,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 			__("Sales Order"),
 			function () {
 				erpnext.utils.map_current_doc({
-					method: "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
+					method: "erpnext.selling.doctype.sales_order.mapper.make_sales_invoice",
 					source_doctype: "Sales Order",
 					target: me.frm,
 					setters: {
@@ -295,7 +402,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 			__("Quotation"),
 			function () {
 				erpnext.utils.map_current_doc({
-					method: "erpnext.selling.doctype.quotation.quotation.make_sales_invoice",
+					method: "erpnext.selling.doctype.quotation.mapper.make_sales_invoice",
 					source_doctype: "Quotation",
 					target: me.frm,
 					setters: [
@@ -326,8 +433,14 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 		this.$delivery_note_btn = this.frm.add_custom_button(
 			__("Delivery Note"),
 			function () {
+				if (!me.frm.doc.customer) {
+					frappe.throw({
+						title: __("Mandatory"),
+						message: __("Please select a Customer"),
+					});
+				}
 				erpnext.utils.map_current_doc({
-					method: "erpnext.stock.doctype.delivery_note.delivery_note.make_sales_invoice",
+					method: "erpnext.stock.doctype.delivery_note.mapper.make_sales_invoice",
 					source_doctype: "Delivery Note",
 					target: me.frm,
 					date_field: "posting_date",
@@ -338,7 +451,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 						var filters = {
 							docstatus: 1,
 							company: me.frm.doc.company,
-							is_return: 0,
+							is_return: me.frm.doc.is_return,
 						};
 						if (me.frm.doc.customer) filters["customer"] = me.frm.doc.customer;
 						return {
@@ -382,6 +495,9 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 				),
 			},
 			function () {
+				me.frm.doc.apply_tds =
+					me.frm.tax_withholding_category || me.frm.tax_withholding_group ? 1 : 0;
+				me.frm.clear_table("tax_withholding_entries");
 				me.apply_pricing_rule();
 			}
 		);
@@ -404,7 +520,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 	make_inter_company_invoice() {
 		let me = this;
 		frappe.model.open_mapped_doc({
-			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_inter_company_purchase_invoice",
+			method: "erpnext.accounts.doctype.sales_invoice.mapper.make_inter_company_purchase_invoice",
 			frm: me.frm,
 		});
 	}
@@ -457,17 +573,26 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 	}
 
 	items_add(doc, cdt, cdn) {
-		var row = frappe.get_doc(cdt, cdn);
-		this.frm.script_manager.copy_from_first_row("items", row, [
-			"income_account",
-			"discount_account",
-			"cost_center",
-		]);
+		const row = frappe.get_doc(cdt, cdn);
+		const field_copy = ["income_account", "discount_account", "cost_center"];
+		if (doc.project) {
+			frappe.model.set_value(cdt, cdn, "project", doc.project);
+		} else {
+			field_copy.push("project");
+		}
+		this.frm.script_manager.copy_from_first_row("items", row, field_copy);
 	}
 
 	set_dynamic_labels() {
 		super.set_dynamic_labels();
 		this.frm.events.hide_fields(this.frm);
+		const hide_update_stock = cint(this.frm.doc.is_debit_note) || cint(this.frm.doc.has_subcontracted);
+		// frm.set_df_property mutates a per-document copy, not the doctype's shared field
+		// metadata, so this always reflects the original (Customize Form) hidden value.
+		const hidden_by_customization = cint(
+			frappe.meta.get_docfield("Sales Invoice", "update_stock")?.hidden
+		);
+		this.frm.set_df_property("update_stock", "hidden", hide_update_stock || hidden_by_customization);
 	}
 
 	items_on_form_rendered() {
@@ -480,7 +605,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 
 	make_sales_return() {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_sales_return",
+			method: "erpnext.accounts.doctype.sales_invoice.mapper.make_sales_return",
 			frm: this.frm,
 		});
 	}
@@ -598,6 +723,14 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 
 		this.calculate_taxes_and_totals();
 	}
+
+	apply_tds(frm) {
+		this.frm.clear_table("tax_withholding_entries");
+	}
+
+	is_return() {
+		this.toggle_get_items();
+	}
 };
 
 // for backward compatibility: combine new and previous states
@@ -605,7 +738,7 @@ extend_cscript(cur_frm.cscript, new erpnext.accounts.SalesInvoiceController({ fr
 
 cur_frm.cscript["Make Delivery Note"] = function () {
 	frappe.model.open_mapped_doc({
-		method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_delivery_note",
+		method: "erpnext.accounts.doctype.sales_invoice.mapper.make_delivery_note",
 		frm: cur_frm,
 	});
 };
@@ -616,10 +749,6 @@ cur_frm.cscript.income_account = function (doc, cdt, cdn) {
 
 cur_frm.cscript.expense_account = function (doc, cdt, cdn) {
 	erpnext.utils.copy_value_in_all_rows(doc, cdt, cdn, "items", "expense_account");
-};
-
-cur_frm.cscript.cost_center = function (doc, cdt, cdn) {
-	erpnext.utils.copy_value_in_all_rows(doc, cdt, cdn, "items", "cost_center");
 };
 
 frappe.ui.form.on("Sales Invoice", {
@@ -818,6 +947,16 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	onload: function (frm) {
 		frm.redemption_conversion_factor = null;
+
+		if (frm.doc.__onload && frm.doc.customer) {
+			if (frm.is_new()) {
+				frm.doc.apply_tds = frm.doc.__onload.apply_tds ? 1 : 0;
+			}
+		}
+
+		if (frm.is_new()) {
+			frm.clear_table("tax_withholding_entries");
+		}
 	},
 
 	update_stock: function (frm, dt, dn) {
@@ -1042,78 +1181,20 @@ frappe.ui.form.on("Sales Invoice", {
 		);
 	},
 
-	refresh: function (frm) {
-		if (frm.doc.docstatus === 0 && !frm.doc.is_return) {
-			frm.add_custom_button(
-				__("Timesheet"),
-				function () {
-					let d = new frappe.ui.Dialog({
-						title: __("Fetch Timesheet"),
-						fields: [
-							{
-								label: __("From"),
-								fieldname: "from_time",
-								fieldtype: "Date",
-								reqd: 1,
-							},
-							{
-								label: __("Item Code"),
-								fieldname: "item_code",
-								fieldtype: "Link",
-								options: "Item",
-								get_query: () => {
-									return {
-										query: "erpnext.controllers.queries.item_query",
-										filters: {
-											is_sales_item: 1,
-											customer: frm.doc.customer,
-											has_variants: 0,
-										},
-									};
-								},
-							},
-							{
-								fieldtype: "Column Break",
-								fieldname: "col_break_1",
-							},
-							{
-								label: __("To"),
-								fieldname: "to_time",
-								fieldtype: "Date",
-								reqd: 1,
-							},
-							{
-								label: __("Project"),
-								fieldname: "project",
-								fieldtype: "Link",
-								options: "Project",
-								default: frm.doc.project,
-							},
-						],
-						primary_action: function () {
-							const data = d.get_values();
-							frm.events.add_timesheet_data(frm, {
-								from_time: data.from_time,
-								to_time: data.to_time,
-								project: data.project,
-								item_code: data.item_code,
-							});
-							d.hide();
-						},
-						primary_action_label: __("Get Timesheets"),
-					});
-					d.show();
-				},
-				__("Get Items From")
-			);
+	is_debit_note: function (frm) {
+		if (frm.doc.is_debit_note) {
+			frm.set_value("update_stock", 0);
 		}
+		// visibility handled by set_dynamic_labels()
+		frm.cscript.set_dynamic_labels();
+	},
 
+	refresh: function (frm) {
 		if (frm.doc.is_debit_note) {
 			frm.set_df_property("return_against", "label", __("Adjustment Against"));
 		}
 
 		frm.set_df_property("update_stock", "read_only", frm.doc.has_subcontracted);
-		frm.toggle_display("update_stock", !frm.doc.has_subcontracted);
 	},
 });
 

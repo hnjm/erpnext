@@ -7,8 +7,10 @@ erpnext.PointOfSale.ItemSelector = class {
 		this.events = events;
 		this.pos_profile = pos_profile;
 		this.hide_images = settings.hide_images;
+		this.item_display_class = this.hide_images ? "hide-item-image" : "show-item-image";
 		this.auto_add_item = settings.auto_add_item_to_cart;
 
+		this.item_ready_group = this.get_parent_item_group();
 		this.inti_component();
 	}
 
@@ -35,36 +37,42 @@ erpnext.PointOfSale.ItemSelector = class {
 		this.$component = this.wrapper.find(".items-selector");
 		this.$items_container = this.$component.find(".items-container");
 
-		const show_hide_images = this.hide_images ? "hide-item-image" : "show-item-image";
-		this.$items_container.addClass(show_hide_images);
+		this.$items_container.addClass(this.item_display_class);
+	}
+
+	async get_parent_item_group() {
+		const r = await frappe.call({
+			method: "erpnext.selling.page.point_of_sale.point_of_sale.get_parent_item_group",
+			args: {
+				pos_profile: this.pos_profile,
+			},
+		});
+		if (r.message) this.item_group = this.parent_item_group = r.message;
 	}
 
 	async load_items_data() {
-		if (!this.item_group) {
-			frappe.call({
-				method: "erpnext.selling.page.point_of_sale.point_of_sale.get_parent_item_group",
-				async: false,
-				callback: (r) => {
-					if (r.message) this.parent_item_group = r.message;
-				},
-			});
-		}
+		await this.item_ready_group;
+
+		this.start_item_loading_animation();
+
 		if (!this.price_list) {
 			const res = await frappe.db.get_value("POS Profile", this.pos_profile, "selling_price_list");
 			this.price_list = res.message.selling_price_list;
 		}
 
-		this.get_items({}).then(({ message }) => {
-			this.render_item_list(message.items);
-		});
+		this.get_items({})
+			.then(({ message }) => {
+				this.render_item_list(message.items);
+			})
+			.always(() => {
+				this.stop_item_loading_animation();
+			});
 	}
 
 	get_items({ start = 0, page_length = 40, search_term = "" }) {
 		const doc = this.events.get_frm().doc;
 		const price_list = (doc && doc.selling_price_list) || this.price_list;
 		let { item_group, pos_profile } = this;
-
-		!item_group && (item_group = this.parent_item_group);
 
 		return frappe.call({
 			method: "erpnext.selling.page.point_of_sale.point_of_sale.get_items",
@@ -76,29 +84,65 @@ erpnext.PointOfSale.ItemSelector = class {
 	render_item_list(items) {
 		this.$items_container.html("");
 
+		if (!items?.length) {
+			this.set_items_not_found_banner();
+			return;
+		}
+
+		if (this.$items_container.hasClass("items-not-found")) {
+			this.$items_container.removeClass("items-not-found");
+			this.$items_container.addClass(this.item_display_class);
+		}
+
 		if (this.hide_images) {
 			this.$items_container.append(this.render_item_list_column_header());
 		}
 
-		items.forEach((item) => {
+		items?.forEach((item) => {
 			const item_html = this.get_item_html(item);
 			this.$items_container.append(item_html);
 		});
 	}
 
+	set_items_not_found_banner() {
+		this.$items_container.removeClass(this.item_display_class);
+		this.$items_container.addClass("items-not-found");
+		this.$items_container.html(__("Items not found."));
+	}
+
 	render_item_list_column_header() {
 		return `<div class="list-column">
-			<div class="column-name">Name</div>
-			<div class="column-price">Price</div>
-			<div class="column-uom">UOM</div>
-			<div class="column-qty-available">Quantity Available</div>
+			<div class="column-name">${__("Name")}</div>
+			<div class="column-price">${__("Price")}</div>
+			<div class="column-uom">${__("UOM")}</div>
+			<div class="column-qty-available">${__("Quantity Available")}</div>
 		</div>`;
 	}
 
 	get_item_html(item) {
 		const me = this;
 		// eslint-disable-next-line no-unused-vars
-		const { item_image, serial_no, batch_no, barcode, actual_qty, uom, price_list_rate } = item;
+		function sanitize_item_data(item) {
+			return Object.fromEntries(
+				Object.entries(item).map(([key, value]) => [
+					key,
+					typeof value === "string" ? frappe.utils.escape_html(value) : value,
+				])
+			);
+		}
+		const sanitize_item = sanitize_item_data(item);
+		const {
+			item_code,
+			stock_uom,
+			item_name,
+			item_image,
+			serial_no,
+			batch_no,
+			barcode,
+			actual_qty,
+			uom,
+			price_list_rate,
+		} = sanitize_item;
 		const precision = flt(price_list_rate, 2) % 1 != 0 ? 2 : 0;
 		let indicator_color;
 		let qty_to_display = actual_qty;
@@ -125,37 +169,41 @@ erpnext.PointOfSale.ItemSelector = class {
 							<img
 								onerror="cur_pos.item_selector.handle_broken_image(this)"
 								class="item-img" src="${item_image}"
-								alt="${item.item_name}"
+								alt="${item_name}"
 							>
 						</div>`;
 			} else {
 				return `<div class="item-qty-pill">
 							<span class="indicator-pill whitespace-nowrap ${indicator_color}">${qty_to_display}</span>
 						</div>
-						<div class="item-display abbr">${frappe.get_abbr(item.item_name)}</div>`;
+						<div class="item-display abbr">${frappe.get_abbr(item_name)}</div>`;
 			}
 		}
 
 		return `<div class="item-wrapper"
-				data-item-code="${escape(item.item_code)}" data-serial-no="${escape(serial_no)}"
-				data-batch-no="${escape(batch_no)}" data-uom="${escape(uom)}"
-				data-rate="${escape(price_list_rate || 0)}"
-				data-stock-uom="${escape(item.stock_uom)}"
-				title="${item.item_name}">
+				data-item-code="${item_code}" data-serial-no="${serial_no}"
+				data-batch-no="${batch_no}" data-uom="${uom}"
+				data-rate="${price_list_rate || 0}"
+				data-stock-uom="${stock_uom}"
+				title="${item_name}">
 
 				${get_item_image_html()}
 
 				<div class="item-detail">
 					<div class="item-name">
-						${!me.hide_images ? frappe.ellipsis(item.item_name, 18) : item.item_name}
+						${!me.hide_images ? frappe.ellipsis(item_name, 18) : item_name}
 					</div>
 					${
 						!me.hide_images
 							? `<div class="item-rate">
-								${format_currency(price_list_rate, item.currency, precision) || 0} / ${uom}
+								${frappe.utils.escape_html(format_currency(price_list_rate, item.currency, precision)) || 0} / ${uom}
 							</div>`
 							: `
-							<div class="item-price">${format_currency(price_list_rate, item.currency, precision) || 0}</div>
+							<div class="item-price">${
+								frappe.utils.escape_html(
+									format_currency(price_list_rate, item.currency, precision)
+								) || 0
+							}</div>
 							<div class="item-uom">${uom}</div>
 							<div class="item-qty-available">${qty_to_display || "Non stock item"}</div>
 							`
@@ -165,7 +213,7 @@ erpnext.PointOfSale.ItemSelector = class {
 	}
 
 	handle_broken_image($img) {
-		const item_abbr = $($img).attr("alt");
+		const item_abbr = frappe.utils.escape_html($($img).attr("alt"));
 		$($img).parent().replaceWith(`<div class="item-display abbr">${item_abbr}</div>`);
 	}
 
@@ -189,17 +237,18 @@ erpnext.PointOfSale.ItemSelector = class {
 				fieldtype: "Link",
 				options: "Item Group",
 				placeholder: __("Select item group"),
+				only_select: true,
 				onchange: function () {
 					me.item_group = this.value;
 					!me.item_group && (me.item_group = me.parent_item_group);
 					me.filter_items();
+					me.set_item_selector_filter_label(this.value);
 				},
 				get_query: function () {
-					const doc = me.events.get_frm().doc;
 					return {
 						query: "erpnext.selling.page.point_of_sale.point_of_sale.item_group_query",
 						filters: {
-							pos_profile: doc ? doc.pos_profile : "",
+							pos_profile: me.pos_profile,
 						},
 					};
 				},
@@ -210,23 +259,48 @@ erpnext.PointOfSale.ItemSelector = class {
 		this.search_field.toggle_label(false);
 		this.item_group_field.toggle_label(false);
 
+		$(this.item_group_field.awesomplete.ul).css("min-width", "unset");
+
+		this.hide_open_link_btn();
 		this.attach_clear_btn();
+	}
+
+	set_item_selector_filter_label(value) {
+		const $filter_label = this.$component.find(".label");
+
+		$filter_label.html(value ? frappe.utils.escape_html(__(value)) : __("All Items"));
+	}
+
+	hide_open_link_btn() {
+		$(this.item_group_field.$wrapper.find(".btn-open")).css("display", "none");
 	}
 
 	attach_clear_btn() {
 		this.search_field.$wrapper.find(".control-input").append(
 			`<span class="link-btn">
 				<a class="btn-open no-decoration" title="${__("Clear")}">
-					${frappe.utils.icon("close", "sm")}
+					${frappe.utils.icon("x", "sm")}
 				</a>
 			</span>`
 		);
 
+		this.item_group_field.$wrapper.find(".link-btn").append(
+			`<a class="btn-clear" tabindex="-1" style="display: inline-block;" title="${__("Clear Link")}">
+				${frappe.utils.icon("x", "xs")}
+			</a>`
+		);
+
 		this.$clear_search_btn = this.search_field.$wrapper.find(".link-btn");
+		this.$clear_item_group_btn = this.item_group_field.$wrapper.find(".btn-clear");
 
 		this.$clear_search_btn.on("click", "a", () => {
 			this.set_search_value("");
 			this.search_field.set_focus();
+		});
+
+		this.$clear_item_group_btn.on("click", () => {
+			$(this.item_group_field.$input[0]).val("").trigger("input");
+			this.item_group_field.set_focus();
 		});
 	}
 
@@ -279,12 +353,12 @@ erpnext.PointOfSale.ItemSelector = class {
 
 		this.$component.on("click", ".item-wrapper", function () {
 			const $item = $(this);
-			const item_code = unescape($item.attr("data-item-code"));
-			let batch_no = unescape($item.attr("data-batch-no"));
-			let serial_no = unescape($item.attr("data-serial-no"));
-			let uom = unescape($item.attr("data-uom"));
-			let rate = unescape($item.attr("data-rate"));
-			let stock_uom = unescape($item.attr("data-stock-uom"));
+			const item_code = $item.attr("data-item-code");
+			let batch_no = $item.attr("data-batch-no");
+			let serial_no = $item.attr("data-serial-no");
+			let uom = $item.attr("data-uom");
+			let rate = $item.attr("data-rate");
+			let stock_uom = $item.attr("data-stock-uom");
 
 			// escape(undefined) returns "undefined" then unescape returns "undefined"
 			batch_no = batch_no === "undefined" ? undefined : batch_no;
@@ -298,7 +372,6 @@ erpnext.PointOfSale.ItemSelector = class {
 				value: "+1",
 				item: { item_code, batch_no, serial_no, uom, rate, stock_uom },
 			});
-			me.search_field.set_focus();
 		});
 
 		this.search_field.$input.on("input", (e) => {
@@ -360,6 +433,8 @@ erpnext.PointOfSale.ItemSelector = class {
 	}
 
 	filter_items({ search_term = "" } = {}) {
+		this.start_item_loading_animation();
+
 		const selling_price_list = this.events.get_frm().doc.selling_price_list;
 
 		if (search_term) {
@@ -380,19 +455,31 @@ erpnext.PointOfSale.ItemSelector = class {
 			}
 		}
 
-		this.get_items({ search_term }).then(({ message }) => {
-			// eslint-disable-next-line no-unused-vars
-			const { items, serial_no, batch_no, barcode } = message;
-			if (search_term && !barcode) {
-				this.search_index[selling_price_list][search_term] = items;
-			}
-			this.items = items;
-			this.render_item_list(items);
-			this.auto_add_item &&
-				this.search_field.$input[0].value &&
-				this.items.length == 1 &&
-				this.add_filtered_item_to_cart();
-		});
+		this.get_items({ search_term })
+			.then(({ message }) => {
+				// eslint-disable-next-line no-unused-vars
+				const { items, serial_no, batch_no, barcode } = message;
+				if (search_term && !barcode) {
+					this.search_index[selling_price_list][search_term] = items;
+				}
+				this.items = items;
+				this.render_item_list(items);
+				this.auto_add_item &&
+					this.search_field.$input[0].value &&
+					this.items.length == 1 &&
+					this.add_filtered_item_to_cart();
+			})
+			.always(() => {
+				this.stop_item_loading_animation();
+			});
+	}
+
+	start_item_loading_animation() {
+		this.$items_container.addClass("is-loading");
+	}
+
+	stop_item_loading_animation() {
+		this.$items_container.removeClass("is-loading");
 	}
 
 	add_filtered_item_to_cart() {

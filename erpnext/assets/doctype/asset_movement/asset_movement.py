@@ -5,7 +5,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import cstr, get_link_to_form
+from frappe.utils import cstr, get_datetime, get_link_to_form
 
 from erpnext.assets.doctype.asset_activity.asset_activity import add_asset_activity
 
@@ -34,6 +34,7 @@ class AssetMovement(Document):
 		for d in self.assets:
 			self.validate_asset(d)
 			self.validate_movement(d)
+			self.validate_transaction_date(d)
 
 	def validate_asset(self, d):
 		status, company = frappe.db.get_value("Asset", d.asset, ["status", "company"])
@@ -50,6 +51,18 @@ class AssetMovement(Document):
 			self.validate_location(d)
 		else:
 			self.validate_employee(d)
+
+	def validate_transaction_date(self, d):
+		previous_movement_date = frappe.db.get_value(
+			"Asset Movement",
+			[["Asset Movement Item", "asset", "=", d.asset], ["docstatus", "=", 1]],
+			"transaction_date",
+			order_by="transaction_date desc",
+		)
+		if previous_movement_date and get_datetime(previous_movement_date) > get_datetime(
+			self.transaction_date
+		):
+			frappe.throw(_("Transaction date can't be earlier than previous movement date"))
 
 	def validate_location_and_employee(self, d):
 		self.validate_location(d)
@@ -114,24 +127,21 @@ class AssetMovement(Document):
 
 	def get_latest_location_and_custodian(self, asset):
 		current_location, current_employee = "", ""
-		cond = "1=1"
 
 		# latest entry corresponds to current document's location, employee when transaction date > previous dates
 		# In case of cancellation it corresponds to previous latest document's location, employee
-		args = {"asset": asset, "company": self.company}
-		latest_movement_entry = frappe.db.sql(
-			f"""
-			SELECT asm_item.target_location, asm_item.to_employee
-			FROM `tabAsset Movement Item` asm_item
-			JOIN `tabAsset Movement` asm ON asm_item.parent = asm.name
-			WHERE
-				asm_item.asset = %(asset)s AND
-				asm.company = %(company)s AND
-				asm.docstatus = 1 AND {cond}
-			ORDER BY asm.transaction_date DESC
-			LIMIT 1
-			""",
-			args,
+		asm = frappe.qb.DocType("Asset Movement")
+		asm_item = frappe.qb.DocType("Asset Movement Item")
+		latest_movement_entry = (
+			frappe.qb.from_(asm_item)
+			.inner_join(asm)
+			.on(asm_item.parent == asm.name)
+			.select(asm_item.target_location, asm_item.to_employee)
+			.where((asm_item.asset == asset) & (asm.company == self.company) & (asm.docstatus == 1))
+			.orderby(asm.transaction_date, order=frappe.qb.desc)
+			.orderby(asm.name, order=frappe.qb.desc)
+			.limit(1)
+			.run()
 		)
 
 		if latest_movement_entry:

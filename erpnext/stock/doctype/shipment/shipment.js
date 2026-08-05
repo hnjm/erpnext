@@ -261,9 +261,9 @@ frappe.ui.form.on("Shipment", {
 		frappe.db.get_value(
 			"User",
 			{ name: frappe.session.user },
-			["full_name", "last_name", "email", "phone", "mobile_no"],
+			["full_name", "email", "phone", "mobile_no"],
 			(r) => {
-				if (!(r.last_name && r.email && (r.phone || r.mobile_no))) {
+				if (!(r.full_name && r.email && (r.phone || r.mobile_no))) {
 					if (delivery_type == "Delivery") {
 						frm.set_value("delivery_company", "");
 						frm.set_value("delivery_contact", "");
@@ -272,9 +272,9 @@ frappe.ui.form.on("Shipment", {
 						frm.set_value("pickup_contact", "");
 					}
 					frappe.throw(
-						__("Last Name, Email or Phone/Mobile of the user are mandatory to continue.") +
+						__("Full Name, Email or Phone/Mobile of the user are mandatory to continue.") +
 							"</br>" +
-							__("Please first set Last Name, Email and Phone for the user") +
+							__("Please first set Full Name, Email and Phone for the user") +
 							` <a href="/app/user/${frappe.session.user}">${frappe.session.user}</a>`
 					);
 				}
@@ -439,9 +439,10 @@ frappe.ui.form.on("Shipment Delivery Note", {
 			let row_index = row.idx - 1;
 			if (validate_duplicate(frm, "shipment_delivery_note", row.delivery_note, row_index)) {
 				frappe.throw(
-					__("You have entered a duplicate Delivery Note on Row") +
-						` ${row.idx}. ` +
-						__("Please rectify and try again.")
+					__(
+						"You have entered a duplicate Delivery Note on row {0}. Please rectify and try again.",
+						[row.idx]
+					)
 				);
 			}
 		}

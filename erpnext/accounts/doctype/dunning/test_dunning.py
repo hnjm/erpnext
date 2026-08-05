@@ -4,37 +4,21 @@ import json
 
 import frappe
 from frappe.model import mapper
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, nowdate, today
 
 from erpnext import get_default_cost_center
 from erpnext.accounts.doctype.payment_entry.test_payment_entry import get_payment_entry
-from erpnext.accounts.doctype.purchase_invoice.test_purchase_invoice import (
-	unlink_payment_on_cancel_of_invoice,
-)
-from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
+from erpnext.accounts.doctype.sales_invoice.mapper import (
 	create_dunning as create_dunning_from_sales_invoice,
 )
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import (
+	create_sales_invoice,
 	create_sales_invoice_against_cost_center,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Company", "Cost Center"]
 
-
-class TestDunning(IntegrationTestCase):
-	@classmethod
-	def setUpClass(cls):
-		super().setUpClass()
-		create_dunning_type("First Notice", fee=0.0, interest=0.0, is_default=1)
-		create_dunning_type("Second Notice", fee=10.0, interest=10.0, is_default=0)
-		unlink_payment_on_cancel_of_invoice()
-
-	@classmethod
-	def tearDownClass(cls):
-		unlink_payment_on_cancel_of_invoice(0)
-		super().tearDownClass()
-
+class TestDunning(ERPNextTestSuite):
 	def test_dunning_without_fees(self):
 		dunning = create_dunning(overdue_days=20)
 
@@ -90,7 +74,7 @@ class TestDunning(IntegrationTestCase):
 		dunning = create_dunning_from_sales_invoice(si1.name)
 		dunning.overdue_payments = []
 
-		method = "erpnext.accounts.doctype.sales_invoice.sales_invoice.create_dunning"
+		method = "erpnext.accounts.doctype.sales_invoice.mapper.create_dunning"
 		updated_dunning = mapper.map_docs(method, json.dumps([si1.name, si2.name]), dunning)
 
 		self.assertEqual(len(updated_dunning.overdue_payments), 2)
@@ -139,6 +123,41 @@ class TestDunning(IntegrationTestCase):
 		self.assertEqual(sales_invoice.status, "Overdue")
 		self.assertEqual(dunning.status, "Unresolved")
 
+	def test_payment_against_invoice_with_multiple_overdue_installments_in_dunning(self):
+		"""
+		When an invoice has more than one overdue installment, its Dunning holds one
+		Overdue Payment row per installment. Submitting a Payment Entry for the invoice
+		must resolve the Dunning without raising a TimestampMismatchError caused by the
+		same Dunning being loaded and saved more than once.
+		"""
+		create_payment_terms_template_for_dunning()
+		# Post far enough in the past that BOTH installments (5 and 10 credit days) are overdue.
+		sales_invoice = create_sales_invoice_against_cost_center(
+			posting_date=add_days(today(), -15),
+			qty=1,
+			rate=100,
+			do_not_submit=True,
+		)
+		sales_invoice.payment_terms_template = "_Test 50-50 for Dunning"
+		sales_invoice.submit()
+
+		dunning = create_dunning_from_sales_invoice(sales_invoice.name)
+		# Two overdue installments -> two overdue payment rows for the same invoice.
+		self.assertEqual(len(dunning.overdue_payments), 2)
+		dunning.submit()
+		self.assertEqual(dunning.status, "Unresolved")
+
+		# Pay the invoice in full. This previously raised TimestampMismatchError on the Dunning.
+		pe = get_payment_entry("Sales Invoice", sales_invoice.name)
+		pe.reference_no, pe.reference_date = "3", nowdate()
+		pe.insert()
+		pe.submit()
+
+		sales_invoice.reload()
+		dunning.reload()
+		self.assertEqual(sales_invoice.outstanding_amount, 0)
+		self.assertEqual(dunning.status, "Resolved")
+
 	def test_dunning_resolution_from_credit_note(self):
 		"""
 		Test that dunning is resolved when a credit note is issued against the original invoice.
@@ -168,6 +187,37 @@ class TestDunning(IntegrationTestCase):
 		credit_note.cancel()
 		dunning.reload()
 		self.assertEqual(dunning.status, "Unresolved")
+
+	@ERPNextTestSuite.change_settings(
+		"Accounts Settings", {"allow_multi_currency_invoices_against_single_party_account": 1}
+	)
+	def test_dunning_outstanding_uses_transaction_currency(self):
+		"""
+		Regression for #56006: dunning outstanding must be in the invoice transaction
+		currency, not in the party account currency.
+
+		A USD invoice posted against an INR receivable account stores
+		outstanding_amount in INR (party account currency).  The overdue payment
+		row on the resulting Dunning must carry the USD amount, not the INR amount.
+		"""
+		si = create_sales_invoice(
+			posting_date=add_days(today(), -10),
+			currency="USD",
+			conversion_rate=50,
+			rate=100,
+			debit_to="Debtors - _TC",
+		)
+
+		# Sanity-check the invoice state before creating the dunning
+		self.assertEqual(si.currency, "USD")
+		self.assertEqual(si.outstanding_amount, 5000.0)  # INR (party account currency)
+		self.assertEqual(si.payment_schedule[0].outstanding, 100.0)  # USD (transaction currency)
+
+		dunning = create_dunning_from_sales_invoice(si.name)
+
+		self.assertEqual(len(dunning.overdue_payments), 1)
+		# Must reflect 100 USD, not 5000 INR mislabelled as USD
+		self.assertEqual(dunning.overdue_payments[0].outstanding, 100.0)
 
 	def test_dunning_not_affected_by_standalone_credit_note(self):
 		"""

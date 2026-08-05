@@ -3,22 +3,20 @@
 
 import frappe
 from frappe import qb
-from frappe.tests import IntegrationTestCase
 from frappe.utils import nowdate
 
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 from erpnext.accounts.utils import run_ledger_health_checks
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestLedgerHealth(AccountsTestMixin, IntegrationTestCase):
+class TestLedgerHealth(ERPNextTestSuite, AccountsTestMixin):
 	def setUp(self):
-		self.create_company()
-		self.create_customer()
+		self.company = "_Test Company"
+		self.customer = "_Test Customer"
+		self.debit_to = "Debtors - _TC"
+		self.income_account = "Sales - _TC"
 		self.configure_monitoring_tool()
-		self.clear_old_entries()
-
-	def tearDown(self):
-		frappe.db.rollback()
 
 	def configure_monitoring_tool(self):
 		monitor_settings = frappe.get_doc("Ledger Health Monitor")

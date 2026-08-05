@@ -8,6 +8,9 @@ frappe.pages["sales-funnel"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
+	$(wrapper).find(".layout-main").addClass("row");
+	$(wrapper).find(".layout-main-section-wrapper").addClass("col-md-12");
+
 	wrapper.sales_funnel = new erpnext.SalesFunnel(wrapper);
 
 	frappe.breadcrumbs.add("Selling");
@@ -54,7 +57,7 @@ erpnext.SalesFunnel = class SalesFunnel {
 					function () {
 						me.get_data();
 					},
-					"fa fa-refresh"
+					"refresh-cw"
 				),
 			});
 
@@ -108,7 +111,7 @@ erpnext.SalesFunnel = class SalesFunnel {
 	get_data(btn) {
 		var me = this;
 		if (!this.company) {
-			frappe.throw(__("Please Select a Company."));
+			frappe.throw(__("Please select a company."));
 		}
 
 		const method_map = {

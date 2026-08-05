@@ -22,15 +22,19 @@ frappe.ui.form.on("Material Request", {
 			return doc.stock_qty <= doc.ordered_qty ? "green" : "orange";
 		});
 
-		frm.set_query("item_code", "items", function () {
+		frm.set_query("item_code", "items", function (doc) {
 			return {
 				query: "erpnext.controllers.queries.item_query",
+				filters: { company: doc.company },
 			};
 		});
 
 		frm.set_query("from_warehouse", "items", function (doc) {
 			return {
-				filters: { company: doc.company },
+				filters: {
+					company: doc.company,
+					is_group: 0,
+				},
 			};
 		});
 
@@ -70,25 +74,37 @@ frappe.ui.form.on("Material Request", {
 
 		frm.set_query("warehouse", "items", function (doc) {
 			return {
-				filters: { company: doc.company },
+				filters: {
+					company: doc.company,
+					is_group: 0,
+				},
 			};
 		});
 
 		frm.set_query("set_warehouse", function (doc) {
 			return {
-				filters: { company: doc.company },
+				filters: {
+					company: doc.company,
+					is_group: 0,
+				},
 			};
 		});
 
 		frm.set_query("set_from_warehouse", function (doc) {
 			return {
-				filters: { company: doc.company },
+				filters: {
+					company: doc.company,
+					is_group: 0,
+				},
 			};
 		});
 
 		erpnext.accounts.dimensions.setup_dimension_filters(frm, frm.doctype);
 		if (!frm.doc.buying_price_list) {
-			frm.doc.buying_price_list = frappe.defaults.get_default("buying_price_list");
+			const buying_price_list = frappe.defaults.get_default("buying_price_list");
+			if (frappe.has_permission("Price List", "read", buying_price_list)) {
+				frm.set_value("buying_price_list", buying_price_list);
+			}
 		}
 	},
 
@@ -104,11 +120,12 @@ frappe.ui.form.on("Material Request", {
 	refresh: function (frm) {
 		frm.events.make_custom_buttons(frm);
 		frm.toggle_reqd("customer", frm.doc.material_request_type == "Customer Provided");
-		prevent_past_schedule_dates(frm);
+		erpnext.buying.prevent_past_schedule_dates(frm);
+		frm.trigger("set_warehouse_label");
 	},
 
 	transaction_date(frm) {
-		prevent_past_schedule_dates(frm);
+		erpnext.buying.prevent_past_schedule_dates(frm);
 		frm.set_value("schedule_date", "");
 	},
 
@@ -138,11 +155,13 @@ frappe.ui.form.on("Material Request", {
 
 			if (flt(frm.doc.per_ordered, precision) < 100) {
 				let add_create_pick_list_button = () => {
-					frm.add_custom_button(
-						__("Pick List"),
-						() => frm.events.create_pick_list(frm),
-						__("Create")
-					);
+					if (frm.doc.items.some((item) => item.stock_qty - item.picked_qty > 0)) {
+						frm.add_custom_button(
+							__("Pick List"),
+							() => frm.events.create_pick_list(frm),
+							__("Create")
+						);
+					}
 				};
 
 				if (frm.doc.material_request_type === "Material Transfer") {
@@ -243,7 +262,7 @@ frappe.ui.form.on("Material Request", {
 
 	get_items_from_sales_order: function (frm) {
 		erpnext.utils.map_current_doc({
-			method: "erpnext.selling.doctype.sales_order.sales_order.make_material_request",
+			method: "erpnext.selling.doctype.sales_order.mapper.make_material_request",
 			source_doctype: "Sales Order",
 			target: frm,
 			setters: {
@@ -272,9 +291,7 @@ frappe.ui.form.on("Material Request", {
 					from_warehouse: item.from_warehouse,
 					warehouse: item.warehouse,
 					doctype: frm.doc.doctype,
-					buying_price_list: frm.doc.buying_price_list
-						? frm.doc.buying_price_list
-						: frappe.defaults.get_default("buying_price_list"),
+					buying_price_list: frm.doc.buying_price_list,
 					currency: frappe.defaults.get_default("Currency"),
 					name: frm.doc.name,
 					qty: item.qty || 1,
@@ -395,38 +412,190 @@ frappe.ui.form.on("Material Request", {
 	},
 
 	make_purchase_order: function (frm) {
-		frappe.prompt(
-			{
-				label: __("For Default Supplier (Optional)"),
-				fieldname: "default_supplier",
-				fieldtype: "Link",
-				options: "Supplier",
-				description: __(
-					"Select a Supplier from the Default Suppliers of the items below. On selection, a Purchase Order will be made against items belonging to the selected Supplier only."
-				),
-				get_query: () => {
-					return {
-						query: "erpnext.stock.doctype.material_request.material_request.get_default_supplier_query",
-						filters: { doc: frm.doc.name },
-					};
-				},
+		frappe.call({
+			method: "erpnext.stock.doctype.material_request.mapper.get_item_default_suppliers",
+			args: {
+				source_name: frm.doc.name,
+				filtered_children: (frm.get_selected() || {}).items || [],
 			},
-			(values) => {
+			freeze: true,
+			callback: function (r) {
+				const items = r.message || [];
+				const suppliers = new Set(items.map((item) => item.supplier || ""));
+
+				if (suppliers.size > 1) {
+					frm.events.select_suppliers_for_items(frm, items);
+					return;
+				}
+
 				frappe.model.open_mapped_doc({
-					method: "erpnext.stock.doctype.material_request.material_request.make_purchase_order",
+					method: "erpnext.stock.doctype.material_request.mapper.make_purchase_order",
 					frm: frm,
-					args: { default_supplier: values.default_supplier },
+					args: { supplier: items.length ? items[0].supplier : null },
 					run_link_triggers: true,
 				});
 			},
-			__("Enter Supplier"),
-			__("Create")
-		);
+		});
+	},
+
+	select_suppliers_for_items: function (frm, items) {
+		const rows = items.map((item) => Object.assign({}, item, { qty: item.pending_qty, __checked: 1 }));
+
+		const supplier_query = () => {
+			return { filters: { disabled: 0, prevent_pos: 0 } };
+		};
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("Select Supplier for Items"),
+			size: "large",
+			fields: [
+				{
+					fieldname: "supplier",
+					fieldtype: "Link",
+					options: "Supplier",
+					label: __("Set Supplier for All Items"),
+					get_query: supplier_query,
+					onchange: function () {
+						const supplier = dialog.get_value("supplier");
+						if (!supplier) return;
+
+						rows.forEach((row) => (row.supplier = supplier));
+						dialog.fields_dict.items.grid.refresh();
+					},
+				},
+				{ fieldtype: "Column Break" },
+				{ fieldtype: "Section Break" },
+				{
+					fieldname: "items",
+					fieldtype: "Table",
+					label: __("Items"),
+					cannot_add_rows: true,
+					cannot_delete_rows: true,
+					in_place_edit: true,
+					data: rows,
+					get_data: () => rows,
+					description: __("A separate Purchase Order is created for each Supplier."),
+					fields: [
+						{
+							fieldtype: "Data",
+							fieldname: "material_request_item",
+							hidden: 1,
+						},
+						{
+							fieldtype: "Link",
+							fieldname: "item_code",
+							options: "Item",
+							label: __("Item Code"),
+							read_only: 1,
+							in_list_view: 1,
+							columns: 3,
+						},
+						{
+							fieldtype: "Data",
+							fieldname: "item_name",
+							label: __("Item Name"),
+							read_only: 1,
+							in_list_view: 1,
+							columns: 2,
+						},
+						{
+							fieldtype: "Float",
+							fieldname: "pending_qty",
+							hidden: 1,
+						},
+						{
+							fieldtype: "Float",
+							fieldname: "qty",
+							label: __("Quantity"),
+							reqd: 1,
+							in_list_view: 1,
+							columns: 1,
+						},
+						{
+							fieldtype: "Link",
+							fieldname: "uom",
+							options: "UOM",
+							label: __("UOM"),
+							read_only: 1,
+							in_list_view: 1,
+							columns: 1,
+						},
+						{
+							fieldtype: "Link",
+							fieldname: "supplier",
+							options: "Supplier",
+							label: __("Supplier"),
+							get_query: supplier_query,
+							reqd: 1,
+							in_list_view: 1,
+							columns: 3,
+						},
+					],
+				},
+			],
+			primary_action_label: __("Create"),
+			primary_action: async function (values) {
+				const item_suppliers = (values.items || []).filter((row) => row.__checked);
+				if (!item_suppliers.length) {
+					frappe.throw(__("Select at least one Item"));
+				}
+
+				const item_link = (row) =>
+					frappe.utils.get_form_link(
+						"Item",
+						row.item_code,
+						true,
+						frappe.utils.escape_html(row.item_code)
+					);
+
+				const missing_supplier = item_suppliers.find((row) => !row.supplier);
+				if (missing_supplier) {
+					frappe.throw(__("Select a Supplier for Item {0}", [item_link(missing_supplier)]));
+				}
+
+				const invalid_qty = item_suppliers.find(
+					(row) => flt(row.qty) <= 0 || flt(row.qty) > flt(row.pending_qty)
+				);
+				if (invalid_qty) {
+					const pending_qty = `${format_number(invalid_qty.pending_qty)} ${frappe.utils.escape_html(
+						invalid_qty.uom
+					)}`;
+					frappe.throw(
+						__("Quantity for Item {0} must be greater than zero and cannot exceed {1}", [
+							item_link(invalid_qty),
+							`<b>${pending_qty}</b>`,
+						])
+					);
+				}
+
+				if (!(await erpnext.utils.confirm_if_drafts_exist(frm.doc, "Purchase Order"))) {
+					return;
+				}
+
+				frappe.call({
+					method: "erpnext.stock.doctype.material_request.mapper.make_purchase_orders_by_supplier",
+					args: { source_name: frm.doc.name, item_suppliers: item_suppliers },
+					freeze: true,
+					callback: function (r) {
+						if (r.exc) return;
+
+						dialog.hide();
+
+						const purchase_orders = r.message || [];
+						if (purchase_orders.length === 1) {
+							frappe.set_route("Form", "Purchase Order", purchase_orders[0]);
+						}
+					},
+				});
+			},
+		});
+
+		dialog.show();
 	},
 
 	make_request_for_quotation: function (frm) {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.stock.doctype.material_request.material_request.make_request_for_quotation",
+			method: "erpnext.stock.doctype.material_request.mapper.make_request_for_quotation",
 			frm: frm,
 			run_link_triggers: true,
 		});
@@ -434,14 +603,14 @@ frappe.ui.form.on("Material Request", {
 
 	make_supplier_quotation: function (frm) {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.stock.doctype.material_request.material_request.make_supplier_quotation",
+			method: "erpnext.stock.doctype.material_request.mapper.make_supplier_quotation",
 			frm: frm,
 		});
 	},
 
 	make_stock_entry: function (frm) {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.stock.doctype.material_request.material_request.make_stock_entry",
+			method: "erpnext.stock.doctype.material_request.mapper.make_stock_entry",
 			frm: frm,
 		});
 	},
@@ -468,7 +637,7 @@ frappe.ui.form.on("Material Request", {
 			],
 			(values) => {
 				frappe.call({
-					method: "erpnext.stock.doctype.material_request.material_request.make_in_transit_stock_entry",
+					method: "erpnext.stock.doctype.material_request.mapper.make_in_transit_stock_entry",
 					args: {
 						source_name: frm.doc.name,
 						in_transit_warehouse: values.in_transit_warehouse,
@@ -488,7 +657,7 @@ frappe.ui.form.on("Material Request", {
 
 	create_pick_list: (frm) => {
 		frappe.model.open_mapped_doc({
-			method: "erpnext.stock.doctype.material_request.material_request.create_pick_list",
+			method: "erpnext.stock.doctype.material_request.mapper.create_pick_list",
 			frm: frm,
 		});
 	},
@@ -514,6 +683,23 @@ frappe.ui.form.on("Material Request", {
 		if (frm.doc.material_request_type !== "Material Transfer" && frm.doc.set_from_warehouse) {
 			frm.set_value("set_from_warehouse", "");
 		}
+
+		frm.trigger("set_warehouse_label");
+	},
+
+	set_warehouse_label(frm) {
+		let warehouse_label =
+			frm.doc.material_request_type === "Material Transfer" ? "Target Warehouse" : "Warehouse";
+		if (frm.doc.material_request_type === "Material Issue") {
+			warehouse_label = "From Warehouse";
+		}
+
+		frm.fields_dict["items"].grid.update_docfield_property("warehouse", "label", __(warehouse_label));
+
+		warehouse_label = "Set " + warehouse_label;
+		frm.set_df_property("set_warehouse", "label", __(warehouse_label));
+
+		refresh_field("items");
 	},
 });
 
@@ -593,7 +779,7 @@ erpnext.buying.MaterialRequestController = class MaterialRequestController exten
 
 	onload() {
 		this.frm.set_query("item_code", "items", function (doc, cdt, cdn) {
-			let filters = { is_stock_item: 1 };
+			let filters = { is_stock_item: 1, company: doc.company };
 
 			if (doc.material_request_type == "Customer Provided") {
 				filters.customer = doc.customer;
@@ -647,13 +833,5 @@ function set_schedule_date(frm) {
 			"items",
 			"schedule_date"
 		);
-	}
-}
-
-function prevent_past_schedule_dates(frm) {
-	if (frm.doc.transaction_date) {
-		frm.fields_dict["schedule_date"].datepicker.update({
-			minDate: new Date(frm.doc.transaction_date),
-		});
 	}
 }

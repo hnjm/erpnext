@@ -9,7 +9,7 @@ from frappe.utils import cint, flt, get_time, now_datetime
 
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_dimensions
 from erpnext.controllers.status_updater import StatusUpdater
-from erpnext.stock.get_item_details import get_item_details
+from erpnext.stock.get_item_details import NOT_APPLICABLE_TAX, get_item_details
 from erpnext.stock.utils import get_incoming_rate
 
 
@@ -18,9 +18,17 @@ class UOMMustBeIntegerError(frappe.ValidationError):
 
 
 class TransactionBase(StatusUpdater):
+	def on_change(self):
+		# `on_change` also fires for `db_set()`, so only run during an actual insert/save.
+		is_real_save = self.flags.in_insert or (self.doctype, self.name) in frappe.flags.currently_saving
+		if not is_real_save:
+			return
+
+		self.copy_terms_and_conditions_attachments()
+
 	def validate_posting_time(self):
-		# set Edit Posting Date and Time to 1 while data import
-		if frappe.flags.in_import and self.posting_date:
+		# set Edit Posting Date and Time to 1 while data import and restore
+		if (frappe.flags.in_import or self.flags.from_restore) and self.posting_date:
 			self.set_posting_time = 1
 
 		if not getattr(self, "set_posting_time", None):
@@ -35,6 +43,56 @@ class TransactionBase(StatusUpdater):
 
 	def validate_uom_is_integer(self, uom_field, qty_fields, child_dt=None):
 		validate_uom_is_integer(self, uom_field, qty_fields, child_dt)
+
+	def copy_terms_and_conditions_attachments(self):
+		if (
+			not self.name
+			or not self.meta.has_field("tc_name")
+			or not self.tc_name
+			or not self.has_value_changed("tc_name")
+		):
+			return
+
+		copy_attachments_to_transaction = frappe.db.get_value(
+			"Terms and Conditions", self.tc_name, "copy_attachments_to_transaction"
+		)
+		if not cint(copy_attachments_to_transaction):
+			return
+
+		source_attachments = frappe.get_all(
+			"File",
+			filters={
+				"attached_to_doctype": "Terms and Conditions",
+				"attached_to_name": self.tc_name,
+			},
+			fields=["name", "file_url"],
+		)
+		if not source_attachments:
+			return
+
+		existing_file_urls = {
+			attachment.file_url
+			for attachment in frappe.get_all(
+				"File",
+				filters={
+					"attached_to_doctype": self.doctype,
+					"attached_to_name": self.name,
+				},
+				fields=["file_url"],
+			)
+			if attachment.file_url
+		}
+
+		for source_attachment in source_attachments:
+			if not source_attachment.file_url or source_attachment.file_url in existing_file_urls:
+				continue
+
+			# Reuse the existing file metadata so the same on-disk blob is shared.
+			new_attachment = frappe.get_doc("File", source_attachment.name).create_attachment_copy(
+				attached_to_doctype=self.doctype,
+				attached_to_name=self.name,
+			)
+			existing_file_urls.add(new_attachment.file_url)
 
 	def validate_with_previous_doc(self, ref):
 		self.exclude_fields = ["conversion_factor", "uom"] if self.get("is_return") else []
@@ -263,7 +321,7 @@ class TransactionBase(StatusUpdater):
 					"company": self.get("company"),
 					"order_type": self.get("order_type"),
 					"is_pos": cint(self.get("is_pos")),
-					"is_return": cint(self.get("is_return)")),
+					"is_return": cint(self.get("is_return")),
 					"is_subcontracted": self.get("is_subcontracted"),
 					"ignore_pricing_rule": self.get("ignore_pricing_rule"),
 					"doctype": self.get("doctype"),
@@ -285,15 +343,18 @@ class TransactionBase(StatusUpdater):
 					"item_tax_template": item.get("item_tax_template"),
 					"child_doctype": item.get("doctype"),
 					"child_docname": item.get("name"),
-					"is_old_subcontracting_flow": self.get("is_old_subcontracting_flow"),
 				}
-			)
+			),
+			self,
 		)
 
 	@frappe.whitelist()
-	def process_item_selection(self, item_idx):
+	def process_item_selection(self, item_idx: int):
 		# Server side 'item' doc. Update this to reflect in UI
 		item_obj = self.get("items", {"idx": item_idx})[0]
+
+		if not item_obj.item_code:
+			return
 
 		# 'item_details' has latest item related values
 		item_details = self.fetch_item_details(item_obj)
@@ -338,6 +399,7 @@ class TransactionBase(StatusUpdater):
 				args.update(
 					{
 						"posting_date": self.transaction_date,
+						"posting_time": self.transaction_time,
 					}
 				)
 			else:
@@ -362,9 +424,17 @@ class TransactionBase(StatusUpdater):
 		):
 			item_tax_template = frappe.json.loads(item_details.item_tax_rate)
 			for tax_head, _rate in item_tax_template.items():
+				if _rate == NOT_APPLICABLE_TAX:
+					continue
+
 				found = [x for x in self.taxes if x.account_head == tax_head]
 				if not found:
-					self.append("taxes", {"charge_type": "On Net Total", "account_head": tax_head, "rate": 0})
+					child_doctype = self.get_table_field_doctype("taxes")
+					child = frappe.new_doc(child_doctype, parent_doc=self, parentfield="taxes")
+					child.charge_type = "On Net Total"
+					child.account_head = tax_head
+					child.rate = 0
+					self.append("taxes", child)
 
 	def set_rate_based_on_price_list(self, item_obj: object, item_details: dict) -> None:
 		if item_obj.price_list_rate and item_obj.discount_percentage:
@@ -443,17 +513,14 @@ class TransactionBase(StatusUpdater):
 		item_obj.base_rate_with_margin = flt(item_obj.rate_with_margin) * flt(self.conversion_rate)
 		item_rate = flt(item_obj.rate_with_margin, item_obj.precision("rate"))
 
-		if item_obj.discount_percentage and not item_obj.discount_amount:
+		if item_obj.discount_percentage:
 			item_obj.discount_amount = (
 				flt(item_obj.rate_with_margin) * flt(item_obj.discount_percentage) / 100
 			)
 
-		if item_obj.discount_amount and item_obj.discount_amount > 0:
+		if item_obj.discount_amount:
 			item_rate = flt(
 				(item_obj.rate_with_margin) - (item_obj.discount_amount), item_obj.precision("rate")
-			)
-			item_obj.discount_percentage = (
-				100 * flt(item_obj.discount_amount) / flt(item_obj.rate_with_margin)
 			)
 
 		item_obj.rate = item_rate
@@ -480,7 +547,9 @@ class TransactionBase(StatusUpdater):
 		from erpnext.stock.get_item_details import apply_price_list
 
 		args = {
-			"items": [x.as_dict() for x in self.items],
+			# pass child_docname so the maintain-same-rate lock in apply_price_list can
+			# match each row, consistent with the desk (JS) callers
+			"items": [{**x.as_dict(), "child_docname": x.name} for x in self.items],
 			"customer": self.customer or self.party_name,
 			"quotation_to": self.quotation_to,
 			"customer_group": self.customer_group,
@@ -508,23 +577,20 @@ class TransactionBase(StatusUpdater):
 			"is_internal_customer": self.is_internal_customer,
 		}
 		# TODO: test method call impact on document
-		apply_price_list(cts=args, as_doc=True, doc=self)
+		apply_price_list(ctx=args, as_doc=True, doc=self)
 
 
 def delete_events(ref_type, ref_name):
+	event = frappe.qb.DocType("Event")
+	participant = frappe.qb.DocType("Event Participants")
 	events = (
-		frappe.db.sql_list(
-			""" SELECT
-			distinct `tabEvent`.name
-		from
-			`tabEvent`, `tabEvent Participants`
-		where
-			`tabEvent`.name = `tabEvent Participants`.parent
-			and `tabEvent Participants`.reference_doctype = %s
-			and `tabEvent Participants`.reference_docname = %s
-		""",
-			(ref_type, ref_name),
-		)
+		frappe.qb.from_(event)
+		.inner_join(participant)
+		.on(event.name == participant.parent)
+		.select(event.name)
+		.distinct()
+		.where((participant.reference_doctype == ref_type) & (participant.reference_docname == ref_name))
+		.run(pluck="name")
 		or []
 	)
 

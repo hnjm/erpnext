@@ -74,6 +74,7 @@ frappe.query_reports["General Ledger"] = {
 			label: __("Party"),
 			fieldtype: "MultiSelectList",
 			options: "party_type",
+			depends_on: "party_type",
 			get_data: function (txt) {
 				if (!frappe.query_report.filters) return;
 
@@ -177,9 +178,15 @@ frappe.query_reports["General Ledger"] = {
 			default: 1,
 		},
 		{
+			fieldname: "disable_opening_balance_calculation",
+			label: __("Disable Opening Balance Calculation"),
+			fieldtype: "Check",
+		},
+		{
 			fieldname: "show_opening_entries",
 			label: __("Show Opening Entries"),
 			fieldtype: "Check",
+			depends_on: "eval: !doc.disable_opening_balance_calculation",
 		},
 		{
 			fieldname: "include_default_book_entries",
@@ -224,7 +231,7 @@ frappe.query_reports["General Ledger"] = {
 		},
 	],
 	collapsible_filters: true,
-	seperate_check_filters: true,
+	separate_check_filters: true,
 };
 
 erpnext.utils.add_dimensions("General Ledger", 15);

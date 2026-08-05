@@ -1,6 +1,7 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+from datetime import date
 
 import frappe
 from dateutil import relativedelta
@@ -43,7 +44,13 @@ class SubscriptionPlan(Document):
 
 @frappe.whitelist()
 def get_plan_rate(
-	plan, quantity=1, customer=None, start_date=None, end_date=None, prorate_factor=1, party=None
+	plan: str,
+	quantity: int = 1,
+	customer: str | None = None,
+	start_date: str | date | None = None,
+	end_date: str | date | None = None,
+	prorate_factor: float = 1,
+	party: str | None = None,
 ):
 	plan = frappe.get_doc("Subscription Plan", plan)
 	if plan.price_determination == "Fixed Rate":
@@ -72,7 +79,9 @@ def get_plan_rate(
 		start_date = getdate(start_date)
 		end_date = getdate(end_date)
 
-		no_of_months = relativedelta.relativedelta(end_date, start_date).months + 1
+		delta = relativedelta.relativedelta(end_date, start_date)
+		# include the years component so cross-year spans aren't under-counted
+		no_of_months = delta.years * 12 + delta.months + 1
 		cost = plan.cost * no_of_months
 
 		# Adjust cost if start or end date is not month start or end

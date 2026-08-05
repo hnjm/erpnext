@@ -1,19 +1,20 @@
 # Copyright (c) 2017, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
+from frappe import qb
+from frappe.query_builder.functions import Sum
 from frappe.utils import add_days, add_months, flt, get_first_day, nowdate, nowtime, today
 
 from erpnext.assets.doctype.asset.asset import (
 	get_asset_account,
 	get_asset_value_after_depreciation,
+)
+from erpnext.assets.doctype.asset.mapper import (
 	make_sales_invoice,
 )
 from erpnext.assets.doctype.asset.test_asset import (
 	create_asset,
-	create_asset_data,
 	set_depreciation_settings_in_company,
 )
 from erpnext.assets.doctype.asset_depreciation_schedule.asset_depreciation_schedule import (
@@ -24,16 +25,14 @@ from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle 
 	get_serial_nos_from_bundle,
 	make_serial_batch_bundle,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestAssetRepair(IntegrationTestCase):
-	@classmethod
-	def setUpClass(cls):
-		super().setUpClass()
+class TestAssetRepair(ERPNextTestSuite):
+	def setUp(self):
+		self.load_test_records("Stock Entry")
 		set_depreciation_settings_in_company()
-		create_asset_data()
 		create_item("_Test Stock Item")
-		frappe.db.sql("delete from `tabTax Rule`")
 
 	def test_asset_status(self):
 		date = nowdate()
@@ -49,7 +48,9 @@ class TestAssetRepair(IntegrationTestCase):
 			submit=1,
 		)
 
-		si = make_sales_invoice(asset=asset.name, item_code="Macbook Pro", company="_Test Company")
+		si = make_sales_invoice(
+			asset=asset.name, item_code="Macbook Pro", company="_Test Company", sell_qty=asset.asset_quantity
+		)
 		si.customer = "_Test Customer"
 		si.due_date = date
 		si.get("items")[0].rate = 25000
@@ -173,27 +174,63 @@ class TestAssetRepair(IntegrationTestCase):
 		)
 		self.assertTrue(asset_repair.invoices)
 
-	def test_gl_entries_with_perpetual_inventory(self):
-		set_depreciation_settings_in_company(company="_Test Company with perpetual inventory")
+	def test_repair_cost_exceeds_available_amount(self):
+		"""Test that repair cost cannot exceed available amount from Purchase Invoice."""
+		asset_repair1 = create_asset_repair(
+			capitalize_repair_cost=1,
+			item="_Test Non Stock Item",
+			submit=1,
+		)
 
-		asset_category = frappe.get_doc("Asset Category", "Computers")
-		asset_category.append(
-			"accounts",
+		pi_name = asset_repair1.invoices[0].purchase_invoice
+		expense_account = asset_repair1.invoices[0].expense_account
+
+		asset_repair2 = frappe.new_doc("Asset Repair")
+		asset_repair2.update(
 			{
-				"company_name": "_Test Company with perpetual inventory",
-				"fixed_asset_account": "_Test Fixed Asset - TCP1",
-				"accumulated_depreciation_account": "_Test Accumulated Depreciations - TCP1",
-				"depreciation_expense_account": "_Test Depreciations - TCP1",
-				"capital_work_in_progress_account": "CWIP Account - TCP1",
+				"asset": asset_repair1.asset,
+				"asset_name": asset_repair1.asset_name,
+				"failure_date": nowdate(),
+				"description": "Second Repair",
+				"company": asset_repair1.company,
+				"capitalize_repair_cost": 1,
+			}
+		)
+		asset_repair2.append(
+			"invoices",
+			{
+				"purchase_invoice": pi_name,
+				"expense_account": expense_account,
+				"repair_cost": 10,  # PI already fully used, so this should fail
 			},
 		)
-		asset_category.save()
+
+		self.assertRaises(frappe.ValidationError, asset_repair2.save)
+
+	def test_gl_entries_with_perpetual_inventory(self):
+		company = "_Test Company with perpetual inventory"
+		set_depreciation_settings_in_company(company)
+
+		asset_category = frappe.get_doc("Asset Category", "Computers")
+
+		if not any(row.company_name == company for row in asset_category.accounts):
+			asset_category.append(
+				"accounts",
+				{
+					"company_name": company,
+					"fixed_asset_account": "_Test Fixed Asset - TCP1",
+					"accumulated_depreciation_account": "_Test Accumulated Depreciations - TCP1",
+					"depreciation_expense_account": "_Test Depreciations - TCP1",
+					"capital_work_in_progress_account": "CWIP Account - TCP1",
+				},
+			)
+			asset_category.save()
 
 		asset_repair = create_asset_repair(
 			capitalize_repair_cost=1,
 			stock_consumption=1,
 			warehouse="Stores - TCP1",
-			company="_Test Company with perpetual inventory",
+			company=company,
 			pi_expense_account1="Administrative Expenses - TCP1",
 			pi_expense_account2="Legal Expenses - TCP1",
 			item="_Test Non Stock Item",
@@ -201,22 +238,13 @@ class TestAssetRepair(IntegrationTestCase):
 			submit=1,
 		)
 
-		gl_entries = frappe.db.sql(
-			"""
-			select
-				account,
-				sum(debit) as debit,
-				sum(credit) as credit
-			from `tabGL Entry`
-			where
-				voucher_type='Asset Repair'
-				and voucher_no=%s
-			group by
-				account
-		""",
-			asset_repair.name,
-			as_dict=1,
-		)
+		gle = frappe.qb.DocType("GL Entry")
+		gl_entries = (
+			frappe.qb.from_(gle)
+			.select(gle.account, Sum(gle.debit).as_("debit"), Sum(gle.credit).as_("credit"))
+			.where((gle.voucher_type == "Asset Repair") & (gle.voucher_no == asset_repair.name))
+			.groupby(gle.account)
+		).run(as_dict=True)
 
 		self.assertTrue(gl_entries)
 
@@ -250,22 +278,13 @@ class TestAssetRepair(IntegrationTestCase):
 			submit=1,
 		)
 
-		gl_entries = frappe.db.sql(
-			"""
-			select
-				account,
-				sum(debit) as debit,
-				sum(credit) as credit
-			from `tabGL Entry`
-			where
-				voucher_type='Asset Repair'
-				and voucher_no=%s
-			group by
-				account
-		""",
-			asset_repair.name,
-			as_dict=1,
-		)
+		gle = frappe.qb.DocType("GL Entry")
+		gl_entries = (
+			frappe.qb.from_(gle)
+			.select(gle.account, Sum(gle.debit).as_("debit"), Sum(gle.credit).as_("credit"))
+			.where((gle.voucher_type == "Asset Repair") & (gle.voucher_no == asset_repair.name))
+			.groupby(gle.account)
+		).run(as_dict=True)
 
 		self.assertTrue(gl_entries)
 
@@ -322,6 +341,31 @@ class TestAssetRepair(IntegrationTestCase):
 		stock_entry = frappe.get_last_doc("Stock Entry")
 		self.assertEqual(stock_entry.asset_repair, asset_repair.name)
 
+	def test_gl_entries_with_capitalized_asset_repair(self):
+		asset = create_asset(asset_type="Existing Asset", calculate_depreciation=1, submit=1)
+		asset_repair = create_asset_repair(
+			asset=asset, capitalize_repair_cost=1, item="_Test Non Stock Item", submit=1
+		)
+		asset.reload()
+
+		GLEntry = qb.DocType("GL Entry")
+		res = (
+			qb.from_(GLEntry)
+			.select(Sum(GLEntry.debit_in_account_currency).as_("total_debit"))
+			.where(
+				(GLEntry.voucher_type == "Asset Repair")
+				& (GLEntry.voucher_no == asset_repair.name)
+				& (GLEntry.against_voucher_type == "Asset")
+				& (GLEntry.against_voucher == asset.name)
+				& (GLEntry.company == asset.company)
+				& (GLEntry.is_cancelled == 0)
+			)
+		).run(as_dict=True)
+		booked_value = res[0].total_debit if res else 0
+
+		self.assertEqual(asset.additional_asset_cost, asset_repair.repair_cost)
+		self.assertEqual(booked_value, asset_repair.repair_cost)
+
 
 def num_of_depreciations(asset):
 	return asset.finance_books[0].total_number_of_depreciations + (
@@ -338,7 +382,7 @@ def create_asset_repair(**args):
 	if args.asset:
 		asset = args.asset
 	else:
-		asset = create_asset(is_existing_asset=1, submit=1, company=args.company)
+		asset = create_asset(asset_type=args.asset_type or "Existing Asset", submit=1, company=args.company)
 	asset_repair = frappe.new_doc("Asset Repair")
 	asset_repair.update(
 		{

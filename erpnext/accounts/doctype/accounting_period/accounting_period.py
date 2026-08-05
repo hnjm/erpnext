@@ -5,6 +5,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import getdate, nowdate
 
 
 class OverlapError(frappe.ValidationError):
@@ -30,12 +31,25 @@ class AccountingPeriod(Document):
 		company: DF.Link
 		disabled: DF.Check
 		end_date: DF.Date
+		exempted_role: DF.Link | None
 		period_name: DF.Data
 		start_date: DF.Date
 	# end: auto-generated types
 
 	def validate(self):
+		self.validate_dates()
 		self.validate_overlap()
+
+	def validate_dates(self):
+		if getdate(self.start_date) > getdate(self.end_date):
+			frappe.throw(_("Start Date cannot be after End Date"))
+
+		if getdate(self.end_date) > getdate(nowdate()):
+			frappe.throw(
+				_(
+					"Accounting Period cannot be created for a future date. End Date {0} is after today."
+				).format(frappe.bold(frappe.format(self.end_date, "Date")))
+			)
 
 	def before_insert(self):
 		self.bootstrap_doctypes_for_closing()
@@ -45,22 +59,18 @@ class AccountingPeriod(Document):
 		self.name = " - ".join([self.period_name, company_abbr])
 
 	def validate_overlap(self):
-		existing_accounting_period = frappe.db.sql(
-			"""select name from `tabAccounting Period`
-			where (
-				(%(start_date)s between start_date and end_date)
-				or (%(end_date)s between start_date and end_date)
-				or (start_date between %(start_date)s and %(end_date)s)
-				or (end_date between %(start_date)s and %(end_date)s)
-			) and name!=%(name)s and company=%(company)s""",
-			{
-				"start_date": self.start_date,
-				"end_date": self.end_date,
-				"name": self.name,
-				"company": self.company,
-			},
-			as_dict=True,
+		AccountingPeriod = frappe.qb.DocType("Accounting Period")
+
+		query = (
+			frappe.qb.from_(AccountingPeriod)
+			.select(AccountingPeriod.name)
+			.where(AccountingPeriod.start_date <= self.end_date)
+			.where(AccountingPeriod.end_date >= self.start_date)
+			.where(AccountingPeriod.name != self.name)
+			.where(AccountingPeriod.company == self.company)
 		)
+
+		existing_accounting_period = query.run(as_dict=True)
 
 		if len(existing_accounting_period) > 0:
 			frappe.throw(
@@ -96,7 +106,7 @@ def validate_accounting_period_on_doc_save(doc, method=None):
 	if doc.doctype == "Bank Clearance":
 		return
 	elif doc.doctype == "Asset":
-		if doc.is_existing_asset:
+		if doc.asset_type == "Existing Asset":
 			return
 		else:
 			date = doc.available_for_use_date
@@ -113,7 +123,7 @@ def validate_accounting_period_on_doc_save(doc, method=None):
 	accounting_period = (
 		frappe.qb.from_(ap)
 		.from_(cd)
-		.select(ap.name)
+		.select(ap.name, ap.exempted_role)
 		.where(
 			(ap.name == cd.parent)
 			& (ap.company == doc.company)
@@ -126,6 +136,11 @@ def validate_accounting_period_on_doc_save(doc, method=None):
 	).run(as_dict=1)
 
 	if accounting_period:
+		if (
+			accounting_period[0].get("exempted_role")
+			and accounting_period[0].get("exempted_role") in frappe.get_roles()
+		):
+			return
 		frappe.throw(
 			_("You cannot create a {0} within the closed Accounting Period {1}").format(
 				doc.doctype, frappe.bold(accounting_period[0]["name"])

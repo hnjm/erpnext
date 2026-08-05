@@ -17,7 +17,6 @@ class PurchaseReceiptItem(Document):
 		allow_zero_valuation_rate: DF.Check
 		amount: DF.Currency
 		amount_difference_with_purchase_invoice: DF.Currency
-		apply_tds: DF.Check
 		asset_category: DF.Link | None
 		asset_location: DF.Link | None
 		barcode: DF.Data | None
@@ -29,7 +28,6 @@ class PurchaseReceiptItem(Document):
 		base_rate_with_margin: DF.Currency
 		batch_no: DF.Link | None
 		billed_amt: DF.Currency
-		bom: DF.Link | None
 		brand: DF.Link | None
 		conversion_factor: DF.Float
 		cost_center: DF.Link | None
@@ -42,7 +40,6 @@ class PurchaseReceiptItem(Document):
 		from_warehouse: DF.Link | None
 		has_item_scanned: DF.Check
 		image: DF.Attach | None
-		include_exploded_items: DF.Check
 		is_fixed_asset: DF.Check
 		is_free_item: DF.Check
 		item_code: DF.Link

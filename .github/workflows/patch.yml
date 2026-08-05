@@ -29,7 +29,7 @@ jobs:
 
     services:
       mysql:
-        image: mariadb:10.6
+        image: mariadb:11.8
         env:
           MARIADB_ROOT_PASSWORD: 'root'
         ports:
@@ -38,7 +38,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check for valid Python & Merge Conflicts
         run: |
@@ -49,18 +49,37 @@ jobs:
           fi
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: |
+            3.11
+            3.13
+            3.14
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
           check-latest: true
 
       - name: Add to Hosts
         run: echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+
+      # The v14 baseline backup is a fixed published file — cache it instead of re-downloading
+      # it from the GitHub release every run.
+      - name: Cache erpnext v14 backup
+        id: cache-v14
+        uses: actions/cache@v4
+        with:
+          path: ~/erpnext-v14.sql.gz
+          key: erpnext-v14-sql-gz
+
+      - name: Download erpnext v14 backup
+        if: steps.cache-v14.outputs.cache-hit != 'true'
+        run: |
+          curl -fSL --retry 5 --retry-all-errors --retry-delay 5 \
+            -o ~/erpnext-v14.sql.gz \
+            https://github.com/frappe/erpnext/releases/download/v14-baseline/erpnext-v14.sql.gz
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -110,12 +129,20 @@ jobs:
           jq 'del(.install_apps)' ~/frappe-bench/sites/test_site/site_config.json > tmp.json
           mv tmp.json ~/frappe-bench/sites/test_site/site_config.json
 
-          wget https://erpnext.com/files/v13-erpnext.sql.gz
-          bench --site test_site --force restore ~/frappe-bench/v13-erpnext.sql.gz
+          bench --site test_site --force restore ~/erpnext-v14.sql.gz
 
           git -C "apps/frappe" remote set-url upstream https://github.com/frappe/frappe.git
           git -C "apps/erpnext" remote set-url upstream https://github.com/frappe/erpnext.git
 
+          # Start every bench process except the background workers. If workers run during a
+          # migrate, they pick up the orphan-link cleanup jobs it enqueues and race its schema
+          # changes, which fails with MySQL 1412 "Table definition has changed". Redis and the
+          # other services stay up; the queued jobs simply wait and are harmless here.
+          function start_bench_without_workers() {
+            local procs
+            procs=$(awk -F: '/^[a-z_]+:/ && $1 !~ /worker/ {print $1}' ~/frappe-bench/Procfile)
+            honcho start -f ~/frappe-bench/Procfile $procs &>> ~/frappe-bench/bench_start.log &
+          }
 
           function update_to_version() {
             version=$1
@@ -131,19 +158,43 @@ jobs:
 
             # Resetup env and install apps
             pgrep honcho | xargs kill
+            sleep 10
             rm -rf ~/frappe-bench/env
-            bench -v setup env
+            bench -v setup env --python python$2
             bench pip install -e ./apps/erpnext
-            bench start &>> ~/frappe-bench/bench_start.log &
+            start_bench_without_workers
 
             bench --site test_site migrate
           }
 
-          update_to_version 14
-          update_to_version 15
+          update_to_version 15 3.13
+          update_to_version 16 3.14
 
           echo "Updating to latest version"
-          git -C "apps/frappe" fetch --depth 1 upstream "${GITHUB_BASE_REF:-${GITHUB_REF##*/}}"
+          fallback_to_develop=0
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            frappe_ref="refs/heads/$GITHUB_BASE_REF"
+            fallback_to_develop=1
+          elif [ "${GITHUB_REF_TYPE:-}" = "branch" ]; then
+            frappe_ref="$GITHUB_REF"
+            fallback_to_develop=1
+          elif [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            frappe_ref="$GITHUB_REF"
+          else
+            echo "Unsupported GitHub ref type: '${GITHUB_REF_TYPE:-unset}'"
+            exit 1
+          fi
+
+          ls_remote_status=0
+          git -C "apps/frappe" ls-remote --exit-code upstream "$frappe_ref" >/dev/null \
+            || ls_remote_status=$?
+          if [ "$ls_remote_status" -eq 2 ] && [ "$fallback_to_develop" -eq 1 ]; then
+            echo "frappe has no '$frappe_ref'; falling back to develop"
+            frappe_ref=refs/heads/develop
+          elif [ "$ls_remote_status" -ne 0 ]; then
+            exit "$ls_remote_status"
+          fi
+          git -C "apps/frappe" fetch --depth 1 upstream "$frappe_ref"
           git -C "apps/frappe" checkout -q -f FETCH_HEAD
           git -C "apps/erpnext" checkout -q -f "$GITHUB_SHA"
 
@@ -151,7 +202,7 @@ jobs:
           rm -rf ~/frappe-bench/env
           bench -v setup env
           bench pip install -e ./apps/erpnext
-          bench start &>> ~/frappe-bench/bench_start.log &
+          start_bench_without_workers
 
           bench --site test_site migrate
 

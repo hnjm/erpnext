@@ -1,9 +1,7 @@
 # Copyright (c) 2020, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_months, getdate
 
 from erpnext.accounts.doctype.cost_center.test_cost_center import create_cost_center
@@ -15,13 +13,12 @@ from erpnext.accounts.doctype.purchase_invoice.test_purchase_invoice import make
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.stock.doctype.item.test_item import create_item
 from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
-from erpnext.tests.utils import if_lending_app_installed, if_lending_app_not_installed
+from erpnext.tests.utils import ERPNextTestSuite, if_lending_app_installed, if_lending_app_not_installed
 
 
-class TestBankClearance(IntegrationTestCase):
-	@classmethod
-	def setUpClass(cls):
-		super().setUpClass()
+class TestBankClearance(ERPNextTestSuite):
+	def setUp(self):
+		frappe.clear_cache()
 		create_warehouse(
 			warehouse_name="_Test Warehouse",
 			properties={"parent_warehouse": "All Warehouses - _TC"},

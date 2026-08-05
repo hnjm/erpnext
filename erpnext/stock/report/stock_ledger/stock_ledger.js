@@ -119,7 +119,7 @@ frappe.query_reports["Stock Ledger"] = {
 		},
 		{
 			fieldname: "segregate_serial_batch_bundle",
-			label: __("Segregate Serial / Batch Bundle"),
+			label: __("Enable Serial / Batch Bundle"),
 			fieldtype: "Check",
 			default: 0,
 		},
@@ -133,6 +133,13 @@ frappe.query_reports["Stock Ledger"] = {
 		}
 
 		return value;
+	},
+
+	onload: function (report) {
+		report.page.add_inner_button(__("View Stock Balance"), function () {
+			var filters = report.get_values();
+			frappe.set_route("query-report", "Stock Balance", filters);
+		});
 	},
 };
 

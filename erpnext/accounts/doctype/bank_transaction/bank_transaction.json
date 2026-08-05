@@ -9,6 +9,8 @@
  "field_order": [
   "naming_series",
   "date",
+  "is_rule_evaluated",
+  "matched_transaction_rule",
   "column_break_2",
   "status",
   "bank_account",
@@ -38,7 +40,10 @@
   "column_break_3czf",
   "bank_party_name",
   "bank_party_account_number",
-  "bank_party_iban"
+  "bank_party_iban",
+  "extended_bank_statement_section",
+  "included_fee",
+  "excluded_fee"
  ],
  "fields": [
   {
@@ -233,12 +238,48 @@
   {
    "fieldname": "column_break_oufv",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "extended_bank_statement_section",
+   "fieldtype": "Section Break",
+   "label": "Extended Bank Statement"
+  },
+  {
+   "fieldname": "included_fee",
+   "fieldtype": "Currency",
+   "label": "Included Fee",
+   "non_negative": 1,
+   "options": "currency"
+  },
+  {
+   "description": "On save, the Excluded Fee will be converted to an Included Fee.",
+   "fieldname": "excluded_fee",
+   "fieldtype": "Currency",
+   "label": "Excluded Fee",
+   "non_negative": 1,
+   "options": "currency"
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "0",
+   "fieldname": "is_rule_evaluated",
+   "fieldtype": "Check",
+   "label": "Is Rule Evaluated",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "matched_transaction_rule",
+   "fieldtype": "Link",
+   "label": "Matched Transaction Rule",
+   "options": "Bank Transaction Rule",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-10-23 17:32:58.514807",
+ "modified": "2026-04-11 20:41:15.124085",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Bank Transaction",

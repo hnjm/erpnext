@@ -251,9 +251,12 @@ def add_print_formats():
 	frappe.reload_doc("regional", "print_format", "simplified_tax_invoice")
 	frappe.reload_doc("regional", "print_format", "tax_invoice")
 
-	frappe.db.sql(
-		""" update `tabPrint Format` set disabled = 0 where
-		name in('Simplified Tax Invoice', 'Detailed Tax Invoice', 'Tax Invoice') """
+	pf = frappe.qb.DocType("Print Format")
+	(
+		frappe.qb.update(pf)
+		.set(pf.disabled, 0)
+		.where(pf.name.isin(["Simplified Tax Invoice", "Detailed Tax Invoice", "Tax Invoice"]))
+		.run()
 	)
 
 
@@ -261,11 +264,9 @@ def add_custom_roles_for_reports():
 	"""Add Access Control to UAE VAT 201."""
 	if not frappe.db.get_value("Custom Role", dict(report="UAE VAT 201")):
 		frappe.get_doc(
-			dict(
-				doctype="Custom Role",
-				report="UAE VAT 201",
-				roles=[dict(role="Accounts User"), dict(role="Accounts Manager"), dict(role="Auditor")],
-			)
+			doctype="Custom Role",
+			report="UAE VAT 201",
+			roles=[dict(role="Accounts User"), dict(role="Accounts Manager"), dict(role="Auditor")],
 		).insert()
 
 

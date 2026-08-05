@@ -1,10 +1,8 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 import json
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils.response import json_handler
 
 from erpnext.erpnext_integrations.doctype.plaid_settings.plaid_settings import (
@@ -14,25 +12,13 @@ from erpnext.erpnext_integrations.doctype.plaid_settings.plaid_settings import (
 	get_plaid_configuration,
 	new_bank_transaction,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestPlaidSettings(IntegrationTestCase):
-	def setUp(self):
-		pass
-
-	def tearDown(self):
-		for bt in frappe.get_all("Bank Transaction"):
-			doc = frappe.get_doc("Bank Transaction", bt.name)
-			doc.cancel()
-			doc.delete()
-
-		for doctype in ("Bank Account", "Bank Account Type", "Bank Account Subtype"):
-			for d in frappe.get_all(doctype):
-				frappe.delete_doc(doctype, d.name, force=True)
-
+class TestPlaidSettings(ERPNextTestSuite):
 	def test_plaid_disabled(self):
 		frappe.db.set_single_value("Plaid Settings", "enabled", 0)
-		self.assertTrue(get_plaid_configuration() == "disabled")
+		self.assertEqual(get_plaid_configuration(), "disabled")
 
 	def test_add_account_type(self):
 		add_account_type("brokerage")
@@ -69,7 +55,7 @@ class TestPlaidSettings(IntegrationTestCase):
 		}
 
 		bank = json.dumps(frappe.get_doc("Bank", "Citi").as_dict(), default=json_handler)
-		company = frappe.db.get_single_value("Global Defaults", "default_company")
+		company = "_Test Company"
 
 		add_bank_accounts(bank_accounts, bank, company)
 
@@ -112,4 +98,4 @@ class TestPlaidSettings(IntegrationTestCase):
 
 		new_bank_transaction(transactions)
 
-		self.assertTrue(len(frappe.get_all("Bank Transaction")) == 1)
+		self.assertEqual(len(frappe.get_all("Bank Transaction")), 1)

@@ -50,6 +50,10 @@ class DeliveryTrip(Document):
 			"UOM Conversion Factor", {"from_uom": "Meter", "to_uom": self.default_distance_uom}, "value"
 		)
 
+	def on_discard(self):
+		self.update_status()
+		self.update_delivery_notes(delete=True)
+
 	def validate(self):
 		if self._action == "submit" and not self.driver:
 			frappe.throw(_("A driver must be set to submit."))
@@ -146,7 +150,7 @@ class DeliveryTrip(Document):
 		frappe.msgprint(_("Delivery Notes {0} updated").format(", ".join(delivery_notes_updated)))
 
 	@frappe.whitelist()
-	def process_route(self, optimize):
+	def process_route(self, optimize: bool):
 		"""
 		Estimate the arrival times for each stop in the Delivery Trip.
 		If `optimize` is True, the stops will be re-arranged, based
@@ -212,7 +216,7 @@ class DeliveryTrip(Document):
 		        (list of list of str): List of address routes split at locks, if optimize is `True`
 		"""
 		if not self.driver_address:
-			frappe.throw(_("Cannot Calculate Arrival Time as Driver Address is Missing."))
+			frappe.throw(_("Cannot calculate arrival time as the driver address is missing."))
 
 		home_address = get_address_display(frappe.get_doc("Address", self.driver_address).as_dict())
 
@@ -301,7 +305,7 @@ class DeliveryTrip(Document):
 
 
 @frappe.whitelist()
-def get_contact_and_address(name):
+def get_contact_and_address(name: str):
 	out = frappe._dict()
 
 	get_default_contact(out, name)
@@ -311,19 +315,15 @@ def get_contact_and_address(name):
 
 
 def get_default_contact(out, name):
-	contact_persons = frappe.db.sql(
-		"""
-			SELECT parent,
-				(SELECT is_primary_contact FROM tabContact c WHERE c.name = dl.parent) AS is_primary_contact
-			FROM
-				`tabDynamic Link` dl
-			WHERE
-				dl.link_doctype='Customer'
-				AND dl.link_name=%s
-				AND dl.parenttype = 'Contact'
-		""",
-		(name),
-		as_dict=1,
+	dl = frappe.qb.DocType("Dynamic Link")
+	contact = frappe.qb.DocType("Contact")
+	contact_persons = (
+		frappe.qb.from_(dl)
+		.left_join(contact)
+		.on(contact.name == dl.parent)
+		.select(dl.parent, contact.is_primary_contact)
+		.where((dl.link_doctype == "Customer") & (dl.link_name == name) & (dl.parenttype == "Contact"))
+		.run(as_dict=1)
 	)
 
 	if contact_persons:
@@ -337,19 +337,15 @@ def get_default_contact(out, name):
 
 
 def get_default_address(out, name):
-	shipping_addresses = frappe.db.sql(
-		"""
-			SELECT parent,
-				(SELECT is_shipping_address FROM tabAddress a WHERE a.name=dl.parent) AS is_shipping_address
-			FROM
-				`tabDynamic Link` dl
-			WHERE
-				dl.link_doctype='Customer'
-				AND dl.link_name=%s
-				AND dl.parenttype = 'Address'
-		""",
-		(name),
-		as_dict=1,
+	dl = frappe.qb.DocType("Dynamic Link")
+	address = frappe.qb.DocType("Address")
+	shipping_addresses = (
+		frappe.qb.from_(dl)
+		.left_join(address)
+		.on(address.name == dl.parent)
+		.select(dl.parent, address.is_shipping_address)
+		.where((dl.link_doctype == "Customer") & (dl.link_name == name) & (dl.parenttype == "Address"))
+		.run(as_dict=1)
 	)
 
 	if shipping_addresses:
@@ -363,7 +359,9 @@ def get_default_address(out, name):
 
 
 @frappe.whitelist()
-def get_contact_display(contact):
+def get_contact_display(contact: str):
+	frappe.has_permission("Contact", "read", doc=contact, throw=True)
+
 	contact_info = frappe.db.get_value(
 		"Contact", contact, ["first_name", "last_name", "phone", "mobile_no"], as_dict=1
 	)
@@ -399,8 +397,9 @@ def sanitize_address(address):
 
 
 @frappe.whitelist()
-def notify_customers(delivery_trip):
+def notify_customers(delivery_trip: str):
 	delivery_trip = frappe.get_doc("Delivery Trip", delivery_trip)
+	delivery_trip.check_permission()
 
 	context = delivery_trip.as_dict()
 
@@ -464,7 +463,9 @@ def get_attachments(delivery_stop):
 
 
 @frappe.whitelist()
-def get_driver_email(driver):
+def get_driver_email(driver: str):
+	frappe.has_permission("Driver", "read", doc=driver, throw=True)
+
 	employee = frappe.db.get_value("Driver", driver, "employee")
 	email = frappe.db.get_value("Employee", employee, "prefered_email")
 	return {"email": email}

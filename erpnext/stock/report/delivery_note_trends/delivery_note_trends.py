@@ -14,12 +14,15 @@ def execute(filters=None):
 	conditions = get_columns(filters, "Delivery Note")
 	data = get_data(filters, conditions)
 
-	chart_data = get_chart_data(data, filters)
+	chart_data = get_chart_data(data, conditions, filters)
 
 	return conditions["columns"], data, None, chart_data
 
 
-def get_chart_data(data, filters):
+def get_chart_data(data, conditions, filters):
+	def wrap_in_quotes(label):
+		return f"'{label}'"
+
 	if not data:
 		return []
 
@@ -36,6 +39,9 @@ def get_chart_data(data, filters):
 		data = data[:10]
 
 	for row in data:
+		if row[0] == wrap_in_quotes(_("Total")):
+			continue
+
 		labels.append(row[0])
 		datapoints.append(row[-1])
 
@@ -46,4 +52,6 @@ def get_chart_data(data, filters):
 		},
 		"type": "bar",
 		"fieldtype": "Currency",
+		"options": "currency",
+		"currency": conditions.get("company_currency"),
 	}

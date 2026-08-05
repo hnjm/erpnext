@@ -31,7 +31,7 @@ class AssetCategory(Document):
 		self.validate_finance_books()
 		self.validate_account_types()
 		self.validate_account_currency()
-		self.valide_cwip_account()
+		self.validate_accounts()
 
 	def validate_finance_books(self):
 		for d in self.finance_books:
@@ -63,7 +63,7 @@ class AssetCategory(Document):
 
 		for d in invalid_accounts:
 			frappe.throw(
-				_("Row #{}: Currency of {} - {} doesn't matches company currency.").format(
+				_("Row #{0}: Currency of {1} - {2} does not match company currency.").format(
 					d.idx, frappe.bold(frappe.unscrub(d.type)), frappe.bold(d.account)
 				),
 				title=_("Invalid Account"),
@@ -97,23 +97,99 @@ class AssetCategory(Document):
 							title=_("Invalid Account"),
 						)
 
-	def valide_cwip_account(self):
+	def validate_accounts(self):
+		self.validate_duplicate_rows()
+		self.validate_cwip_accounts()
+		self.validate_depreciation_accounts()
+
+	def validate_duplicate_rows(self):
+		companies = {row.company_name for row in self.accounts}
+		if len(companies) != len(self.accounts):
+			frappe.throw(_("Cannot set multiple account rows for the same company"))
+
+	def validate_cwip_accounts(self):
 		if self.enable_cwip_accounting:
 			missing_cwip_accounts_for_company = []
 			for d in self.accounts:
-				if not d.capital_work_in_progress_account and not frappe.db.get_value(
+				if not d.capital_work_in_progress_account and not frappe.get_cached_value(
 					"Company", d.company_name, "capital_work_in_progress_account"
 				):
 					missing_cwip_accounts_for_company.append(get_link_to_form("Company", d.company_name))
 
 			if missing_cwip_accounts_for_company:
-				msg = _("""To enable Capital Work in Progress Accounting,""") + " "
-				msg += _("""you must select Capital Work in Progress Account in accounts table""")
+				msg = _(
+					"To enable Capital Work in Progress Accounting, you must select Capital Work in Progress Account in accounts table"
+				)
 				msg += "<br><br>"
-				msg += _("You can also set default CWIP account in Company {}").format(
+				msg += _("You can also set default CWIP account in Company {0}").format(
 					", ".join(missing_cwip_accounts_for_company)
 				)
 				frappe.throw(msg, title=_("Missing Account"))
+
+	def validate_depreciation_accounts(self):
+		depreciation_account_map = {
+			"accumulated_depreciation_account": "Accumulated Depreciation Account",
+			"depreciation_expense_account": "Depreciation Expense Account",
+		}
+
+		error_msg = []
+		companies_with_accounts = set()
+
+		def validate_company_accounts(company, acc_row=None):
+			default_accounts = frappe.get_cached_value(
+				"Company",
+				company,
+				["accumulated_depreciation_account", "depreciation_expense_account"],
+				as_dict=True,
+			)
+			for fieldname, label in depreciation_account_map.items():
+				row_value = acc_row.get(fieldname) if acc_row else None
+				if not row_value and not default_accounts.get(fieldname):
+					if acc_row:
+						error_msg.append(
+							_("Row #{0}: Missing <b>{1}</b> for company <b>{2}</b>.").format(
+								acc_row.idx,
+								label,
+								get_link_to_form("Company", company),
+							)
+						)
+					else:
+						msg = _("Missing account configuration for company <b>{0}</b>.").format(
+							get_link_to_form("Company", company),
+						)
+						if msg not in error_msg:
+							error_msg.append(msg)
+
+		companies_with_assets = frappe.db.get_all(
+			"Asset",
+			{
+				"calculate_depreciation": 1,
+				"asset_category": self.name,
+				"status": ["in", ("Submitted", "Partially Depreciated")],
+			},
+			pluck="company",
+			distinct=True,
+		)
+
+		for acc_row in self.accounts:
+			companies_with_accounts.add(acc_row.company_name)
+			if acc_row.company_name in companies_with_assets:
+				validate_company_accounts(acc_row.company_name, acc_row)
+
+		for company in companies_with_assets:
+			if company not in companies_with_accounts:
+				validate_company_accounts(company)
+
+		if error_msg:
+			msg = _(
+				"Since there are active depreciable assets under this category, the following accounts are required. <br><br>"
+			)
+			msg += _(
+				"You can either configure default depreciation accounts in the Company or set the required accounts in the following rows: <br><br>"
+			)
+			msg += "<br>".join(error_msg)
+
+			frappe.throw(msg, title=_("Missing Accounts"))
 
 
 def get_asset_category_account(

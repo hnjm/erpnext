@@ -111,6 +111,12 @@ frappe.query_reports["Stock Balance"] = {
 			options: "UOM",
 		},
 		{
+			fieldname: "show_alt_uom_balance",
+			label: __("Show Alternate UOM Balance"),
+			fieldtype: "Check",
+			default: 0,
+		},
+		{
 			fieldname: "show_variant_attributes",
 			label: __("Show Variant Attributes"),
 			fieldtype: "Check",
@@ -130,7 +136,7 @@ frappe.query_reports["Stock Balance"] = {
 			fieldname: "include_zero_stock_items",
 			label: __("Include Zero Stock Items"),
 			fieldtype: "Check",
-			default: 0,
+			default: 1,
 		},
 		{
 			fieldname: "show_dimension_wise_stock",
@@ -150,6 +156,13 @@ frappe.query_reports["Stock Balance"] = {
 		}
 
 		return value;
+	},
+
+	onload: function (report) {
+		report.page.add_inner_button(__("View Stock Ledger"), function () {
+			var filters = report.get_values();
+			frappe.set_route("query-report", "Stock Ledger", filters);
+		});
 	},
 };
 

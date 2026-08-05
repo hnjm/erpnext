@@ -1,11 +1,10 @@
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
-import copy
 
 import frappe
 from frappe import _
-from frappe.utils.nestedset import NestedSet
+from frappe.utils.nestedset import NestedSet, get_root_of
 
 
 class ItemGroup(NestedSet):
@@ -33,8 +32,9 @@ class ItemGroup(NestedSet):
 
 	def validate(self):
 		if not self.parent_item_group and not frappe.in_test:
-			if frappe.db.exists("Item Group", _("All Item Groups")):
-				self.parent_item_group = _("All Item Groups")
+			root = get_root_of(self.doctype)
+			if root and root != self.name:
+				self.parent_item_group = root
 		self.validate_item_group_defaults()
 		self.check_item_tax()
 
@@ -47,7 +47,9 @@ class ItemGroup(NestedSet):
 					frappe.throw(
 						_("{0} entered twice {1} in Item Taxes").format(
 							frappe.bold(d.item_tax_template),
-							f"for tax category {frappe.bold(d.tax_category)}" if d.tax_category else "",
+							_("for tax category {0}").format(frappe.bold(d.tax_category))
+							if d.tax_category
+							else "",
 						)
 					)
 				else:
@@ -95,3 +97,36 @@ def get_item_group_defaults(item, company):
 			return row
 
 	return frappe._dict()
+
+
+@frappe.whitelist()
+def get_company_resolved_defaults(company: str) -> dict:
+	"""
+	Returns effective default values for a company by checking:
+	1. Company document
+	2. Accounts Settings (for deferred account fallbacks)
+	"""
+	if not company:
+		return {}
+
+	company_doc = frappe.get_cached_doc("Company", company)
+
+	return {
+		"default_warehouse": company_doc.get("default_warehouse"),
+		"default_inventory_account": company_doc.get("default_inventory_account"),
+		"buying_cost_center": company_doc.get("cost_center"),
+		"selling_cost_center": company_doc.get("cost_center"),
+		"expense_account": company_doc.get("default_expense_account"),
+		"income_account": company_doc.get("default_income_account"),
+		"default_provisional_account": company_doc.get("default_provisional_account"),
+		"purchase_expense_account": company_doc.get("purchase_expense_account"),
+		"default_cogs_account": company_doc.get("default_expense_account"),
+		"deferred_expense_account": company_doc.get("default_deferred_expense_account"),
+		"deferred_revenue_account": company_doc.get("default_deferred_revenue_account"),
+		"default_discount_account": company_doc.get("default_discount_account"),
+		"purchase_expense_contra_account": company_doc.get("purchase_expense_contra_account"),
+		"expenses_added_to_stock_account": company_doc.get("expenses_added_to_stock_account"),
+		"expenses_added_to_stock_contra_account": company_doc.get("expenses_added_to_stock_contra_account"),
+		"default_price_list": "",
+		"default_supplier": "",
+	}

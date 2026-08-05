@@ -1,16 +1,16 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_months, today
 
 from erpnext import get_company_currency
 from erpnext.stock.doctype.item.test_item import make_item
+from erpnext.tests.utils import ERPNextTestSuite
 
 from .blanket_order import make_order
 
 
-class TestBlanketOrder(IntegrationTestCase):
+class TestBlanketOrder(ERPNextTestSuite):
 	def setUp(self):
 		frappe.flags.args = frappe._dict()
 
@@ -25,6 +25,7 @@ class TestBlanketOrder(IntegrationTestCase):
 		so.submit()
 
 		self.assertEqual(so.doctype, "Sales Order")
+		self.assertNotEqual(so.naming_series, bo.naming_series)
 		self.assertEqual(len(so.get("items")), len(bo.get("items")))
 
 		# check the rate, quantity and updation for the ordered quantity
@@ -50,6 +51,7 @@ class TestBlanketOrder(IntegrationTestCase):
 		po.submit()
 
 		self.assertEqual(po.doctype, "Purchase Order")
+		self.assertNotEqual(po.naming_series, bo.naming_series)
 		self.assertEqual(len(po.get("items")), len(bo.get("items")))
 
 		# check the rate, quantity and updation for the ordered quantity
@@ -91,6 +93,55 @@ class TestBlanketOrder(IntegrationTestCase):
 		frappe.db.set_single_value("Buying Settings", "blanket_order_allowance", 10)
 		po.submit()
 
+	@ERPNextTestSuite.change_settings("Selling Settings", {"blanket_order_allowance": 0})
+	@ERPNextTestSuite.change_settings("Buying Settings", {"blanket_order_allowance": 0})
+	@ERPNextTestSuite.change_settings(
+		"Stock Settings",
+		{"over_delivery_receipt_allowance": 10, "role_allowed_to_over_deliver_receive": "Stock Manager"},
+	)
+	def test_stock_over_delivery_role_does_not_bypass_blanket_order_allowance(self):
+		test_user = frappe.get_doc("User", "test@example.com")
+		test_user.add_roles("Stock Manager")
+
+		frappe.clear_cache()
+		for blanket_order_type, doctype, date_field in (
+			("Selling", "Sales Order", "delivery_date"),
+			("Purchasing", "Purchase Order", "schedule_date"),
+		):
+			bo = make_blanket_order(blanket_order_type=blanket_order_type, quantity=100)
+			frappe.flags.args.doctype = doctype
+			order = make_order(bo.name)
+			order.currency = get_company_currency(order.company)
+			setattr(order, date_field, today())
+			order.items[0].qty = 110
+
+			with self.set_user("test@example.com"):
+				order.flags.ignore_permissions = True
+				self.assertRaises(frappe.ValidationError, order.submit)
+
+	def test_blanket_order_over_order_aggregated_across_rows(self):
+		# the over-order check should sum the same item across multiple order rows
+		frappe.db.set_single_value("Selling Settings", "blanket_order_allowance", 0)
+		bo = make_blanket_order(blanket_order_type="Selling", quantity=100)
+
+		frappe.flags.args.doctype = "Sales Order"
+		so = make_order(bo.name)
+		so.currency = get_company_currency(so.company)
+		so.delivery_date = today()
+		so.items[0].qty = 60
+		so.append(
+			"items",
+			{
+				"item_code": so.items[0].item_code,
+				"qty": 50,  # 60 + 50 = 110 > 100 blanket qty
+				"rate": so.items[0].rate,
+				"delivery_date": today(),
+				"against_blanket_order": 1,
+				"blanket_order": bo.name,
+			},
+		)
+		self.assertRaises(frappe.ValidationError, so.submit)
+
 	def test_party_item_code(self):
 		item_doc = make_item("_Test Item 1 for Blanket Order")
 		item_code = item_doc.name
@@ -112,6 +163,26 @@ class TestBlanketOrder(IntegrationTestCase):
 
 		bo = make_blanket_order(blanket_order_type="Purchasing", supplier=supplier, item_code=item_code)
 		self.assertEqual(bo.items[0].party_item_code, "SUPP-PART-1")
+
+	def test_blanket_order_zero_quantity(self):
+		bo = frappe.new_doc("Blanket Order")
+		bo.blanket_order_type = "Selling"
+		bo.company = "_Test Company"
+		bo.customer = "_Test Customer"
+		bo.from_date = today()
+		bo.to_date = add_months(today(), 12)
+
+		bo.append(
+			"items",
+			{
+				"item_code": "_Test Item",
+				"qty": 0,
+				"rate": 100,
+			},
+		)
+
+		with self.assertRaises(frappe.ValidationError):
+			bo.insert()
 
 
 def make_blanket_order(**args):

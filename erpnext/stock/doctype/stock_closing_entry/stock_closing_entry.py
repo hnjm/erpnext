@@ -5,13 +5,54 @@ import json
 
 import frappe
 from frappe import _
-from frappe.core.doctype.prepared_report.prepared_report import create_json_gz_file
 from frappe.desk.form.load import get_attachments
 from frappe.model.document import Document
 from frappe.utils import add_days, get_date_str, get_link_to_form, nowtime, parse_json
 from frappe.utils.background_jobs import enqueue
+from frappe.utils.caching import request_cache
 
 from erpnext.stock.doctype.inventory_dimension.inventory_dimension import get_inventory_dimensions
+
+SCOPE_FIELDS = ("warehouse", "item_code", "item_group", "warehouse_type")
+
+
+def apply_unscoped_filters(filters):
+	meta = frappe.get_meta("Stock Closing Entry")
+	for fieldname in SCOPE_FIELDS:
+		if meta.has_field(fieldname):
+			filters[fieldname] = ("is", "not set")
+
+	return filters
+
+
+def get_closing_entry_for_closed_period(company):
+	closed_upto = frappe.db.get_value(
+		"Period Closing Voucher", {"docstatus": 1, "company": company}, [{"MAX": "period_end_date"}]
+	)
+	if not closed_upto:
+		return None
+
+	return _get_completed_closing_entry(company, str(closed_upto))
+
+
+@request_cache
+def _get_completed_closing_entry(company, closed_upto):
+	filters = apply_unscoped_filters(
+		{
+			"company": company,
+			"docstatus": 1,
+			"status": "Completed",
+			"to_date": ("<=", closed_upto),
+		}
+	)
+
+	return frappe.db.get_value(
+		"Stock Closing Entry",
+		filters,
+		["name", "to_date"],
+		order_by="to_date desc",
+		as_dict=True,
+	)
 
 
 class StockClosingEntry(Document):
@@ -27,9 +68,12 @@ class StockClosingEntry(Document):
 		company: DF.Link | None
 		from_date: DF.Date | None
 		naming_series: DF.Literal["CBAL-.#####"]
-		status: DF.Literal["Draft", "Queued", "In Progress", "Completed", "Failed", "Canceled"]
+		status: DF.Literal["Draft", "Queued", "In Progress", "Completed", "Failed", "Cancelled"]
 		to_date: DF.Date | None
 	# end: auto-generated types
+
+	def on_discard(self):
+		self.db_set("status", "Cancelled")
 
 	def before_save(self):
 		self.set_status()
@@ -37,7 +81,7 @@ class StockClosingEntry(Document):
 	def set_status(self, save=False):
 		self.status = "Queued"
 		if self.docstatus == 2:
-			self.status = "Canceled"
+			self.status = "Cancelled"
 
 		if self.docstatus == 0:
 			self.status = "Draft"
@@ -57,15 +101,14 @@ class StockClosingEntry(Document):
 			.where(
 				(table.docstatus == 1)
 				& (table.company == self.company)
-				& (
-					(table.from_date.between(self.from_date, self.to_date))
-					| (table.to_date.between(self.from_date, self.to_date))
-					| ((self.from_date >= table.from_date) & (table.from_date >= self.to_date))
-				)
+				# two date ranges overlap when each starts on or before the other ends;
+				# this also catches one range being fully contained within the other
+				& (table.from_date <= self.to_date)
+				& (table.to_date >= self.from_date)
 			)
 		)
 
-		for fieldname in ["warehouse", "item_code", "item_group", "warehouse_type"]:
+		for fieldname in SCOPE_FIELDS:
 			if self.get(fieldname):
 				query = query.where(table[fieldname] == self.get(fieldname))
 
@@ -83,25 +126,42 @@ class StockClosingEntry(Document):
 		self.enqueue_job()
 
 	def on_cancel(self):
+		self.validate_closed_period_lock()
 		self.set_status(save=True)
 		self.remove_stock_closing()
+
+	def validate_closed_period_lock(self):
+		pcv = frappe.db.get_value(
+			"Period Closing Voucher",
+			{"company": self.company, "docstatus": 1, "period_end_date": (">=", self.to_date)},
+			"name",
+		)
+
+		if pcv:
+			frappe.throw(
+				_(
+					"Stock Closing Entry {0} belongs to a closed accounting period. Cancel the Period Closing Voucher {1} first."
+				).format(self.name, get_link_to_form("Period Closing Voucher", pcv)),
+				title=_("Closed Period"),
+			)
 
 	def remove_stock_closing(self):
 		table = frappe.qb.DocType("Stock Closing Balance")
 		frappe.qb.from_(table).delete().where(table.stock_closing_entry == self.name).run()
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def enqueue_job(self):
 		self.db_set("status", "In Progress")
 		enqueue(prepare_closing_stock_balance, name=self.name, queue="long", timeout=1500)
 		frappe.msgprint(
 			_(
-				"Stock Closing Entry {0} has been queued for processing, system will take sometime to complete it."
+				"Stock Closing Entry {0} has been queued for processing, the system will take some time to complete it."
 			).format(self.name)
 		)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def regenerate_closing_balance(self):
+		self.validate_closed_period_lock()
 		self.remove_stock_closing()
 		self.enqueue_job()
 
@@ -135,8 +195,7 @@ class StockClosingEntry(Document):
 			attached_file = frappe.get_doc("File", attachment.name)
 
 			data = gzip.decompress(attached_file.get_content())
-			if data := json.loads(data.decode("utf-8")):
-				data = data
+			data = json.loads(data.decode("utf-8"))
 
 			return parse_json(data)
 
@@ -151,6 +210,7 @@ def prepare_closing_stock_balance(name):
 		doc.create_stock_closing_balance_entries()
 		doc.db_set("status", "Completed")
 	except Exception:
+		frappe.db.rollback()
 		doc.db_set("status", "Failed")
 		doc.log_error(title="Stock Closing Entry Failed")
 
@@ -266,7 +326,7 @@ class StockClosing:
 				],
 				filters={
 					"company": self.company,
-					"closing_stock_balance": self.last_closing_balance.name,
+					"stock_closing_entry": self.last_closing_balance.name,
 				},
 			)
 

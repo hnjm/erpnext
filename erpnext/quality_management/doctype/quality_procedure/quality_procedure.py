@@ -49,11 +49,8 @@ class QualityProcedure(NestedSet):
 
 	def on_trash(self):
 		# clear from child table (sub procedures)
-		frappe.db.sql(
-			"""update `tabQuality Procedure Process`
-			set `procedure`='' where `procedure`=%s""",
-			self.name,
-		)
+		qpp = frappe.qb.DocType("Quality Procedure Process")
+		frappe.qb.update(qpp).set(qpp["procedure"], "").where(qpp["procedure"] == self.name).run()
 		NestedSet.on_trash(self, allow_root_deletion=True)
 
 	def check_for_incorrect_child(self):
@@ -122,7 +119,12 @@ class QualityProcedure(NestedSet):
 
 
 @frappe.whitelist()
-def get_children(doctype, parent=None, parent_quality_procedure=None, is_root=False):
+def get_children(
+	doctype: str,
+	parent: str | None = None,
+	parent_quality_procedure: str | None = None,
+	is_root: bool = False,
+):
 	if parent is None or parent == "All Quality Procedures":
 		parent = ""
 
@@ -146,7 +148,7 @@ def get_children(doctype, parent=None, parent_quality_procedure=None, is_root=Fa
 		)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def add_node():
 	from frappe.desk.treeview import make_tree_args
 

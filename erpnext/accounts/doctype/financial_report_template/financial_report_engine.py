@@ -6,16 +6,18 @@ import json
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from functools import reduce
+from functools import cache, reduce
 from typing import Any, Union
 
 import frappe
 from frappe import _
 from frappe.database.operator_map import OPERATOR_MAP
+from frappe.model import numeric_fieldtypes
 from frappe.query_builder import Case
-from frappe.query_builder.functions import Sum
+from frappe.query_builder.functions import Cast_, Sum
 from frappe.utils import cstr, date_diff, flt, getdate
-from pypika.terms import LiteralValue
+from frappe.utils.xlsxutils import XLSXMetadata, XLSXStyleBuilder
+from pypika.terms import Bracket, LiteralValue
 
 from erpnext import get_company_currency
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
@@ -37,6 +39,9 @@ from erpnext.accounts.report.financial_statements import (
 	get_period_list,
 )
 from erpnext.accounts.utils import get_children, get_currency_precision
+
+DEFAULT_BULLET_PREFIX = "• "
+SEGMENT_PREFIX = "seg_"
 
 # ============================================================================
 # DATA MODELS
@@ -71,7 +76,9 @@ class PeriodValue:
 class AccountData:
 	"""Account data across all periods"""
 
-	account_name: str
+	account: str  # docname
+	account_name: str = ""  # account name
+	account_number: str = ""
 	period_values: dict[str, PeriodValue] = field(default_factory=dict)
 
 	def add_period(self, period_value: PeriodValue) -> None:
@@ -103,7 +110,11 @@ class AccountData:
 			# movement is unaccumulated by default
 
 	def copy(self):
-		copied = AccountData(account_name=self.account_name)
+		copied = AccountData(
+			account=self.account,
+			account_name=self.account_name,
+			account_number=self.account_number,
+		)
 		copied.period_values = {k: v.copy() for k, v in self.period_values.items()}
 		return copied
 
@@ -135,7 +146,7 @@ class SegmentData:
 
 	@property
 	def id(self) -> str:
-		return f"seg_{self.index}"
+		return f"{SEGMENT_PREFIX}{self.index}"
 
 
 @dataclass
@@ -216,20 +227,55 @@ class FinancialReportEngine:
 		return context.get_result()
 
 	def _validate_filters(self, filters: dict[str, Any]) -> None:
-		required_filters = ["report_template", "period_start_date", "period_end_date"]
+		filter_labels = {
+			"report_template": _("Report Template"),
+			"filter_based_on": _("Filter Based On"),
+			"period_start_date": _("Start Date"),
+			"period_end_date": _("End Date"),
+			"from_fiscal_year": _("Start Year"),
+			"to_fiscal_year": _("End Year"),
+		}
+
+		required_filters_by_basis = {
+			"Date Range": ("period_start_date", "period_end_date"),
+			"Fiscal Year": ("from_fiscal_year", "to_fiscal_year"),
+		}
+
+		required_filters = ["report_template", "filter_based_on"]
+		required_filters.extend(required_filters_by_basis.get(filters.get("filter_based_on"), ()))
 
 		for filter_key in required_filters:
 			if not filters.get(filter_key):
-				frappe.throw(_("Missing required filter: {0}").format(filter_key))
+				frappe.throw(
+					title=_("Missing Required Filter"),
+					msg=_("Missing required filter: {0}").format(
+						frappe.bold(filter_labels.get(filter_key, filter_key))
+					),
+				)
 
 		if filters.get("presentation_currency"):
-			frappe.msgprint(_("Currency filters are currently unsupported in Custom Financial Report."))
+			frappe.msgprint(
+				indicator="orange",
+				title=_("Not Supported"),
+				msg=_("Currency filters are currently unsupported in Custom Financial Report"),
+			)
 
 		# Margin view is dependent on first row being an income account. Hence not supported.
 		# Way to implement this would be using calculated rows with formulas.
 		supported_views = ("Report", "Growth")
 		if (view := filters.get("selected_view")) and view not in supported_views:
-			frappe.msgprint(_("{0} view is currently unsupported in Custom Financial Report.").format(view))
+			frappe.msgprint(
+				indicator="orange",
+				title=_("Not Supported"),
+				msg=_("{0} view is currently unsupported in Custom Financial Report").format(view),
+			)
+
+		if filters.get("group_by_dimension"):
+			frappe.msgprint(
+				indicator="orange",
+				title=_("Not Supported"),
+				msg=_("Dimension-based grouping is currently unsupported in Custom Financial Report"),
+			)
 
 	def _initialize_context(self, filters: dict[str, Any]) -> ReportContext:
 		template_name = filters.get("report_template")
@@ -329,12 +375,10 @@ class DataCollector:
 		self.account_fields = {field.fieldname for field in frappe.get_meta("Account").fields}
 
 	def add_account_request(self, row):
-		accounts = self._parse_account_filter(self.company, row)
-
 		self.account_requests.append(
 			{
 				"row": row,
-				"accounts": accounts,
+				"accounts": self._parse_account_filter(self.company, row),
 				"balance_type": row.balance_type,
 				"reference_code": row.reference_code,
 				"reverse_sign": row.reverse_sign,
@@ -345,12 +389,12 @@ class DataCollector:
 		if not self.account_requests:
 			return {"account_data": {}, "summary": {}, "account_details": {}}
 
-		# Get all unique accounts
-		all_accounts = set()
-		for request in self.account_requests:
-			all_accounts.update(request["accounts"])
+		# Get all accounts
+		all_accounts = []
 
-		all_accounts = list(all_accounts)
+		for request in self.account_requests:
+			all_accounts.extend(request["accounts"])
+
 		if not all_accounts:
 			return {"account_data": {}, "summary": {}, "account_details": {}}
 
@@ -373,7 +417,9 @@ class DataCollector:
 			total_values = [0.0] * len(self.periods)
 			request_account_details = {}
 
-			for account_name in accounts:
+			for account in accounts:
+				account_name = account.name
+
 				if account_name not in account_data:
 					continue
 
@@ -396,20 +442,21 @@ class DataCollector:
 		return {"account_data": account_data, "summary": summary, "account_details": account_details}
 
 	@staticmethod
-	def _parse_account_filter(company, report_row) -> list[str]:
+	def _parse_account_filter(company, report_row) -> list[dict]:
 		"""
 		Find accounts matching filter criteria.
 
 		Example:
-		                Input: '["account_type", "=", "Cash"]'
-		                Output: ["Cash - COMP", "Petty Cash - COMP", "Bank - COMP"]
+
+		- Input: '["account_type", "=", "Cash"]'
+		- Output: [{"name": "Cash - COMP", "account_name": "Cash", "account_number": "1001"}]
 		"""
 		filter_parser = FilterExpressionParser()
 
 		account = frappe.qb.DocType("Account")
 		query = (
 			frappe.qb.from_(account)
-			.select(account.name)
+			.select(account.name, account.account_name, account.account_number)
 			.where(account.disabled == 0)
 			.where(account.is_group == 0)
 		)
@@ -423,8 +470,8 @@ class DataCollector:
 
 		query = query.where(where_condition)
 		query = query.orderby(account.name)
-		result = query.run(as_dict=True)
-		return [row.name for row in result]
+
+		return query.run(as_dict=True)
 
 	@staticmethod
 	def get_filtered_accounts(company: str, account_rows: list) -> list[str]:
@@ -456,17 +503,36 @@ class FinancialQueryBuilder:
 		self.filters = filters
 		self.periods = periods
 		self.company = filters.get("company")
+		self.account_meta = {}  # {name: {account_name, account_number}}
+		self.ignore_opening_entries = False
 
-	def fetch_account_balances(self, accounts: list[str]) -> dict[str, AccountData]:
+	def fetch_account_balances(self, accounts: list[dict]) -> dict[str, AccountData]:
 		"""
 		Fetch account balances for all periods with optimization.
 		Steps: get opening balances → fetch GL entries → calculate running totals
 
+		- accounts: list of accounts with details
+
+		```
+		{
+		    "name": "Cash - COMP",
+		    "account_name": "Cash",
+		    "account_number": "1001",
+		}
+		```
+
 		Returns:
 		    dict: {account: AccountData}
 		"""
-		balances_data = self._get_opening_balances(accounts)
-		gl_data = self._get_gl_movements(accounts)
+		account_names = list({acc.name for acc in accounts})
+		# NOTE: do not change accounts list as it is used in caller function
+		self.account_meta = {
+			acc.name: {"account_name": acc.account_name, "account_number": acc.account_number}
+			for acc in accounts
+		}
+
+		balances_data = self._get_opening_balances(account_names)
+		gl_data = self._get_gl_movements(account_names)
 		self._calculate_running_balances(balances_data, gl_data)
 		self._handle_balance_accumulation(balances_data)
 
@@ -476,6 +542,8 @@ class FinancialQueryBuilder:
 		"""
 		Return opening balances for *all accounts* defaulting to zero.
 		"""
+		self.ignore_opening_entries = False
+
 		if frappe.get_single_value("Accounts Settings", "ignore_account_closing_balance"):
 			return self._get_opening_balances_from_gl(accounts)
 
@@ -495,9 +563,9 @@ class FinancialQueryBuilder:
 		if last_closing_voucher:
 			closing_voucher = last_closing_voucher[0]
 			closing_data = self._get_closing_balances(accounts, closing_voucher.name)
+			self.ignore_opening_entries = True  # Else it will double count
 
-			if sum(closing_data.values()) != 0.0:
-				return self._rebase_closing_balances(closing_data, closing_voucher.period_end_date)
+			return self._rebase_closing_balances(closing_data, closing_voucher.period_end_date)
 
 		return self._get_opening_balances_from_gl(accounts)
 
@@ -509,18 +577,19 @@ class FinancialQueryBuilder:
 			frappe.qb.from_(acb_table)
 			.select(
 				acb_table.account,
-				(acb_table.debit - acb_table.credit).as_("balance"),
+				Sum(acb_table.debit - acb_table.credit).as_("balance"),
 			)
 			.where(acb_table.company == self.company)
 			.where(acb_table.account.isin(account_names))
 			.where(acb_table.period_closing_voucher == closing_voucher)
+			.groupby(acb_table.account)
 		)
 
-		query = self._apply_standard_filters(query, acb_table)
+		query = self._apply_standard_filters(query, acb_table, "Account Closing Balance")
 		results = self._execute_with_permissions(query, "Account Closing Balance")
 
 		for row in results:
-			closing_balances[row["account"]] = row["balance"]
+			closing_balances[row["account"]] = row["balance"] or 0.0
 
 		return closing_balances
 
@@ -543,7 +612,8 @@ class FinancialQueryBuilder:
 			gap_movement = gap_movements.get(account, 0.0)
 			opening_balance = closing_balance + gap_movement
 
-			account_data = AccountData(account)
+			account_data = AccountData(account=account, **self._get_account_meta(account))
+
 			account_data.add_period(PeriodValue(first_period_key, opening_balance, 0, 0))
 			balances_data[account] = account_data
 
@@ -590,7 +660,12 @@ class FinancialQueryBuilder:
 			.groupby(gl_table.account)
 		)
 
-		if not frappe.get_single_value("Accounts Settings", "ignore_is_opening_check_for_reporting"):
+		ignore_is_opening = frappe.get_single_value(
+			"Accounts Settings", "ignore_is_opening_check_for_reporting"
+		)
+		if self.ignore_opening_entries and not ignore_is_opening:
+			# This filter here applies to all accounts (BS & PL)
+			# However, in legacy query, this filter only applies to BS accounts
 			query = query.where(gl_table.is_opening == "No")
 
 		# Add period-specific columns
@@ -610,12 +685,15 @@ class FinancialQueryBuilder:
 		return self._execute_with_permissions(query, "GL Entry")
 
 	def _calculate_running_balances(self, balances_data: dict, gl_data: list[dict]) -> dict:
-		for row in gl_data:
-			account = row["account"]
+		gl_dict = {row["account"]: row for row in gl_data}
+		accounts = set(balances_data.keys()) | set(gl_dict.keys())
+
+		for account in accounts:
 			if account not in balances_data:
-				balances_data[account] = AccountData(account)
+				balances_data[account] = AccountData(account=account, **self._get_account_meta(account))
 
 			account_data: AccountData = balances_data[account]
+			gl_movement = gl_dict.get(account, {})
 
 			if account_data.has_periods():
 				first_period = account_data.get_period(self.periods[0]["key"])
@@ -625,19 +703,12 @@ class FinancialQueryBuilder:
 
 			for period in self.periods:
 				period_key = period["key"]
-				movement = row.get(period_key, 0.0)
+				movement = gl_movement.get(period_key, 0.0)
 				closing_balance = current_balance + movement
 
 				account_data.add_period(PeriodValue(period_key, current_balance, closing_balance, movement))
 
 				current_balance = closing_balance
-
-		# Accounts with no movements
-		for account_data in balances_data.values():
-			for period in self.periods:
-				period_key = period["key"]
-				if period_key not in account_data.period_values:
-					account_data.add_period(PeriodValue(period_key, 0.0, 0.0, 0.0))
 
 	def _handle_balance_accumulation(self, balances_data):
 		for account_data in balances_data.values():
@@ -657,12 +728,19 @@ class FinancialQueryBuilder:
 			else:
 				account_data.unaccumulate_values()
 
-	def _apply_standard_filters(self, query, table):
-		if self.filters.get("ignore_closing_entries"):
-			if hasattr(table, "is_period_closing_voucher_entry"):
-				query = query.where(table.is_period_closing_voucher_entry == 0)
-			else:
-				query = query.where(table.voucher_type != "Period Closing Voucher")
+	def _apply_standard_filters(self, query, table, doctype: str = "GL Entry"):
+		# Exclude PCV-generated entries except those posted to a closing-account-head
+		# so BS retained earnings survive while P&L reversal entries are filtered out
+		pcv = frappe.qb.DocType("Period Closing Voucher")
+		closing_heads = frappe.qb.from_(pcv).select(pcv.closing_account_head).where(pcv.docstatus == 1)
+
+		if doctype == "GL Entry":
+			is_pcv = table.voucher_type == "Period Closing Voucher"
+		else:
+			# Account Closing Balance
+			is_pcv = table.is_period_closing_voucher_entry == 1
+
+		query = query.where(~is_pcv | table.account.isin(closing_heads))
 
 		if self.filters.get("project"):
 			projects = self.filters.get("project")
@@ -710,9 +788,12 @@ class FinancialQueryBuilder:
 		user_conditions = build_match_conditions(doctype)
 
 		if user_conditions:
-			query = query.where(LiteralValue(user_conditions))
+			query = query.where(Bracket(LiteralValue(user_conditions)))
 
 		return query.run(as_dict=True)
+
+	def _get_account_meta(self, account: str) -> dict[str, Any]:
+		return self.account_meta.get(account, {})
 
 
 class FilterExpressionParser:
@@ -795,8 +876,15 @@ class FilterExpressionParser:
 		field = getattr(table, field_name, None)
 		operator_fn = OPERATOR_MAP.get(operator.casefold())
 
-		if "like" in operator.casefold() and "%" not in value:
-			value = f"%{value}%"
+		if "like" in operator.casefold():
+			if "%" not in value:
+				value = f"%{value}%"
+			# Postgres has no LIKE/ILIKE operator for non-text columns; MariaDB implicitly casts
+			# the numeric column to text. Cast a numeric/Check Account field to varchar so the
+			# match runs on both engines and reproduces MariaDB's result.
+			meta_field = frappe.get_meta("Account").get_field(field_name)
+			if meta_field and meta_field.fieldtype in numeric_fieldtypes:
+				field = Cast_(field, "varchar")
 
 		return operator_fn(field, value)
 
@@ -955,8 +1043,7 @@ class FormulaFieldUpdater:
 def get_filtered_accounts(company: str, account_rows: str | list):
 	frappe.has_permission("Financial Report Template", ptype="read", throw=True)
 
-	if isinstance(account_rows, str):
-		account_rows = json.loads(account_rows, object_hook=frappe._dict)
+	account_rows = [frappe._dict(row) for row in frappe.parse_json(account_rows)]
 
 	return DataCollector.get_filtered_accounts(company, account_rows)
 
@@ -1367,7 +1454,8 @@ class FormattingEngine:
 				condition=lambda rd: getattr(rd.row, "italic_text", False), format_properties={"italic": True}
 			),
 			FormattingRule(
-				condition=lambda rd: rd.is_detail_row, format_properties={"is_detail": True, "prefix": "• "}
+				condition=lambda rd: rd.is_detail_row,
+				format_properties={"is_detail": True, "prefix": DEFAULT_BULLET_PREFIX},
 			),
 			FormattingRule(
 				condition=lambda rd: getattr(rd.row, "warn_if_negative", False),
@@ -1544,20 +1632,29 @@ class RowFormatterBase(ABC):
 		pass
 
 	def _get_values(self, row_data: RowData) -> dict[str, Any]:
-		# TODO: can be commonify COA? @abdeali
+		def _get_row_data(key: str, default: Any = "") -> Any:
+			return getattr(row_data.row, key, default) or default
+
+		def _get_filter_value(key: str, default: Any = "") -> Any:
+			return getattr(self.context.filters, key, default) or default
+
 		child_accounts = []
 
 		if row_data.account_details:
 			child_accounts = list(row_data.account_details.keys())
 
+		display_name = _get_row_data("display_name", "")
+
 		values = {
+			"account": _get_row_data("account", "") or display_name,
+			"account_name": display_name,
+			"acc_name": _get_row_data("account_name", ""),
+			"acc_number": _get_row_data("account_number", ""),
 			"child_accounts": child_accounts,
-			"account": getattr(row_data.row, "display_name", "") or "",
-			"indent": getattr(row_data.row, "indentation_level", 0),
-			"account_name": getattr(row_data.row, "account", "") or "",
 			"currency": self.context.currency or "",
-			"period_start_date": getattr(self.context.filters, "period_start_date", "") or "",
-			"period_end_date": getattr(self.context.filters, "period_end_date", "") or "",
+			"indent": _get_row_data("indentation_level", 0),
+			"period_start_date": _get_filter_value("period_start_date", ""),
+			"period_end_date": _get_filter_value("period_end_date", ""),
 			"total": 0,
 		}
 
@@ -1670,8 +1767,8 @@ class DetailRowBuilder:
 		detail_rows = []
 		parent_row = self.parent_row_data.row
 
-		for account_name, account_data in self.parent_row_data.account_details.items():
-			detail_row = self._create_detail_row_object(account_name, parent_row)
+		for account_data in self.parent_row_data.account_details.values():
+			detail_row = self._create_detail_row_object(account_data, parent_row)
 
 			balance_type = getattr(parent_row, "balance_type", "Closing Balance")
 			values = account_data.get_values_by_type(balance_type)
@@ -1687,16 +1784,20 @@ class DetailRowBuilder:
 
 		return detail_rows
 
-	def _create_detail_row_object(self, account_name: str, parent_row):
-		short_name = account_name.rsplit(" - ", 1)[0].strip()
+	def _create_detail_row_object(self, account_data: AccountData, parent_row):
+		acc_name = account_data.account_name or ""
+		acc_number = account_data.account_number or ""
+
+		display_name = f"{_(acc_number)} - {_(acc_name)}" if acc_number else _(acc_name)
 
 		return type(
 			"DetailRow",
 			(),
 			{
-				"display_name": short_name,
-				"account": account_name,
-				"account_name": short_name,
+				"account": account_data.account,
+				"display_name": display_name,
+				"account_name": acc_name,
+				"account_number": acc_number,
 				"data_source": "Account Detail",
 				"indentation_level": getattr(parent_row, "indentation_level", 0) + 1,
 				"fieldtype": getattr(parent_row, "fieldtype", None),
@@ -1770,28 +1871,51 @@ class GrowthViewTransformer:
 		self.formatted_rows = context.raw_data.get("formatted_data", [])
 		self.period_list = context.period_list
 
-	def transform(self) -> None:
+	def transform(self):
 		for row_data in self.formatted_rows:
 			if row_data.get("is_blank_line"):
 				continue
 
-			transformed_values = {}
-			for i in range(len(self.period_list)):
-				current_period = self.period_list[i]["key"]
+			if row_data.get("segment_values"):
+				self._transform_segmented_row(row_data)
+			else:
+				self._transform_single_row(row_data)
 
-				current_value = row_data[current_period]
-				previous_value = row_data[self.period_list[i - 1]["key"]] if i != 0 else 0
+	def _compute_growth_values(self, source: dict) -> dict:
+		transformed = {}
 
-				if i == 0:
-					transformed_values[current_period] = current_value
-				else:
-					growth_percent = self._calculate_growth(previous_value, current_value)
-					transformed_values[current_period] = growth_percent
+		for i, period in enumerate(self.period_list):
+			current_period = period["key"]
+			current_value = source.get(current_period)
 
-			row_data.update(transformed_values)
+			if current_value in (None, ""):
+				continue
+
+			if i == 0:
+				transformed[current_period] = current_value
+			else:
+				previous_period = self.period_list[i - 1]["key"]
+				previous_value = source.get(previous_period) or 0
+				transformed[current_period] = self._calculate_growth(previous_value, current_value)
+
+		return transformed
+
+	def _transform_single_row(self, row_data: dict):
+		row_data.update(self._compute_growth_values(row_data))
+
+	def _transform_segmented_row(self, row_data: dict):
+		for seg_id, seg_data in row_data.get("segment_values", {}).items():
+			if seg_data.get("is_blank_line"):
+				continue
+
+			transformed = self._compute_growth_values(seg_data)
+			seg_data.update(transformed)
+
+			for period_key, value in transformed.items():
+				row_data[f"{seg_id}_{period_key}"] = value
 
 	def _calculate_growth(self, previous_value: float, current_value: float) -> float | None:
-		if current_value is None:
+		if current_value in (None, ""):
 			return None
 
 		if previous_value == 0 and current_value > 0:
@@ -1800,3 +1924,124 @@ class GrowthViewTransformer:
 			return 0.0
 		else:
 			return flt(((current_value - previous_value) / abs(previous_value)) * 100, 2)
+
+
+# ============================================================================
+# XLSX EXPORT STYLING
+# ============================================================================
+
+
+def get_xlsx_styles(metadata: XLSXMetadata) -> dict | None:
+	"""
+	Generate XLSX styles for financial report templates.
+
+	NOTE: Currently only custom report generated with "Report Template" filter will have styles applied.
+	"""
+	# skip styling
+	if not metadata.filters.get("report_template"):
+		return
+
+	builder = XLSXStyleBuilder(metadata, default_styling=False)
+	builder.apply_default_styles(currency_formatting=False)
+
+	# currency is fixed for all columns (only if report template filter is applied)
+	currency = get_company_currency(metadata.filters.get("company"))
+
+	styles = {
+		"bold": builder.register_style({"bold": True}),
+		"italic": builder.register_style({"italic": True}),
+		"warning": builder.register_style({"font_color": "#dc3545"}),  # text-danger
+	}
+
+	fieldtype_formats = {
+		"Int": builder.register_style({"num_format": "General"}),
+		"Float": builder.register_style({"num_format": builder.get_number_format("Float")}),
+		"Percent": builder.register_style({"num_format": builder.get_number_format("Percent")}),
+		"Currency": builder.register_style({"num_format": builder.get_number_format("Currency", currency)}),
+	}
+
+	# quick access for hot loop
+	style_cell = builder.style_cell
+
+	@cache
+	def get_color_style(color: str) -> int:
+		return builder.register_style({"font_color": color})
+
+	@cache
+	def get_prefix_style(prefix: str) -> int:
+		prefix = f"{prefix or DEFAULT_BULLET_PREFIX}@"
+
+		return builder.register_style({"num_format": prefix})
+
+	@cache
+	def get_indent_style(indent: int) -> int:
+		return builder.register_style({"align": "left", "indent": indent})
+
+	# column level styling of currency columns
+	for col_idx, col in metadata.column_map.items():
+		if col.get("fieldtype") != "Currency":
+			continue
+
+		builder.style_column(col_idx, fieldtype_formats["Currency"])
+
+	# cell level styling
+	for row_idx, row in metadata.row_map.items():
+		# skip total row
+		if metadata.has_total_row and row_idx == builder.last_row_index:
+			continue
+
+		is_segmented = (row.get("_segment_info", {}).get("total_segments", 1) or 1) > 1
+		segment_values = row.get("segment_values", {}) or {}
+
+		for col_idx, col in metadata.column_map.items():
+			fieldname = col.get("fieldname")
+			is_account = fieldname == "account"
+
+			# determine formatting bucket
+			if is_segmented and fieldname.startswith(SEGMENT_PREFIX):
+				formatting = row.copy()
+
+				_, seg_idx, seg_fieldname = fieldname.split("_", 2)
+				is_account = seg_fieldname == "account"
+				formatting.update(segment_values.get(f"{SEGMENT_PREFIX}{seg_idx}", {}) or {})
+			else:
+				formatting = row  # default formatting bucket.
+
+			if not is_account and formatting.get("is_blank_line"):
+				continue
+
+			col_fieldtype = col.get("fieldtype")
+			cell_fieldtype = formatting.get("fieldtype") or col_fieldtype
+			cell_value = row.get(fieldname)
+
+			if cell_value in (None, ""):
+				continue
+
+			# account column and other fieldtype styling
+			if is_account:
+				if formatting.get("is_detail") or (prefix := formatting.get("prefix")):
+					style_cell(row_idx, col_idx, get_prefix_style(prefix))
+
+				# custom indentation (different segment might have different indentation levels)
+				if is_segmented and (indent := formatting.get("indent")) and indent > 0:
+					style_cell(row_idx, col_idx, get_indent_style(indent))
+			else:
+				if col_fieldtype != cell_fieldtype and cell_fieldtype in fieldtype_formats:
+					style_cell(row_idx, col_idx, fieldtype_formats[cell_fieldtype])
+
+			# text styles
+			for style_key in ("bold", "italic"):
+				if formatting.get(style_key):
+					style_cell(row_idx, col_idx, styles[style_key])
+
+			# color styles
+			if (
+				formatting.get("warn_if_negative")
+				and cell_fieldtype in frappe.model.numeric_fieldtypes
+				and flt(cell_value) < 0
+			):
+				style_cell(row_idx, col_idx, styles["warning"])
+			elif color := formatting.get("color"):
+				style_cell(row_idx, col_idx, get_color_style(color))
+
+	return builder.result

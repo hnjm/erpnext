@@ -18,7 +18,6 @@ class PurchaseOrderItem(Document):
 		actual_qty: DF.Float
 		against_blanket_order: DF.Check
 		amount: DF.Currency
-		apply_tds: DF.Check
 		base_amount: DF.Currency
 		base_net_amount: DF.Currency
 		base_net_rate: DF.Currency
@@ -44,7 +43,6 @@ class PurchaseOrderItem(Document):
 		fg_item_qty: DF.Float
 		from_warehouse: DF.Link | None
 		image: DF.Attach | None
-		include_exploded_items: DF.Check
 		is_fixed_asset: DF.Check
 		is_free_item: DF.Check
 		item_code: DF.Link

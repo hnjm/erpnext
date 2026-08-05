@@ -65,6 +65,7 @@ class Account(NestedSet):
 			"Stock",
 			"Stock Adjustment",
 			"Stock Received But Not Billed",
+			"Stock Delivered But Not Billed",
 			"Service Received But Not Billed",
 			"Tax",
 			"Temporary",
@@ -93,8 +94,10 @@ class Account(NestedSet):
 			super().on_update()
 
 	def onload(self):
-		frozen_accounts_modifier = frappe.get_single_value("Accounts Settings", "frozen_accounts_modifier")
-		if not frozen_accounts_modifier or frozen_accounts_modifier in frappe.get_roles():
+		role_allowed_for_frozen_entries = frappe.db.get_value(
+			"Company", self.company, "role_allowed_for_frozen_entries"
+		)
+		if not role_allowed_for_frozen_entries or role_allowed_for_frozen_entries in frappe.get_roles():
 			self.set_onload("can_freeze_account", True)
 
 	def autoname(self):
@@ -118,6 +121,7 @@ class Account(NestedSet):
 		self.validate_account_currency()
 		self.validate_root_company_and_sync_account_to_children()
 		self.validate_receivable_payable_account_type()
+		self.validate_stock_account_type_change()
 
 	def validate_parent_child_account_type(self):
 		if self.parent_account:
@@ -172,16 +176,19 @@ class Account(NestedSet):
 		if cint(self.is_group):
 			db_value = self.get_doc_before_save()
 			if db_value:
+				Account = frappe.qb.DocType("Account")
+				query = frappe.qb.update(Account).where((Account.lft > self.lft) & (Account.rgt < self.rgt))
+
+				updated = False
 				if self.report_type != db_value.report_type:
-					frappe.db.sql(
-						"update `tabAccount` set report_type=%s where lft > %s and rgt < %s",
-						(self.report_type, self.lft, self.rgt),
-					)
+					query = query.set(Account.report_type, self.report_type)
+					updated = True
 				if self.root_type != db_value.root_type:
-					frappe.db.sql(
-						"update `tabAccount` set root_type=%s where lft > %s and rgt < %s",
-						(self.root_type, self.lft, self.rgt),
-					)
+					query = query.set(Account.root_type, self.root_type)
+					updated = True
+
+				if updated:
+					query.run()
 
 		if self.root_type and not self.report_type:
 			self.report_type = (
@@ -206,6 +213,36 @@ class Account(NestedSet):
 				frappe.msgprint(msg)
 				self.add_comment("Comment", msg)
 
+	def validate_stock_account_type_change(self):
+		doc_before_save = self.get_doc_before_save()
+		if not (doc_before_save and doc_before_save.account_type == "Stock"):
+			return
+
+		if self.account_type == "Stock":
+			return
+
+		if self.stock_ledger_entry_exists():
+			frappe.throw(
+				_(
+					"The account type of {0} cannot be changed from {1} because stock ledger entries exist against it."
+				).format(frappe.bold(self.name), frappe.bold(_("Stock")))
+			)
+
+	def stock_ledger_entry_exists(self):
+		from erpnext.stock import get_warehouse_account_map
+
+		warehouse_account = get_warehouse_account_map(self.company)
+		warehouses = [wh for wh, details in warehouse_account.items() if details.account == self.name]
+		if not warehouses:
+			return False
+
+		return bool(
+			frappe.db.count(
+				"Stock Ledger Entry",
+				filters={"warehouse": ("in", warehouses), "is_cancelled": 0},
+			)
+		)
+
 	def validate_root_details(self):
 		doc_before_save = self.get_doc_before_save()
 
@@ -228,7 +265,7 @@ class Account(NestedSet):
 			if not frappe.db.get_value(
 				"Account", {"account_name": self.account_name, "company": ancestors[0]}, "name"
 			):
-				frappe.throw(_("Please add the account to root level Company - {}").format(ancestors[0]))
+				frappe.throw(_("Please add the account to root level Company - {0}").format(ancestors[0]))
 		elif self.parent_account:
 			descendants = get_descendants_of("Company", self.company)
 			if not descendants:
@@ -303,10 +340,10 @@ class Account(NestedSet):
 		if not doc_before_save or doc_before_save.freeze_account == self.freeze_account:
 			return
 
-		frozen_accounts_modifier = frappe.get_cached_value(
-			"Accounts Settings", "Accounts Settings", "frozen_accounts_modifier"
+		role_allowed_for_frozen_entries = frappe.get_cached_value(
+			"Company", self.company, "role_allowed_for_frozen_entries"
 		)
-		if not frozen_accounts_modifier or frozen_accounts_modifier not in frappe.get_roles():
+		if not role_allowed_for_frozen_entries or role_allowed_for_frozen_entries not in frappe.get_roles():
 			throw(_("You are not authorized to set Frozen value"))
 
 	def validate_balance_must_be_debit_or_credit(self):
@@ -446,11 +483,7 @@ class Account(NestedSet):
 		return frappe.db.get_value("GL Entry", {"account": self.name})
 
 	def check_if_child_exists(self):
-		return frappe.db.sql(
-			"""select name from `tabAccount` where parent_account = %s
-			and docstatus != 2""",
-			self.name,
-		)
+		return frappe.db.exists("Account", {"parent_account": self.name, "docstatus": ["!=", 2]})
 
 	def validate_mandatory(self):
 		if not self.root_type:
@@ -469,14 +502,24 @@ class Account(NestedSet):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_parent_account(doctype, txt, searchfield, start, page_len, filters):
-	return frappe.db.sql(
-		"""select name from tabAccount
-		where is_group = 1 and docstatus != 2 and company = {}
-		and {} like {} order by name limit {} offset {}""".format("%s", searchfield, "%s", "%s", "%s"),
-		(filters["company"], "%%%s%%" % txt, page_len, start),
-		as_list=1,
+def get_parent_account(doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict):
+	Account = frappe.qb.DocType("Account")
+
+	search_field_obj = getattr(Account, searchfield)
+
+	query = (
+		frappe.qb.from_(Account)
+		.select(Account.name)
+		.where(Account.is_group == 1)
+		.where(Account.docstatus != 2)
+		.where(Account.company == filters["company"])
+		.where(search_field_obj.like(f"%{txt}%"))
+		.order_by(Account.name)
+		.limit(page_len)
+		.offset(start)
 	)
+
+	return query.run(as_list=1)
 
 
 def get_account_currency(account):
@@ -513,9 +556,12 @@ def get_account_autoname(account_number, account_name, company):
 
 
 @frappe.whitelist()
-def update_account_number(name, account_name, account_number=None, from_descendant=False):
+def update_account_number(
+	name: str, account_name: str, account_number: str | None = None, from_descendant: bool = False
+):
 	_ensure_idle_system()
 	account = frappe.get_cached_doc("Account", name)
+	account.check_permission("write")
 	if not account:
 		return
 
@@ -575,11 +621,13 @@ def update_account_number(name, account_name, account_number=None, from_descenda
 
 
 @frappe.whitelist()
-def merge_account(old, new):
+def merge_account(old: str, new: str):
 	_ensure_idle_system()
-	# Validate properties before merging
 	new_account = frappe.get_cached_doc("Account", new)
 	old_account = frappe.get_cached_doc("Account", old)
+
+	new_account.check_permission("write")
+	old_account.check_permission("write")
 
 	if not new_account:
 		throw(_("Account {0} does not exist").format(new))
@@ -612,7 +660,7 @@ def merge_account(old, new):
 
 
 @frappe.whitelist()
-def get_root_company(company):
+def get_root_company(company: str):
 	# return the topmost company in the hierarchy
 	ancestors = get_ancestors_of("Company", company, "lft asc")
 	return [ancestors[0]] if ancestors else []
@@ -642,8 +690,15 @@ def _ensure_idle_system():
 
 	last_gl_update = None
 	try:
-		# We also lock inserts to GL entry table with for_update here.
-		last_gl_update = frappe.db.get_value("GL Entry", {}, "modified", for_update=True, wait=False)
+		if frappe.db.db_type == "postgres":
+			# The MariaDB branch blocks new GL inserts via the gap lock its for_update read takes;
+			# a postgres row lock never blocks inserts, so take an EXCLUSIVE table lock instead --
+			# writers block until the rename commits, readers don't. NOWAIT mirrors wait=False.
+			frappe.db.sql("LOCK TABLE `tabGL Entry` IN EXCLUSIVE MODE NOWAIT")
+			last_gl_update = frappe.db.get_value("GL Entry", {}, "modified")
+		else:
+			# We also lock inserts to GL entry table with for_update here.
+			last_gl_update = frappe.db.get_value("GL Entry", {}, "modified", for_update=True, wait=False)
 	except frappe.QueryTimeoutError:
 		# wait=False fails immediately if there's an active transaction.
 		last_gl_update = add_to_date(None, seconds=-1)
@@ -654,7 +709,7 @@ def _ensure_idle_system():
 	if last_gl_update > add_to_date(None, minutes=-5):
 		frappe.throw(
 			_(
-				"Last GL Entry update was done {}. This operation is not allowed while system is actively being used. Please wait for 5 minutes before retrying."
+				"Last GL Entry update was done {0}. This operation is not allowed while system is actively being used. Please wait for 5 minutes before retrying."
 			).format(pretty_date(last_gl_update)),
 			title=_("System In Use"),
 		)
@@ -669,6 +724,7 @@ def get_company_default_account_fields():
 		"default_expense_account": "Default Expense Account",
 		"default_income_account": "Default Income Account",
 		"stock_received_but_not_billed": "Stock Received But Not Billed Account",
+		"stock_delivered_but_not_billed": "Stock Delivered But Not Billed Account",
 		"stock_adjustment_account": "Stock Adjustment Account",
 		"write_off_account": "Write Off Account",
 		"default_discount_account": "Default Payment Discount Account",

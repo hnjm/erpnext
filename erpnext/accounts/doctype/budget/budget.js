@@ -12,6 +12,16 @@ frappe.ui.form.on("Budget", {
 			};
 		});
 
+		frm.set_query("account", function () {
+			return {
+				filters: {
+					is_group: 0,
+					company: frm.doc.company,
+					root_type: ["in", ["Income", "Expense"]],
+				},
+			};
+		});
+
 		erpnext.accounts.dimensions.setup_dimension_filters(frm, frm.doctype);
 		frappe.db.get_single_value("Accounts Settings", "use_legacy_budget_controller").then((value) => {
 			if (value) {
@@ -24,24 +34,16 @@ frappe.ui.form.on("Budget", {
 		frm.trigger("toggle_reqd_fields");
 
 		if (!frm.doc.__islocal && frm.doc.docstatus == 1) {
-			let exception_role = await frappe.db.get_value(
-				"Company",
-				frm.doc.company,
-				"exception_budget_approver_role"
+			frm.add_custom_button(
+				__("Revise Budget"),
+				function () {
+					frm.events.revise_budget_action(frm);
+				},
+				__("Actions")
 			);
-
-			const role = exception_role.message.exception_budget_approver_role;
-
-			if (role && frappe.user.has_role(role)) {
-				frm.add_custom_button(
-					__("Revise Budget"),
-					function () {
-						frm.events.revise_budget_action(frm);
-					},
-					__("Actions")
-				);
-			}
 		}
+
+		toggle_distribution_fields(frm);
 	},
 
 	budget_against: function (frm) {
@@ -54,8 +56,13 @@ frappe.ui.form.on("Budget", {
 			frm.doc.budget_distribution.forEach((row) => {
 				row.amount = flt((row.percent / 100) * frm.doc.budget_amount, 2);
 			});
+			set_total_budget_amount(frm);
 			frm.refresh_field("budget_distribution");
 		}
+	},
+
+	distribute_equally: function (frm) {
+		toggle_distribution_fields(frm);
 	},
 
 	set_null_value: function (frm) {
@@ -100,6 +107,8 @@ frappe.ui.form.on("Budget Distribution", {
 		let row = frappe.get_doc(cdt, cdn);
 		if (frm.doc.budget_amount) {
 			row.percent = flt((row.amount / frm.doc.budget_amount) * 100, 2);
+
+			set_total_budget_amount(frm);
 			frm.refresh_field("budget_distribution");
 		}
 	},
@@ -107,7 +116,32 @@ frappe.ui.form.on("Budget Distribution", {
 		let row = frappe.get_doc(cdt, cdn);
 		if (frm.doc.budget_amount) {
 			row.amount = flt((row.percent / 100) * frm.doc.budget_amount, 2);
+
+			set_total_budget_amount(frm);
 			frm.refresh_field("budget_distribution");
 		}
 	},
 });
+
+function set_total_budget_amount(frm) {
+	let total = 0;
+
+	(frm.doc.budget_distribution || []).forEach((row) => {
+		total += flt(row.amount);
+	});
+
+	frm.set_value("budget_distribution_total", total);
+}
+
+function toggle_distribution_fields(frm) {
+	const grid = frm.fields_dict.budget_distribution.grid;
+
+	frm.set_df_property("budget_distribution", "cannot_add_rows", true);
+	frm.set_df_property("budget_distribution", "cannot_delete_rows", true);
+
+	["amount", "percent"].forEach((field) => {
+		grid.update_docfield_property(field, "read_only", frm.doc.distribute_equally);
+	});
+
+	grid.refresh();
+}

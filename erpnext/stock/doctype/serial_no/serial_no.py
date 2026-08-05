@@ -101,11 +101,10 @@ class SerialNo(StockController):
 			self.maintenance_status = "Under Warranty"
 
 	def on_trash(self):
-		sl_entries = frappe.db.sql(
-			"""select serial_no from `tabStock Ledger Entry`
-			where serial_no like %s and item_code=%s and is_cancelled=0""",
-			("%%%s%%" % self.name, self.item_code),
-			as_dict=True,
+		sl_entries = frappe.get_all(
+			"Stock Ledger Entry",
+			filters={"serial_no": ["like", f"%{self.name}%"], "item_code": self.item_code, "is_cancelled": 0},
+			fields=["serial_no"],
 		)
 
 		# Find the exact match
@@ -172,13 +171,14 @@ def clean_serial_no_string(serial_no: str) -> str:
 
 
 def update_maintenance_status():
-	serial_nos = frappe.db.sql(
-		"""select name from `tabSerial No` where (amc_expiry_date<%s or
-		warranty_expiry_date<%s) and maintenance_status not in ('Out of Warranty', 'Out of AMC')""",
-		(nowdate(), nowdate()),
+	serial_nos = frappe.get_all(
+		"Serial No",
+		filters={"maintenance_status": ["not in", ["Out of Warranty", "Out of AMC"]]},
+		or_filters=[["amc_expiry_date", "<", nowdate()], ["warranty_expiry_date", "<", nowdate()]],
+		pluck="name",
 	)
 	for serial_no in serial_nos:
-		doc = frappe.get_doc("Serial No", serial_no[0])
+		doc = frappe.get_doc("Serial No", serial_no)
 		doc.set_maintenance_status()
 		frappe.db.set_value("Serial No", doc.name, "maintenance_status", doc.maintenance_status)
 
@@ -191,7 +191,7 @@ def auto_fetch_serial_number(
 	posting_date: str | None = None,
 	batch_nos: str | list[str] | None = None,
 	for_doctype: str | None = None,
-	exclude_sr_nos=None,
+	exclude_sr_nos: str | None = None,
 ) -> list[str]:
 	filters = frappe._dict({"item_code": item_code, "warehouse": warehouse})
 
@@ -221,9 +221,8 @@ def auto_fetch_serial_number(
 
 
 @frappe.whitelist()
-def get_pos_reserved_serial_nos(filters):
-	if isinstance(filters, str):
-		filters = json.loads(filters)
+def get_pos_reserved_serial_nos(filters: str | dict):
+	filters = frappe.parse_json(filters)
 
 	POSInvoice = frappe.qb.DocType("POS Invoice")
 	POSInvoiceItem = frappe.qb.DocType("POS Invoice Item")
@@ -304,3 +303,7 @@ def get_serial_nos_for_outward(kwargs):
 		return []
 
 	return [d.serial_no for d in serial_nos]
+
+
+def on_doctype_update():
+	frappe.db.add_index("Serial No", ["item_code", "warehouse"])

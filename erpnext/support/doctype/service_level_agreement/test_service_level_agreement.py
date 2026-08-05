@@ -1,45 +1,19 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 import datetime
-import unittest
+import json
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import flt
 
 from erpnext.support.doctype.issue_priority.test_issue_priority import make_priorities
 from erpnext.support.doctype.service_level_agreement.service_level_agreement import (
 	get_service_level_agreement_fields,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestServiceLevelAgreement(IntegrationTestCase):
-	def setUp(self):
-		self.create_company()
-		frappe.db.set_single_value("Support Settings", "track_service_level_agreement", 1)
-		lead = frappe.qb.DocType("Lead")
-		frappe.qb.from_(lead).delete().where(lead.company == self.company).run()
-
-	def create_company(self):
-		name = "_Test Support SLA"
-		company = None
-		if frappe.db.exists("Company", name):
-			company = frappe.get_doc("Company", name)
-		else:
-			company = frappe.get_doc(
-				{
-					"doctype": "Company",
-					"company_name": name,
-					"country": "India",
-					"default_currency": "INR",
-					"create_chart_of_accounts_based_on": "Standard Template",
-					"chart_of_accounts": "Standard",
-				}
-			)
-			company = company.save()
-
-		self.company = company.name
-
+class TestServiceLevelAgreement(ERPNextTestSuite):
 	def test_service_level_agreement(self):
 		# Default Service Level Agreement
 		create_default_service_level_agreement = create_service_level_agreement(
@@ -176,11 +150,14 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 		self.assertEqual(lead_sla.name, default_sla.name)
 
 		# check SLA custom fields created for leads
-		sla_fields = get_service_level_agreement_fields()
+		sla_fields = get_service_level_agreement_fields(doctype)
 
 		for field in sla_fields:
-			self.assertTrue(
-				frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": field.get("fieldname")})
+			filters = {"dt": doctype, "fieldname": field.get("fieldname")}
+			self.assertTrue(frappe.db.exists("Custom Field", filters))
+			self.assertEqual(
+				get_link_filters("Custom Field", filters),
+				json.loads(field["link_filters"]) if field.get("link_filters") else None,
 			)
 
 	def test_docfield_creation_for_sla_on_custom_dt(self):
@@ -200,12 +177,65 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 		self.assertEqual(sla.name, default_sla.name)
 
 		# check SLA docfields created
-		sla_fields = get_service_level_agreement_fields()
+		sla_fields = get_service_level_agreement_fields(doctype.name)
 
 		for field in sla_fields:
-			self.assertTrue(
-				frappe.db.exists("DocField", {"fieldname": field.get("fieldname"), "parent": doctype.name})
+			filters = {"fieldname": field.get("fieldname"), "parent": doctype.name}
+			self.assertTrue(frappe.db.exists("DocField", filters))
+			self.assertEqual(
+				get_link_filters("DocField", filters),
+				json.loads(field["link_filters"]) if field.get("link_filters") else None,
 			)
+
+	def test_reset_field_properties_does_not_clobber_other_doctypes_field(self):
+		"""Two doctypes each get their own "service_level_agreement" custom field
+		(same fieldname, different owning doctype). Updating the field on one of
+		them must not clobber the other's, even though both share the fieldname
+		(regression test for the fix in reset_field_properties, see PR #56954)."""
+		doctype_a = create_custom_doctype("Test SLA Dt A")
+		doctype_b = create_custom_doctype("Test SLA Dt B")
+
+		for doctype in (doctype_a.name, doctype_b.name):
+			create_service_level_agreement(
+				default_service_level_agreement=1,
+				holiday_list="__Test Holiday List",
+				entity_type=None,
+				entity=None,
+				response_time=14400,
+				resolution_time=21600,
+				doctype=doctype,
+			)
+
+		def get_sla_field_link_filters(doctype):
+			return get_link_filters("DocField", {"parent": doctype, "fieldname": "service_level_agreement"})
+
+		self.assertEqual(
+			get_sla_field_link_filters(doctype_a.name),
+			[["Service Level Agreement", "document_type", "=", doctype_a.name]],
+		)
+
+		# The field on doctype_b already exists, so creating another, entity-specific
+		# SLA for doctype_b takes the "update existing field" branch (reset_field_properties)
+		# instead of creating a new field.
+		customer = create_customer()
+		create_service_level_agreement(
+			default_service_level_agreement=0,
+			holiday_list="__Test Holiday List",
+			entity_type="Customer",
+			entity=customer,
+			response_time=7200,
+			resolution_time=10800,
+			doctype=doctype_b.name,
+		)
+
+		self.assertEqual(
+			get_sla_field_link_filters(doctype_a.name),
+			[["Service Level Agreement", "document_type", "=", doctype_a.name]],
+		)
+		self.assertEqual(
+			get_sla_field_link_filters(doctype_b.name),
+			[["Service Level Agreement", "document_type", "=", doctype_b.name]],
+		)
 
 	def test_sla_application(self):
 		# Default Service Level Agreement
@@ -220,10 +250,9 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 			doctype=doctype,
 			sla_fulfilled_on=[{"status": "Converted"}],
 		)
-
 		# make lead with default SLA
 		creation = datetime.datetime(2019, 3, 4, 12, 0)
-		lead = make_lead(creation=creation, index=1, company=self.company)
+		lead = make_lead(creation=creation, index=1, company="_Test Support SLA")
 
 		self.assertEqual(lead.service_level_agreement, lead_sla.name)
 		self.assertEqual(lead.response_by, datetime.datetime(2019, 3, 4, 16, 0))
@@ -251,7 +280,7 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 		)
 
 		creation = datetime.datetime(2020, 3, 4, 4, 0)
-		lead = make_lead(creation, index=2, company=self.company)
+		lead = make_lead(creation, index=2, company="_Test Support SLA")
 
 		frappe.flags.current_time = datetime.datetime(2020, 3, 4, 4, 15)
 		lead.reload()
@@ -285,7 +314,7 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 		)
 
 		creation = datetime.datetime(2019, 3, 4, 12, 0)
-		lead = make_lead(creation=creation, index=1, company=self.company)
+		lead = make_lead(creation=creation, index=1, company="_Test Support SLA")
 		self.assertEqual(lead.response_by, datetime.datetime(2019, 3, 4, 16, 0))
 
 		# failed with response time only
@@ -312,7 +341,7 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 
 		# fulfilled with response time only
 		creation = datetime.datetime(2019, 3, 4, 12, 0)
-		lead = make_lead(creation=creation, index=2, company=self.company)
+		lead = make_lead(creation=creation, index=2, company="_Test Support SLA")
 
 		self.assertEqual(lead.service_level_agreement, lead_sla.name)
 		self.assertEqual(lead.response_by, datetime.datetime(2019, 3, 4, 16, 0))
@@ -339,7 +368,7 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 			apply_sla_for_resolution=0,
 		)
 		creation = datetime.datetime(2019, 3, 4, 12, 0)
-		lead = make_lead(creation=creation, index=4, company=self.company)
+		lead = make_lead(creation=creation, index=4, company="_Test Support SLA")
 		applied_sla = frappe.db.get_value("Lead", lead.name, "service_level_agreement")
 		self.assertFalse(applied_sla)
 
@@ -359,9 +388,10 @@ class TestServiceLevelAgreement(IntegrationTestCase):
 		applied_sla = frappe.db.get_value("Lead", lead.name, "service_level_agreement")
 		self.assertFalse(applied_sla)
 
-	def tearDown(self):
-		for d in frappe.get_all("Service Level Agreement"):
-			frappe.delete_doc("Service Level Agreement", d.name, force=1)
+
+def get_link_filters(field_doctype, filters):
+	value = frappe.db.get_value(field_doctype, filters, "link_filters")
+	return json.loads(value) if value else None
 
 
 def get_service_level_agreement(
@@ -604,8 +634,8 @@ def make_holiday_list():
 		).insert()
 
 
-def create_custom_doctype():
-	if not frappe.db.exists("DocType", "Test SLA on Custom Dt"):
+def create_custom_doctype(name="Test SLA on Custom Dt"):
+	if not frappe.db.exists("DocType", name):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DocType",
@@ -628,13 +658,13 @@ def create_custom_doctype():
 					},
 				],
 				"permissions": [{"role": "System Manager", "read": 1, "write": 1}],
-				"name": "Test SLA on Custom Dt",
+				"name": name,
 			}
 		)
 		doc.insert()
 		return doc
 	else:
-		return frappe.get_doc("DocType", "Test SLA on Custom Dt")
+		return frappe.get_doc("DocType", name)
 
 
 def make_lead(creation=None, index=0, company=None):

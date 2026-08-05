@@ -5,7 +5,6 @@ import json
 
 import frappe
 from frappe.exceptions import ValidationError
-from frappe.tests import IntegrationTestCase
 from frappe.utils import cint, flt
 from frappe.utils.data import add_to_date, getdate
 
@@ -20,11 +19,12 @@ from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle 
 	get_batch_from_bundle,
 )
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
-from erpnext.stock.get_item_details import ItemDetailsCtx, get_item_details
+from erpnext.stock.get_item_details import get_item_details
 from erpnext.stock.serial_batch_bundle import SerialBatchCreation
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestBatch(IntegrationTestCase):
+class TestBatch(ERPNextTestSuite):
 	def test_item_has_batch_enabled(self):
 		self.assertRaises(
 			ValidationError,
@@ -45,12 +45,10 @@ class TestBatch(IntegrationTestCase):
 		self.make_batch_item("ITEM-BATCH-1")
 
 		receipt = frappe.get_doc(
-			dict(
-				doctype="Purchase Receipt",
-				supplier="_Test Supplier",
-				company="_Test Company",
-				items=[dict(item_code="ITEM-BATCH-1", qty=batch_qty, rate=10, warehouse="Stores - _TC")],
-			)
+			doctype="Purchase Receipt",
+			supplier="_Test Supplier",
+			company="_Test Company",
+			items=[dict(item_code="ITEM-BATCH-1", qty=batch_qty, rate=10, warehouse="Stores - _TC")],
 		).insert()
 		receipt.submit()
 
@@ -66,12 +64,10 @@ class TestBatch(IntegrationTestCase):
 		self.make_batch_item("ITEM-BATCH-1")
 
 		receipt = frappe.get_doc(
-			dict(
-				doctype="Purchase Receipt",
-				supplier="_Test Supplier",
-				company="_Test Company",
-				items=[dict(item_code="ITEM-BATCH-1", qty=10, rate=10, warehouse="Stores - _TC")],
-			)
+			doctype="Purchase Receipt",
+			supplier="_Test Supplier",
+			company="_Test Company",
+			items=[dict(item_code="ITEM-BATCH-1", qty=10, rate=10, warehouse="Stores - _TC")],
 		).insert()
 		receipt.submit()
 
@@ -96,20 +92,18 @@ class TestBatch(IntegrationTestCase):
 		)
 
 		receipt2 = frappe.get_doc(
-			dict(
-				doctype="Purchase Receipt",
-				supplier="_Test Supplier",
-				company="_Test Company",
-				items=[
-					dict(
-						item_code="ITEM-BATCH-1",
-						qty=20,
-						rate=10,
-						warehouse="_Test Warehouse - _TC",
-						serial_and_batch_bundle=bundle_id,
-					)
-				],
-			)
+			doctype="Purchase Receipt",
+			supplier="_Test Supplier",
+			company="_Test Company",
+			items=[
+				dict(
+					item_code="ITEM-BATCH-1",
+					qty=20,
+					rate=10,
+					warehouse="_Test Warehouse - _TC",
+					serial_and_batch_bundle=bundle_id,
+				)
+			],
 		).insert()
 		receipt2.submit()
 
@@ -129,26 +123,98 @@ class TestBatch(IntegrationTestCase):
 		for d in batches:
 			self.assertEqual(d.qty, batchwise_qty[(d.batch_no, d.warehouse)])
 
+	def test_batch_qty_on_pos_creation(self):
+		from erpnext.accounts.doctype.pos_closing_entry.test_pos_closing_entry import (
+			init_user_and_profile,
+		)
+		from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import create_pos_invoice
+		from erpnext.accounts.doctype.pos_opening_entry.test_pos_opening_entry import create_opening_entry
+		from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+			get_auto_batch_nos,
+		)
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_batch_item_with_batch,
+		)
+
+		invoice_type = frappe.db.get_single_value("POS Settings", "invoice_type")
+		session_user = frappe.session.user
+
+		try:
+			# Set invoice type to POS Invoice
+			frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
+
+			# Create batch item
+			create_batch_item_with_batch("_Test BATCH ITEM", "TestBatch-RS 02")
+
+			# Create stock entry
+			se = make_stock_entry(
+				target="_Test Warehouse - _TC",
+				item_code="_Test BATCH ITEM",
+				qty=30,
+				basic_rate=100,
+			)
+
+			se.reload()
+
+			batch_no = get_batch_from_bundle(se.items[0].serial_and_batch_bundle)
+
+			# Create opening entry
+			session_user = frappe.session.user
+			test_user, pos_profile = init_user_and_profile()
+			create_opening_entry(pos_profile, test_user.name)
+
+			# POS Invoice 1, for the batch without bundle
+			pos_inv1 = create_pos_invoice(item="_Test BATCH ITEM", rate=300, qty=15, do_not_save=1)
+			pos_inv1.append(
+				"payments",
+				{"mode_of_payment": "Cash", "amount": 4500},
+			)
+			pos_inv1.items[0].batch_no = batch_no
+			pos_inv1.save()
+			pos_inv1.submit()
+			pos_inv1.reload()
+
+			# Get auto batch nos after pos invoice
+			batches = get_auto_batch_nos(
+				frappe._dict(
+					{
+						"item_code": "_Test BATCH ITEM",
+						"warehouse": "_Test Warehouse - _TC",
+						"for_stock_levels": True,
+						"ignore_reserved_stock": True,
+					}
+				)
+			)
+
+			# Check batch qty after pos invoice
+			row = _find_batch_row(batches, batch_no, "_Test Warehouse - _TC")
+			self.assertIsNotNone(row)
+			self.assertEqual(row.qty, 30)
+
+		finally:
+			# Set invoice type to Sales Invoice
+			frappe.db.set_single_value("POS Settings", "invoice_type", invoice_type)
+			# Set user to session user
+			frappe.set_user(session_user)
+
 	def test_stock_entry_incoming(self):
 		"""Test batch creation via Stock Entry (Work Order)"""
 
 		self.make_batch_item("ITEM-BATCH-1")
 
 		stock_entry = frappe.get_doc(
-			dict(
-				doctype="Stock Entry",
-				purpose="Material Receipt",
-				company="_Test Company",
-				items=[
-					dict(
-						item_code="ITEM-BATCH-1",
-						qty=90,
-						t_warehouse="_Test Warehouse - _TC",
-						cost_center="Main - _TC",
-						rate=10,
-					)
-				],
-			)
+			doctype="Stock Entry",
+			purpose="Material Receipt",
+			company="_Test Company",
+			items=[
+				dict(
+					item_code="ITEM-BATCH-1",
+					qty=90,
+					t_warehouse="_Test Warehouse - _TC",
+					cost_center="Main - _TC",
+					rate=10,
+				)
+			],
 		)
 
 		stock_entry.set_stock_entry_type()
@@ -187,20 +253,18 @@ class TestBatch(IntegrationTestCase):
 		)
 
 		delivery_note = frappe.get_doc(
-			dict(
-				doctype="Delivery Note",
-				customer="_Test Customer",
-				company=receipt.company,
-				items=[
-					dict(
-						item_code=item_code,
-						qty=batch_qty,
-						rate=10,
-						warehouse=receipt.items[0].warehouse,
-						serial_and_batch_bundle=bundle_id,
-					)
-				],
-			)
+			doctype="Delivery Note",
+			customer="_Test Customer",
+			company=receipt.company,
+			items=[
+				dict(
+					item_code=item_code,
+					qty=batch_qty,
+					rate=10,
+					warehouse=receipt.items[0].warehouse,
+					serial_and_batch_bundle=bundle_id,
+				)
+			],
 		).insert()
 		delivery_note.submit()
 
@@ -261,19 +325,17 @@ class TestBatch(IntegrationTestCase):
 		)
 
 		stock_entry = frappe.get_doc(
-			dict(
-				doctype="Stock Entry",
-				purpose="Material Issue",
-				company=receipt.company,
-				items=[
-					dict(
-						item_code=item_code,
-						qty=batch_qty,
-						s_warehouse=receipt.items[0].warehouse,
-						serial_and_batch_bundle=bundle_id,
-					)
-				],
-			)
+			doctype="Stock Entry",
+			purpose="Material Issue",
+			company=receipt.company,
+			items=[
+				dict(
+					item_code=item_code,
+					qty=batch_qty,
+					s_warehouse=receipt.items[0].warehouse,
+					serial_and_batch_bundle=bundle_id,
+				)
+			],
 		)
 
 		stock_entry.set_stock_entry_type()
@@ -324,6 +386,84 @@ class TestBatch(IntegrationTestCase):
 
 		self.assertEqual(get_batch_qty("batch a", "_Test Warehouse - _TC"), 90)
 
+	def test_get_batch_no_search_returns_batches(self):
+		"""The batch-number picker must run on every engine.
+
+		Both query builders group by Stock Ledger Entry / Serial-and-Batch-Entry
+		columns while selecting un-aggregated Batch-master columns; PostgreSQL only
+		accepts that when the Batch primary key is in the GROUP BY, so the picker
+		errors there without it.
+		"""
+		from erpnext.controllers.queries import (
+			get_batch_no,
+			get_batches_from_serial_and_batch_bundle,
+			get_batches_from_stock_ledger_entries,
+		)
+
+		self.make_batch_item("ITEM-BATCH-PICKER")
+		self.make_new_batch_and_entry("ITEM-BATCH-PICKER", "batch picker a", "_Test Warehouse - _TC")
+		self.make_new_batch_and_entry("ITEM-BATCH-PICKER", "batch picker b", "_Test Warehouse - _TC")
+
+		searchfields = frappe.get_meta("Batch").get_search_fields()
+		filters = {"item_code": "ITEM-BATCH-PICKER", "warehouse": "_Test Warehouse - _TC"}
+
+		# Exercise both query builders directly so each GROUP BY is covered regardless
+		# of which path holds the data: PostgreSQL validates the GROUP BY even when no
+		# rows match, so a missing Batch primary key raises GroupingError here.
+		get_batches_from_stock_ledger_entries(searchfields, "", filters)
+		get_batches_from_serial_and_batch_bundle(searchfields, "", filters)
+
+		result = get_batch_no(
+			doctype="Batch",
+			txt="",
+			searchfield="name",
+			start=0,
+			page_len=20,
+			filters=filters,
+		)
+		returned = {row[0] for row in result}
+		self.assertIn("batch picker a", returned)
+		self.assertIn("batch picker b", returned)
+
+		# These batches have no manufacturing/expiry date. MariaDB CONCAT('MFG-', NULL)
+		# is NULL, but Postgres CONCAT drops the NULL and would surface a bare "MFG-"/
+		# "EXP-"; the null-guarded select must keep both engines free of that artifact.
+		flat = [value for row in result for value in row]
+		self.assertNotIn("MFG-", flat)
+		self.assertNotIn("EXP-", flat)
+
+	def test_ignore_reserved_qty(self):
+		from erpnext.selling.doctype.sales_order.mapper import create_pick_list
+		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
+
+		batch_item_name = "Reserve Batch Item"
+		batch_id = "Reserve Batch 1"
+		# Create Batch Item
+		self.make_batch_item(batch_item_name)
+		# Create Batch and Material Receipt Entry with qty 90
+		self.make_new_batch_and_entry(batch_item_name, batch_id, "_Test Warehouse - _TC")
+
+		# Enable Stock Reservation
+		frappe.db.set_single_value("Stock Settings", "enable_stock_reservation", 1)
+
+		# Create Sales Order with qty 50
+		sales_order = make_sales_order(
+			item_code=batch_item_name, warehouse="_Test Warehouse - _TC", qty=50, rate=20
+		)
+
+		# Create Pick List for the Sales Order
+		pl = create_pick_list(sales_order.name)
+		pl.submit()
+		# Create Stock Reservation Entries
+		pl.create_stock_reservation_entries(notify=False)
+
+		batch = frappe.get_doc("Batch", batch_id)
+		# Recalculate Batch Qty
+		batch.recalculate_batch_qty()
+		batch.reload()
+		# Case: Ignore Reserved Qty
+		self.assertEqual(batch.batch_qty, 90)
+
 	def test_total_batch_qty(self):
 		self.make_batch_item("ITEM-BATCH-3")
 		existing_batch_qty = flt(frappe.db.get_value("Batch", "B100", "batch_qty"))
@@ -341,7 +481,7 @@ class TestBatch(IntegrationTestCase):
 		"""Make a new stock entry for given target warehouse and batch name of item"""
 
 		if not frappe.db.exists("Batch", batch_name):
-			batch = frappe.get_doc(dict(doctype="Batch", item=item_name, batch_id=batch_name)).insert(
+			batch = frappe.get_doc(doctype="Batch", item=item_name, batch_id=batch_name).insert(
 				ignore_permissions=True
 			)
 			batch.save()
@@ -361,22 +501,20 @@ class TestBatch(IntegrationTestCase):
 		).make_serial_and_batch_bundle()
 
 		stock_entry = frappe.get_doc(
-			dict(
-				doctype="Stock Entry",
-				purpose="Material Receipt",
-				company="_Test Company",
-				items=[
-					dict(
-						item_code=item_name,
-						qty=90,
-						serial_and_batch_bundle=sn_doc.name,
-						t_warehouse=warehouse,
-						cost_center="Main - _TC",
-						rate=10,
-						allow_zero_valuation_rate=1,
-					)
-				],
-			)
+			doctype="Stock Entry",
+			purpose="Material Receipt",
+			company="_Test Company",
+			items=[
+				dict(
+					item_code=item_name,
+					qty=90,
+					serial_and_batch_bundle=sn_doc.name,
+					t_warehouse=warehouse,
+					cost_center="Main - _TC",
+					rate=10,
+					allow_zero_valuation_rate=1,
+				)
+			],
 		)
 
 		stock_entry.set_stock_entry_type()
@@ -405,6 +543,24 @@ class TestBatch(IntegrationTestCase):
 		# reset Stock Settings
 		if not use_naming_series:
 			frappe.set_value("Stock Settings", "Stock Settings", "use_naming_series", 0)
+
+	def test_naming_series_prefix_is_not_rendered_as_jinja(self):
+		from frappe.model.naming import InvalidNamingSeriesError
+
+		stock_settings = frappe.get_single("Stock Settings")
+		use_naming_series = cint(stock_settings.use_naming_series)
+		original_prefix = stock_settings.naming_series_prefix
+
+		frappe.set_value("Stock Settings", "Stock Settings", "use_naming_series", 1)
+		frappe.set_value("Stock Settings", "Stock Settings", "naming_series_prefix", "{{ 7*7 }}")
+
+		try:
+			self.assertRaises(
+				InvalidNamingSeriesError, self.make_new_batch, "_Test Stock Item For Batch SSTI"
+			)
+		finally:
+			frappe.set_value("Stock Settings", "Stock Settings", "naming_series_prefix", original_prefix)
+			frappe.set_value("Stock Settings", "Stock Settings", "use_naming_series", use_naming_series)
 
 	def make_new_batch(self, item_name=None, batch_id=None, do_not_insert=0):
 		batch = frappe.new_doc("Batch")
@@ -439,7 +595,7 @@ class TestBatch(IntegrationTestCase):
 		company = "_Test Company with perpetual inventory"
 		currency = frappe.get_cached_value("Company", company, "default_currency")
 
-		ctx = ItemDetailsCtx(
+		ctx = frappe._dict(
 			{
 				"item_code": "_Test Batch Price Item",
 				"company": company,
@@ -451,6 +607,7 @@ class TestBatch(IntegrationTestCase):
 				"plc_conversion_rate": 1,
 				"customer": "_Test Customer",
 				"name": None,
+				"qty": 1,
 			}
 		)
 
@@ -590,6 +747,10 @@ def create_price_list_for_batch(item_code, batch, rate):
 			"price_list_rate": rate,
 		}
 	).insert()
+
+
+def _find_batch_row(batches, batch_no, warehouse):
+	return next((b for b in batches if b.batch_no == batch_no and b.warehouse == warehouse), None)
 
 
 def make_new_batch(**args):

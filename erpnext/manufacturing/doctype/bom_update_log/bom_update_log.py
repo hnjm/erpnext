@@ -6,9 +6,7 @@ from typing import Any
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.query_builder import DocType, Interval
-from frappe.query_builder.functions import Now
-from frappe.utils import cint, cstr, date_diff, today
+from frappe.utils import add_days, cint, cstr, date_diff, now, today
 
 from erpnext.manufacturing.doctype.bom_update_log.bom_updation_utils import (
 	get_leaf_boms,
@@ -17,6 +15,7 @@ from erpnext.manufacturing.doctype.bom_update_log.bom_updation_utils import (
 	replace_bom,
 	set_values_in_log,
 )
+from erpnext.utilities import clear_logs_with_references
 
 
 class BOMMissingError(frappe.ValidationError):
@@ -41,17 +40,19 @@ class BOMUpdateLog(Document):
 		error_log: DF.Link | None
 		new_bom: DF.Link | None
 		processed_boms: DF.LongText | None
-		status: DF.Literal["Queued", "In Progress", "Completed", "Failed"]
+		status: DF.Literal["Queued", "In Progress", "Completed", "Failed", "Cancelled"]
 		update_type: DF.Literal["Replace BOM", "Update Cost"]
 	# end: auto-generated types
 
 	@staticmethod
 	def clear_old_logs(days=None):
 		days = days or 90
-		table = DocType("BOM Update Log")
-		frappe.db.delete(
-			table,
-			filters=((table.creation < (Now() - Interval(days=days))) & (table.update_type == "Update Cost")),
+		clear_logs_with_references(
+			"BOM Update Log",
+			{
+				"creation": ("<", add_days(now(), -days)),
+				"update_type": "Update Cost",
+			},
 		)
 
 	def validate(self):
@@ -64,6 +65,9 @@ class BOMUpdateLog(Document):
 
 		self.status = "Queued"
 
+	def on_discard(self):
+		self.db_set("status", "Cancelled")
+
 	def validate_boms_are_specified(self):
 		if self.update_type == "Replace BOM" and not (self.current_bom and self.new_bom):
 			frappe.throw(
@@ -74,7 +78,7 @@ class BOMUpdateLog(Document):
 
 	def validate_same_bom(self):
 		if cstr(self.current_bom) == cstr(self.new_bom):
-			frappe.throw(_("Current BOM and New BOM can not be same"))
+			frappe.throw(_("Current BOM and New BOM cannot be the same"))
 
 	def validate_bom_items(self):
 		current_bom_item = frappe.db.get_value("BOM", self.current_bom, "item")

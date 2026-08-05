@@ -1,24 +1,22 @@
 import frappe
-from frappe import qb
-from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, flt, getdate, today
+from frappe.utils import today
 
 from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from erpnext.accounts.report.customer_ledger_summary.customer_ledger_summary import execute
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 from erpnext.controllers.sales_and_purchase_return import make_return_doc
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestCustomerLedgerSummary(AccountsTestMixin, IntegrationTestCase):
+class TestCustomerLedgerSummary(ERPNextTestSuite, AccountsTestMixin):
 	def setUp(self):
-		self.create_company()
-		self.create_customer()
-		self.create_item()
-		self.clear_old_entries()
-
-	def tearDown(self):
-		frappe.db.rollback()
+		self.company = "_Test Company"
+		self.customer = "_Test Customer"
+		self.item = "_Test Item"
+		self.debit_to = "Debtors - _TC"
+		self.cost_center = "Main - _TC"
+		self.cash = "Cash - _TC"
 
 	def create_sales_invoice(self, do_not_submit=False, **args):
 		si = create_sales_invoice(

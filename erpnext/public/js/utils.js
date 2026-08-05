@@ -19,6 +19,97 @@ $.extend(erpnext, {
 		return currency_list;
 	},
 
+	toggle_serial_batch_fields(frm) {
+		let hide_fields = cint(frappe.user_defaults?.enable_serial_and_batch_no_for_item) === 0 ? 1 : 0;
+		if (!hide_fields) {
+			return;
+		}
+
+		let fields = ["serial_and_batch_bundle", "use_serial_batch_fields", "serial_no", "batch_no"];
+
+		if (
+			[
+				"Stock Entry",
+				"Purchase Receipt",
+				"Purchase Invoice",
+				"Stock Reconciliation",
+				"Subcontracting Receipt",
+			].includes(frm.doc.doctype)
+		) {
+			fields.push("add_serial_batch_bundle");
+		}
+
+		if (["Stock Reconciliation"].includes(frm.doc.doctype)) {
+			fields.push("reconcile_all_serial_batch");
+		}
+
+		if (["Sales Invoice", "Delivery Note", "Pick List"].includes(frm.doc.doctype)) {
+			fields.push("pick_serial_and_batch");
+		}
+
+		if (["Purchase Receipt", "Purchase Invoice", "Subcontracting Receipt"].includes(frm.doc.doctype)) {
+			fields.push(
+				"add_serial_batch_for_rejected_qty",
+				"rejected_serial_and_batch_bundle",
+				"rejected_serial_no"
+			);
+		}
+
+		let child_name = "items";
+		if (frm.doc.doctype === "Pick List") {
+			child_name = "locations";
+		}
+
+		if (frm.doc.doctype === "Asset Capitalization") {
+			child_name = "stock_items";
+		}
+
+		let sn_field = frm.fields_dict[child_name].grid.docfields.filter((d) => d.fieldname === "serial_no");
+		if (sn_field?.length && sn_field[0].hidden === 1) {
+			// Already field is hidden
+			return;
+		}
+
+		fields.forEach((field) => {
+			if (frm.fields_dict[child_name].get_field(field)) {
+				frm.fields_dict[child_name].grid.update_docfield_property(field, "hidden", hide_fields);
+
+				frm.fields_dict[child_name].grid.update_docfield_property(
+					field,
+					"in_list_view",
+					hide_fields ? 0 : 1
+				);
+
+				if (
+					frm.doc.doctype === "Subcontracting Receipt" &&
+					![
+						"add_serial_batch_for_rejected_qty",
+						"rejected_serial_and_batch_bundle",
+						"rejected_serial_no",
+					].includes(field)
+				) {
+					frm.fields_dict["supplied_items"].grid.update_docfield_property(
+						field,
+						"hidden",
+						hide_fields
+					);
+
+					frm.fields_dict["supplied_items"].grid.update_docfield_property(
+						field,
+						"in_list_view",
+						hide_fields ? 0 : 1
+					);
+				}
+			}
+		});
+
+		if (frm.doc.doctype === "Subcontracting Receipt") {
+			frm.fields_dict["supplied_items"].grid.reset_grid();
+		}
+
+		frm.fields_dict[child_name].grid.reset_grid();
+	},
+
 	toggle_naming_series: function () {
 		if (
 			cur_frm &&
@@ -97,11 +188,19 @@ $.extend(erpnext.utils, {
 					]),
 					"blue"
 				);
+				var info = company_wise_info[0];
+				var is_advance = info.balance_label !== "Total Unpaid";
+				var indicator_label =
+					info.balance_label === "Total Advance Paid"
+						? __("Total Advance Paid: {0}", [format_currency(info.balance_amount, info.currency)])
+						: info.balance_label === "Total Advance Received"
+						? __("Total Advance Received: {0}", [
+								format_currency(info.balance_amount, info.currency),
+						  ])
+						: __("Total Unpaid: {0}", [format_currency(info.balance_amount, info.currency)]);
 				frm.dashboard.add_indicator(
-					__("Total Unpaid: {0}", [
-						format_currency(company_wise_info[0].total_unpaid, company_wise_info[0].currency),
-					]),
-					company_wise_info[0].total_unpaid ? "orange" : "green"
+					indicator_label,
+					is_advance ? "green" : info.balance_amount ? "orange" : "green"
 				);
 
 				if (company_wise_info[0].loyalty_points) {
@@ -144,7 +243,14 @@ $.extend(erpnext.utils, {
 		frm.dashboard.stats_area_row.addClass("flex");
 		frm.dashboard.stats_area_row.css("flex-wrap", "wrap");
 
-		var color = info.total_unpaid ? "orange" : "green";
+		var is_advance = info.balance_label !== "Total Unpaid";
+		var color = is_advance ? "green" : info.balance_amount ? "orange" : "green";
+		var balance_label_text =
+			info.balance_label === "Total Advance Paid"
+				? __("Total Advance Paid")
+				: info.balance_label === "Total Advance Received"
+				? __("Total Advance Received")
+				: __("Total Unpaid");
 
 		var indicator = $(
 			'<div class="flex-column col-xs-6">' +
@@ -158,8 +264,10 @@ $.extend(erpnext.utils, {
 				'<div class="badge-link small" style="margin-bottom:10px">' +
 				'<span class="indicator ' +
 				color +
-				'">Total Unpaid: ' +
-				format_currency(info.total_unpaid, info.currency) +
+				'">' +
+				balance_label_text +
+				": " +
+				format_currency(info.balance_amount, info.currency) +
 				"</span></div>" +
 				"</div>"
 		).appendTo(frm.dashboard.stats_area_row);
@@ -454,6 +562,18 @@ $.extend(erpnext.utils, {
 	},
 });
 
+erpnext.utils.confirm_negative_stock = function (frm) {
+	if (!frm.doc.allow_negative_stock) return;
+
+	frappe.confirm(
+		__(
+			"Using negative stock disables FIFO/Moving average valuation when inventory is negative. This is considered dangerous from accounting point of view.<br>Do you still want to enable negative inventory?"
+		),
+		() => {},
+		() => frm.set_value("allow_negative_stock", 0)
+	);
+};
+
 erpnext.utils.select_alternate_items = function (opts) {
 	const frm = opts.frm;
 	const warehouse_field = opts.warehouse_field || "warehouse";
@@ -624,6 +744,7 @@ erpnext.utils.update_child_items = function (opts) {
 			uom: d.uom,
 			fg_item: d.fg_item,
 			fg_item_qty: d.fg_item_qty,
+			description: d.description,
 		};
 	});
 
@@ -642,17 +763,18 @@ erpnext.utils.update_child_items = function (opts) {
 			read_only: 0,
 			disabled: 0,
 			label: __("Item Code"),
+			formatter: (value) => value,
 			get_query: function () {
 				let filters;
 				if (frm.doc.doctype == "Sales Order") {
-					filters = { is_sales_item: 1, is_stock_item: !frm.doc.is_subcontracted };
+					if (frm.doc.is_subcontracted) {
+						filters = { is_sales_item: 1, is_stock_item: 0 };
+					} else {
+						filters = { is_sales_item: 1 };
+					}
 				} else if (frm.doc.doctype == "Purchase Order") {
 					if (frm.doc.is_subcontracted) {
-						if (frm.doc.is_old_subcontracting_flow) {
-							filters = { is_sub_contracted_item: 1 };
-						} else {
-							filters = { is_stock_item: 0 };
-						}
+						filters = { is_stock_item: 0 };
 					} else {
 						filters = { is_purchase_item: 1 };
 					}
@@ -662,7 +784,7 @@ erpnext.utils.update_child_items = function (opts) {
 					filters: filters,
 				};
 			},
-			onchange: function () {
+			change: function () {
 				const me = this;
 
 				frm.call({
@@ -695,7 +817,6 @@ erpnext.utils.update_child_items = function (opts) {
 							pos_profile: cint(frm.doc.is_pos) ? frm.doc.pos_profile : "",
 							tax_category: frm.doc.tax_category,
 							child_doctype: frm.doc.doctype + " Item",
-							is_old_subcontracting_flow: frm.doc.is_old_subcontracting_flow,
 						},
 					},
 					callback: function (r) {
@@ -707,8 +828,8 @@ erpnext.utils.update_child_items = function (opts) {
 								conversion_factor,
 								item_name,
 								bom_no,
+								description,
 							} = r.message;
-
 							const row = dialog.fields_dict.trans_items.df.data.find(
 								(row) => row.name == me.doc.name
 							);
@@ -720,6 +841,7 @@ erpnext.utils.update_child_items = function (opts) {
 									rate: me.doc.rate || rate,
 									item_name: item_name,
 									bom_no: bom_no,
+									description: me.doc.description || description,
 								});
 								dialog.fields_dict.trans_items.grid.refresh();
 							}
@@ -733,6 +855,7 @@ erpnext.utils.update_child_items = function (opts) {
 			fieldname: "item_name",
 			label: __("Item Name"),
 			read_only: 1,
+			in_list_view: 1,
 		},
 		{
 			fieldtype: "Link",
@@ -781,10 +904,16 @@ erpnext.utils.update_child_items = function (opts) {
 			label: __("Rate"),
 			precision: get_precision("rate"),
 		},
+		{
+			fieldtype: "Text Editor",
+			fieldname: "description",
+			read_only: 0,
+			label: __("Description"),
+		},
 	];
 
 	if (frm.doc.doctype == "Sales Order" || frm.doc.doctype == "Purchase Order") {
-		fields.splice(2, 0, {
+		fields.splice(3, 0, {
 			fieldtype: "Date",
 			fieldname: frm.doc.doctype == "Sales Order" ? "delivery_date" : "schedule_date",
 			in_list_view: 1,
@@ -792,7 +921,7 @@ erpnext.utils.update_child_items = function (opts) {
 			default: frm.doc.doctype == "Sales Order" ? frm.doc.delivery_date : frm.doc.schedule_date,
 			reqd: 1,
 		});
-		fields.splice(3, 0, {
+		fields.splice(4, 0, {
 			fieldtype: "Float",
 			fieldname: "conversion_factor",
 			label: __("Conversion Factor"),
@@ -800,11 +929,7 @@ erpnext.utils.update_child_items = function (opts) {
 		});
 	}
 
-	if (
-		["Purchase Order", "Sales Order"].includes(frm.doc.doctype) &&
-		frm.doc.is_subcontracted &&
-		!frm.doc.is_old_subcontracting_flow
-	) {
+	if (["Purchase Order", "Sales Order"].includes(frm.doc.doctype) && frm.doc.is_subcontracted) {
 		fields.push(
 			{
 				fieldtype: "Link",
@@ -980,12 +1105,12 @@ erpnext.utils.map_current_doc = function (opts) {
 	}
 
 	if (query_args.filters || query_args.query) {
-		opts.get_query = () => query_args;
+		opts.get_query = () => JSON.parse(JSON.stringify(query_args));
 	}
 
 	if (opts.source_doctype) {
 		let data_fields = [];
-		if (["Purchase Receipt", "Delivery Note"].includes(opts.source_doctype)) {
+		if (["Purchase Receipt", "Delivery Note", "Purchase Invoice"].includes(opts.source_doctype)) {
 			let target_meta = frappe.get_meta(cur_frm.doc.doctype);
 			if (target_meta.fields.find((f) => f.fieldname === "taxes")) {
 				data_fields.push({
@@ -1060,10 +1185,14 @@ frappe.form.link_formatters["Project"] = function (value, doc, df) {
  * @returns {string} - The link value with the added title.
  */
 function add_link_title(value, doc, df, title_field) {
-	if (doc && value && doc[title_field] && doc[title_field] !== value && doc[df.fieldname] === value) {
-		return value + ": " + doc[title_field];
-	} else if (!value && doc.doctype && doc[title_field]) {
-		return doc[title_field];
+	if (value && doc[title_field]) {
+		if (doc[title_field] !== value && doc[df.fieldname] === value) {
+			return value + ": " + doc[title_field];
+		} else if (doc.doctype == df.parent) {
+			return doc[title_field];
+		} else {
+			return value;
+		}
 	} else {
 		return value;
 	}

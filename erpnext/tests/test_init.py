@@ -1,14 +1,8 @@
-import unittest
-
-import frappe
-from frappe.tests import IntegrationTestCase
-
 from erpnext import encode_company_abbr
+from erpnext.tests.utils import ERPNextTestSuite
 
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Company"]
 
-
-class TestInit(IntegrationTestCase):
+class TestInit(ERPNextTestSuite):
 	def test_encode_company_abbr(self):
 		abbr = "NFECT"
 
@@ -50,3 +44,20 @@ class TestInit(IntegrationTestCase):
 		from frappe.tests.test_patches import check_patch_files
 
 		check_patch_files("erpnext")
+
+	def test_no_unrendered_title_templates(self):
+		import frappe
+
+		modules = frappe.get_all("Module Def", filters={"app_name": "erpnext"}, pluck="name")
+		for doctype in frappe.get_all("DocType", filters={"module": ("in", modules)}, pluck="name"):
+			meta = frappe.get_meta(doctype)
+			field = meta.get_field("title")
+			if not field or not field.default or "{" not in field.default:
+				continue
+
+			self.assertEqual(
+				meta.title_field,
+				"title",
+				f"{doctype}: title default {field.default!r} is stored verbatim because "
+				"Document.set_title_field() only renders it when title_field is 'title'",
+			)

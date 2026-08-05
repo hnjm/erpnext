@@ -57,14 +57,14 @@ def validate_columns(data):
 
 
 @frappe.whitelist()
-def validate_company(company):
+def validate_company(company: str):
 	parent_company, allow_account_creation_against_child_company = frappe.get_cached_value(
 		"Company", company, ["parent_company", "allow_account_creation_against_child_company"]
 	)
 
 	if parent_company and (not allow_account_creation_against_child_company):
-		msg = _("{} is a child company.").format(frappe.bold(company)) + " "
-		msg += _("Please import accounts against parent company or enable {} in company master.").format(
+		msg = _("{0} is a child company.").format(frappe.bold(company)) + " "
+		msg += _("Please import accounts against parent company or enable {0} in company master.").format(
 			frappe.bold(_("Allow Account Creation Against Child Company"))
 		)
 		frappe.throw(msg, title=_("Wrong Company"))
@@ -74,8 +74,11 @@ def validate_company(company):
 
 
 @frappe.whitelist()
-def import_coa(file_name, company):
+def import_coa(file_name: str, company: str):
+	frappe.only_for("Accounts Manager")
+
 	# delete existing data for accounts
+	frappe.has_permission("Company", "write", company, throw=True)
 	unset_existing_data(company)
 
 	# create accounts
@@ -159,7 +162,9 @@ def generate_data_from_excel(file_doc, extension, as_dict=False):
 
 
 @frappe.whitelist()
-def get_coa(doctype, parent, is_root=False, file_name=None, for_validate=0):
+def get_coa(
+	doctype: str, parent: str, is_root: bool = False, file_name: str | None = None, for_validate: int = 0
+):
 	"""called by tree view (to fetch node's children)"""
 
 	file_doc, extension = get_file(file_name)
@@ -215,6 +220,7 @@ def build_forest(data):
 		for row in data:
 			account_name, parent_account, account_number, parent_account_number = row[0:4]
 			if account_number:
+				account_number = cstr(account_number).strip()
 				account_name = f"{account_number} - {account_name}"
 			if parent_account_number:
 				parent_account_number = cstr(parent_account_number).strip()
@@ -307,7 +313,7 @@ def build_response_as_excel(writer):
 
 
 @frappe.whitelist()
-def download_template(file_type, template_type, company):
+def download_template(file_type: str, template_type: str, company: str):
 	writer = get_template(template_type, company)
 
 	if file_type == "CSV":
@@ -361,7 +367,7 @@ def get_sample_template(writer, company):
 
 
 @frappe.whitelist()
-def validate_accounts(file_doc, extension):
+def validate_accounts(file_doc: Document, extension: str):
 	if extension == "csv":
 		accounts = generate_data_from_csv(file_doc, as_dict=True)
 	else:
@@ -451,6 +457,7 @@ def unset_existing_data(company):
 	fieldnames = get_linked_fields("Account").get("Company", {}).get("fieldname", [])
 	linked = [{"fieldname": name} for name in fieldnames]
 	update_values = {d.get("fieldname"): "" for d in linked}
+
 	frappe.db.set_value("Company", company, update_values, update_values)
 
 	# remove accounts data from various doctypes
@@ -462,8 +469,7 @@ def unset_existing_data(company):
 		"Sales Taxes and Charges Template",
 		"Purchase Taxes and Charges Template",
 	]:
-		dt = frappe.qb.DocType(doctype)
-		frappe.qb.from_(dt).where(dt.company == company).delete().run()
+		frappe.get_query(doctype, delete=True, filters={"company": company}, ignore_permissions=False).run()
 
 
 def set_default_accounts(company):

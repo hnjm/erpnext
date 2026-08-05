@@ -15,6 +15,11 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 		this.warehouse_field = opts.warehouse_field || "warehouse";
 		// field name on row which defines max quantity to be scanned e.g. picklist
 		this.max_qty_field = opts.max_qty_field;
+		// row fields that, if set, mean max_qty_field is a real demand qty (e.g. from a
+		// linked Sales Order) that scanning must not exceed. Rows with none of these set
+		// have no real demand qty, so max_qty_field is just an arbitrary default and
+		// shouldn't cap further scans.
+		this.demand_ref_fields = opts.demand_ref_fields || [];
 		// scanner won't add a new row if this flag is set.
 		this.dont_allow_new_row = opts.dont_allow_new_row;
 		// scanner will ask user to type the quantity instead of incrementing by 1
@@ -138,16 +143,16 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 
 			frappe.run_serially([
 				() => this.set_selector_trigger_flag(data),
+				() => this.set_barcode(row, barcode),
+				() => this.set_warehouse(row),
 				() =>
 					this.set_item(row, item_code, barcode, batch_no, serial_no).then((qty) => {
 						this.show_scan_message(row.idx, !is_new_row, qty);
 					}),
-				() => this.set_barcode_uom(row, uom),
 				() => this.set_serial_no(row, serial_no),
 				() => this.set_batch_no(row, batch_no),
-				() => this.set_barcode(row, barcode),
-				() => this.set_warehouse(row),
 				() => this.clean_up(),
+				() => this.set_barcode_uom(row, uom),
 				() => this.revert_selector_flag(),
 				() => resolve(row),
 			]);
@@ -338,7 +343,7 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 			? this.dialog.get_value("serial_no").split("\n")
 			: [];
 
-		if (in_list(serial_nos, serial_no)) {
+		if (serial_nos.includes(serial_no)) {
 			frappe.throw(__("Serial No {0} already scanned", [serial_no]));
 		}
 	}
@@ -359,7 +364,7 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 			];
 
 			for (let key in prev_row) {
-				if (in_list(ignore_fields, key)) {
+				if (ignore_fields.includes(key)) {
 					continue;
 				}
 
@@ -390,6 +395,9 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 	}
 
 	async set_barcode_uom(row, uom) {
+		// e.g. Pick List: picked_qty is always tracked in stock UOM, so an incidental
+		// barcode uom must not overwrite the row's own uom.
+		if (this.max_qty_field) return;
 		if (uom && frappe.meta.has_field(row.doctype, this.uom_field)) {
 			await frappe.model.set_value(row.doctype, row.name, this.uom_field, uom);
 		}
@@ -454,8 +462,9 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 		const matching_row = (row) => {
 			const item_match = row.item_code == item_code;
 			const batch_match = !row[this.batch_no_field] || row[this.batch_no_field] == batch_no;
-			const uom_match = !uom || row[this.uom_field] == uom;
-			const qty_in_limit = flt(row[this.qty_field]) < flt(row[this.max_qty_field]);
+			const uom_match = !uom || this.max_qty_field || row[this.uom_field] == uom;
+			const has_demand_qty = this.demand_ref_fields.some((fieldname) => row[fieldname]);
+			const qty_in_limit = !has_demand_qty || flt(row[this.qty_field]) < flt(row[this.max_qty_field]);
 			const item_scanned = row.has_item_scanned;
 
 			let warehouse_match = true;
@@ -491,7 +500,7 @@ erpnext.utils.BarcodeScanner = class BarcodeScanner {
 
 			const clear_btn = `
 				<a class="btn-clear-last-scanned-warehouse" title="${__("Clear Last Scanned Warehouse")}">
-					${frappe.utils.icon("close", "xs", "es-icon")}
+					${frappe.utils.icon("x", "xs")}
 				</a>
 			`;
 

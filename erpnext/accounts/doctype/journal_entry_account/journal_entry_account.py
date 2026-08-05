@@ -28,6 +28,7 @@ class JournalEntryAccount(Document):
 		debit_in_account_currency: DF.Currency
 		exchange_rate: DF.Float
 		is_advance: DF.Literal["No", "Yes"]
+		is_tax_withholding_account: DF.Check
 		parent: DF.Data
 		parentfield: DF.Data
 		parenttype: DF.Data
@@ -54,6 +55,7 @@ class JournalEntryAccount(Document):
 			"Fees",
 			"Full and Final Statement",
 			"Payment Entry",
+			"Bank Transaction",
 		]
 		user_remark: DF.SmallText | None
 	# end: auto-generated types

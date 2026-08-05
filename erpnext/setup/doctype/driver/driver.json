@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_bulk_edit": 1,
  "allow_import": 1,
  "allow_rename": 1,
  "autoname": "naming_series:",
@@ -129,10 +130,11 @@
  ],
  "icon": "fa fa-user",
  "links": [],
- "modified": "2024-03-27 13:08:18.825438",
+ "modified": "2026-06-16 16:04:12.762960",
  "modified_by": "Administrator",
  "module": "Setup",
  "name": "Driver",
+ "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
   {
@@ -143,30 +145,6 @@
    "report": 1,
    "role": "Fleet Manager",
    "share": 1
-  },
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "HR User",
-   "share": 1,
-   "write": 1
-  },
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "HR Manager",
-   "share": 1,
-   "write": 1
   },
   {
    "print": 1,
@@ -183,9 +161,22 @@
    "role": "Delivery Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
   }
  ],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "search_fields": "full_name",
  "show_name_in_global_search": 1,
  "sort_field": "creation",

@@ -74,7 +74,6 @@ erpnext.patches.v12_0.make_item_manufacturer
 erpnext.patches.v12_0.move_item_tax_to_item_tax_template
 erpnext.patches.v11_1.set_variant_based_on
 erpnext.patches.v11_1.woocommerce_set_creation_user
-erpnext.patches.v11_1.rename_depends_on_lwp
 execute:frappe.delete_doc("Report", "Inactive Items")
 erpnext.patches.v11_1.delete_scheduling_tool
 erpnext.patches.v12_0.rename_tolerance_fields
@@ -261,7 +260,8 @@ execute:frappe.rename_doc("Report", "TDS Payable Monthly", "Tax Withholding Deta
 erpnext.patches.v14_0.update_proprietorship_to_individual
 erpnext.patches.v15_0.rename_subcontracting_fields
 erpnext.patches.v15_0.unset_incorrect_additional_discount_percentage
-erpnext.patches.v16_0.create_company_custom_fields
+erpnext.patches.v16_0.convert_commission_rate_to_percent
+erpnext.patches.v16_0.convert_hide_currency_symbol_to_check
 
 [post_model_sync]
 erpnext.patches.v15_0.rename_gross_purchase_amount_to_net_purchase_amount
@@ -306,7 +306,6 @@ erpnext.patches.v14_0.create_accounting_dimensions_in_subcontracting_doctypes
 erpnext.patches.v14_0.fix_subcontracting_receipt_gl_entries
 erpnext.patches.v13_0.drop_unused_sle_index_parts
 erpnext.patches.v14_0.create_accounting_dimensions_for_asset_capitalization
-erpnext.patches.v14_0.update_partial_tds_fields
 erpnext.patches.v14_0.create_incoterms_and_migrate_shipment
 erpnext.patches.v14_0.create_accounting_dimensions_for_payment_request
 erpnext.patches.v14_0.update_entry_type_for_journal_entry
@@ -413,6 +412,7 @@ erpnext.patches.v15_0.rename_group_by_to_categorize_by
 execute:frappe.db.set_single_value("Accounts Settings", "receivable_payable_fetch_method", "Buffered Cursor")
 erpnext.patches.v14_0.set_update_price_list_based_on
 erpnext.patches.v15_0.update_journal_entry_type
+erpnext.patches.v15_0.add_bank_transaction_as_journal_entry_reference
 erpnext.patches.v15_0.set_grand_total_to_default_mop
 execute:frappe.db.set_single_value("Accounts Settings", "use_legacy_budget_controller", False)
 erpnext.patches.v15_0.set_cancelled_status_to_cancelled_pos_invoice
@@ -440,13 +440,71 @@ erpnext.patches.v16_0.set_reporting_currency
 erpnext.patches.v16_0.set_posting_datetime_for_sabb_and_drop_indexes
 erpnext.patches.v16_0.update_serial_no_reference_name
 erpnext.patches.v16_0.update_account_categories_for_existing_accounts
+erpnext.patches.v16_0.create_company_custom_fields
 erpnext.patches.v16_0.rename_subcontracted_quantity
 erpnext.patches.v16_0.add_new_stock_entry_types
 erpnext.patches.v15_0.set_asset_status_if_not_already_set
 erpnext.patches.v15_0.toggle_legacy_controller_for_period_closing
-erpnext.patches.v16_0.update_serial_batch_entries
+erpnext.patches.v16_0.update_serial_batch_entries #11-01-2026 10:00:00
 erpnext.patches.v16_0.set_company_wise_warehouses
 erpnext.patches.v16_0.set_valuation_method_on_companies
 erpnext.patches.v15_0.migrate_old_item_wise_tax_detail_data_to_table
 erpnext.patches.v16_0.migrate_budget_records_to_new_structure
-erpnext.patches.v16_0.update_currency_exchange_settings_for_frankfurter
+erpnext.patches.v16_0.update_currency_exchange_settings_for_frankfurter #2025-12-11
+erpnext.patches.v16_0.migrate_account_freezing_settings_to_company
+erpnext.patches.v16_0.populate_budget_distribution_total
+erpnext.patches.v16_0.set_mr_picked_qty
+erpnext.patches.v16_0.update_tax_withholding_field_in_payment_entry
+erpnext.patches.v16_0.migrate_tax_withholding_data
+erpnext.patches.v16_0.update_corrected_cancelled_status
+erpnext.patches.v16_0.fix_barcode_typo
+erpnext.patches.v16_0.add_accounting_dimensions_to_journal_template_accounts
+erpnext.patches.v16_0.set_post_change_gl_entries_on_pos_settings
+erpnext.patches.v15_0.create_accounting_dimensions_in_advance_taxes_and_charges
+execute:frappe.delete_doc_if_exists("Workspace Sidebar", "Opening & Closing")
+erpnext.patches.v16_0.migrate_transaction_deletion_task_flags_to_status # 2
+erpnext.patches.v16_0.set_ordered_qty_in_quotation_item
+erpnext.patches.v16_0.update_company_custom_field_in_bin
+erpnext.patches.v15_0.replace_http_with_https_in_sales_partner
+erpnext.patches.v16_0.migrate_asset_type_checkboxes_to_select
+erpnext.patches.v15_0.delete_quotation_lost_record_detail
+erpnext.patches.v16_0.add_portal_redirects
+erpnext.patches.v16_0.update_order_qty_and_requested_qty_based_on_mr_and_po
+erpnext.patches.v16_0.complete_onboarding_steps_for_older_sites #2
+erpnext.patches.v16_0.enable_serial_batch_setting
+erpnext.patches.v16_0.fix_titles
+erpnext.patches.v16_0.co_by_product_patch
+erpnext.patches.v16_0.update_requested_qty_packed_item
+erpnext.patches.v16_0.remove_payables_receivables_workspace
+erpnext.patches.v16_0.depends_on_inv_dimensions
+erpnext.patches.v16_0.uom_category
+erpnext.patches.v16_0.merge_repost_settings_to_accounts_settings
+erpnext.patches.v16_0.set_root_type_in_account_categories
+erpnext.patches.v16_0.scr_inv_dimension
+erpnext.patches.v16_0.packed_item_inv_dimen
+erpnext.patches.v16_0.set_not_applicable_on_german_item_tax_templates
+erpnext.patches.v16_0.set_default_letter_head_for_doctype_and_report
+erpnext.patches.v16_0.clear_procedures_from_receivable_report
+erpnext.patches.v16_0.migrate_address_contact_custom_fields
+erpnext.patches.v16_0.rename_secondary_item_type_field
+erpnext.patches.v16_0.submit_existing_product_bundles #1
+erpnext.patches.v16_0.migrate_subscription_generate_invoice_at
+erpnext.patches.v16_0.rename_subscription_billing_period_fields
+erpnext.patches.v16_0.drop_redundant_serial_no_index_from_sabb
+erpnext.patches.v16_0.set_default_close_opportunity_after_days
+execute:frappe.db.set_single_value("Accounts Settings", "pcv_job_timeout", 3600)
+erpnext.patches.v16_0.backfill_pick_list_transferred_qty
+erpnext.patches.v16_0.create_shop_floor_roles
+erpnext.patches.v15_0.backfill_sla_link_filters_on_custom_field
+erpnext.patches.v15_0.backfill_sla_link_filters_on_docfield
+erpnext.patches.v16_0.crm_settings_handle_allowed_users_for_frappe_crm
+erpnext.patches.v16_0.access_control_for_project_users
+erpnext.patches.v16_0.enable_book_stock_expense_gl_entries
+execute:frappe.db.set_single_value("Stock Settings", "use_inline_serial_batch_editor", 0)
+erpnext.patches.v16_0.recalculate_bins_for_production_plan_items
+erpnext.patches.v16_0.rename_ar_ap_ageing_filter
+erpnext.patches.v16_0.fix_subcontracting_titles
+erpnext.patches.v16_0.move_warehouse_defaults_to_company
+erpnext.patches.v16_0.backfill_repost_accounting_ledger_status
+erpnext.patches.v16_0.merge_seeded_item_group_root
+erpnext.patches.v16_0.set_stock_uom_in_job_card
