@@ -4,7 +4,9 @@
  "allow_import": 1,
  "autoname": "hash",
  "creation": "2022-01-11 15:03:38.273179",
+ "description": "Recalculates stock values after a backdated change.",
  "doctype": "DocType",
+ "documentation": "https://docs.frappe.io/erpnext/repost-item-valuation",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
@@ -25,6 +27,8 @@
   "allow_zero_rate",
   "recreate_stock_ledgers",
   "recalculate_valuation_rate",
+  "skip_unchanged_entries",
+  "created_by_scheduler",
   "error_section",
   "error_log",
   "reposting_info_section",
@@ -261,18 +265,35 @@
   },
   {
    "default": "0",
-   "description": "Only works for Purchase Receipt, Purchase Invoice and Stock Entry",
    "fieldname": "recalculate_valuation_rate",
    "fieldtype": "Check",
-   "label": "Recalculate Valuation Rate",
-   "show_description_on_click": 1
+   "hidden": 1,
+   "label": "Recalculate Valuation Rate"
+  },
+  {
+   "default": "0",
+   "description": "Stop reposting an item and warehouse at a later Stock Reconciliation, or when its balance is the same as the saved ledger. Reposts made by stock transactions set this.",
+   "fieldname": "skip_unchanged_entries",
+   "fieldtype": "Check",
+   "label": "Skip Unchanged Entries"
+  },
+  {
+   "default": "0",
+   "depends_on": "created_by_scheduler",
+   "fieldname": "created_by_scheduler",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Created by Scheduler",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
+ "icon": "refresh-cw",
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-06-16 17:30:42.715321",
+ "modified": "2026-11-21 02:46:19.969147",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Repost Item Valuation",

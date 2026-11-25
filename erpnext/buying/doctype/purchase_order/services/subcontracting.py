@@ -5,7 +5,10 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import flt, get_link_to_form
+
+from erpnext.stock.get_item_details import get_default_bom
+from erpnext.utilities.transaction_base import get_whole_number_uoms, validate_qty_is_integer
 
 
 class SubcontractingService:
@@ -29,7 +32,7 @@ class SubcontractingService:
 								item.idx, item.fg_item
 							)
 						)
-					elif not item.bom and not frappe.get_value("Item", item.fg_item, "default_bom"):
+					elif not item.bom and not get_default_bom(item.fg_item):
 						frappe.throw(
 							_("Row #{0}: Default BOM not found for FG Item {1}").format(
 								item.idx, item.fg_item
@@ -37,10 +40,30 @@ class SubcontractingService:
 						)
 				if not item.fg_item_qty:
 					frappe.throw(_("Row #{0}: Finished Good Item Qty cannot be zero").format(item.idx))
+
+			self.validate_finished_good_qty()
 		else:
 			for item in doc.items:
 				item.set("fg_item", None)
 				item.set("fg_item_qty", 0)
+
+	def validate_finished_good_qty(self) -> None:
+		finished_good_uoms = {
+			item.name: item.stock_uom
+			for item in frappe.get_all(
+				"Item",
+				filters={"name": ["in", list({item.fg_item for item in self.doc.items})]},
+				fields=["name", "stock_uom"],
+			)
+		}
+		integer_uoms = get_whole_number_uoms(finished_good_uoms.values())
+
+		for item in self.doc.items:
+			if stock_uom := finished_good_uoms.get(item.fg_item):
+				if stock_uom in integer_uoms:
+					validate_qty_is_integer(
+						item.fg_item_qty, stock_uom, item.precision("fg_item_qty"), item.idx
+					)
 
 	def set_service_items_for_finished_goods(self) -> None:
 		from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
@@ -51,9 +74,9 @@ class SubcontractingService:
 		if not doc.is_subcontracted:
 			return
 
-		finished_goods_without_service_item = {
-			d.fg_item for d in doc.items if (not d.item_code and d.fg_item)
-		}
+		finished_goods_without_service_item = list(
+			{d.fg_item for d in doc.items if (not d.item_code and d.fg_item)}
+		)
 
 		if subcontracting_boms := get_subcontracting_boms_for_finished_goods(
 			finished_goods_without_service_item
@@ -77,6 +100,39 @@ class SubcontractingService:
 
 		return result
 
+	def validate_item_close(self, items) -> None:
+		"""Refuse to close rows that are still on an open Subcontracting Order."""
+		if not self.doc.is_subcontracted:
+			return
+
+		order = frappe.qb.DocType("Subcontracting Order")
+		order_item = frappe.qb.DocType("Subcontracting Order Item")
+		open_orders = dict(
+			frappe.qb.from_(order_item)
+			.inner_join(order)
+			.on(order.name == order_item.parent)
+			.select(order_item.purchase_order_item, order.name)
+			.where(
+				order_item.purchase_order_item.isin([item.name for item in items])
+				& (order.docstatus == 1)
+				& order.status.notin(["Closed", "Completed"])
+				& (order_item.received_qty < order_item.qty)
+			)
+			.run()
+		)
+
+		for item in items:
+			if subcontracting_order := open_orders.get(item.name):
+				frappe.throw(
+					_(
+						"Row #{0}: {1} is on the open Subcontracting Order {2}. Close it before closing the row."
+					).format(
+						item.idx,
+						frappe.bold(item.item_code),
+						get_link_to_form("Subcontracting Order", subcontracting_order),
+					)
+				)
+
 	def auto_create_subcontracting_order(self) -> None:
 		from erpnext.buying.doctype.purchase_order.mapper import make_subcontracting_order
 
@@ -84,14 +140,14 @@ class SubcontractingService:
 			if frappe.db.get_single_value("Buying Settings", "auto_create_subcontracting_order"):
 				make_subcontracting_order(self.doc.name, save=True, notify=True)
 
-	def update_subcontracting_order_status(self) -> None:
+	def close_subcontracting_orders(self) -> None:
 		from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order import (
 			set_subcontracting_order_status as update_sco_status,
 		)
 
 		doc = self.doc
 		if doc.is_subcontracted:
-			sco = frappe.db.get_value("Subcontracting Order", {"purchase_order": doc.name, "docstatus": 1})
-
-			if sco:
-				update_sco_status(sco, "Closed" if doc.status == "Closed" else None)
+			for sco in frappe.get_all(
+				"Subcontracting Order", {"purchase_order": doc.name, "docstatus": 1}, pluck="name"
+			):
+				update_sco_status(sco, "Closed")

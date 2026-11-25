@@ -5,18 +5,21 @@
 
 import frappe
 from frappe.query_builder.functions import Count, IfNull, Max, Sum
-from frappe.utils import flt
+from frappe.utils import flt, now
 from frappe.utils.caching import request_cache
 
 from erpnext.manufacturing.doctype.bom.bom import get_children as get_bom_children
 from erpnext.manufacturing.doctype.production_plan.services.planning_queries import (
-	get_bin_details,
+	_get_bin_details,
+	aggregate_bin_details,
+	get_planned_process_loss_percentage,
+	get_qty_before_process_loss,
 	get_uom_conversion_factor,
+	round_up_to_whole_unit,
 )
 
 
 def get_sub_assembly_items(
-	sub_assembly_items,
 	bin_details,
 	bom_no,
 	bom_data,
@@ -25,6 +28,7 @@ def get_sub_assembly_items(
 	warehouse=None,
 	indent=0,
 	skip_available_sub_assembly_item=False,
+	consider_process_loss=False,
 ):
 	precision = frappe.get_precision("Production Plan Sub Assembly Item", "qty")
 	parent_item_code = frappe.get_cached_value("BOM", bom_no, "item")
@@ -38,7 +42,6 @@ def get_sub_assembly_items(
 			parent_item_code,
 			bom_no,
 			bom_data,
-			sub_assembly_items,
 			bin_details,
 			to_produce_qty,
 			company,
@@ -46,10 +49,10 @@ def get_sub_assembly_items(
 			indent,
 			precision,
 			skip_available_sub_assembly_item,
+			consider_process_loss,
 		)
 		if d.value:
 			get_sub_assembly_items(
-				sub_assembly_items,
 				bin_details,
 				d.value,
 				bom_data,
@@ -58,6 +61,7 @@ def get_sub_assembly_items(
 				warehouse,
 				indent=indent + 1,
 				skip_available_sub_assembly_item=skip_available_sub_assembly_item,
+				consider_process_loss=consider_process_loss,
 			)
 
 
@@ -66,7 +70,6 @@ def _add_sub_assembly_child(
 	parent_item_code,
 	bom_no,
 	bom_data,
-	sub_assembly_items,
 	bin_details,
 	to_produce_qty,
 	company,
@@ -74,55 +77,55 @@ def _add_sub_assembly_child(
 	indent,
 	precision,
 	skip_available,
+	consider_process_loss,
 ):
 	required_qty = (d.stock_qty / d.parent_bom_qty) * flt(to_produce_qty)
 	stock_qty = _resolve_available_sub_assembly(
-		d, required_qty, sub_assembly_items, bin_details, company, warehouse, skip_available
+		d, required_qty, bin_details, company, warehouse, skip_available
 	)
 	if not d.is_phantom_item:
+		d.process_loss_percentage = (
+			get_planned_process_loss_percentage(d.value) if consider_process_loss else 0
+		)
+		stock_qty = round_up_to_whole_unit(stock_qty, d.stock_uom)
 		bom_data.append(
 			_sub_assembly_row(
 				d, parent_item_code, bom_no, bin_details, stock_qty, required_qty, indent, precision
 			)
 		)
+		stock_qty = get_qty_before_process_loss(stock_qty, d.process_loss_percentage, d.stock_uom)
 	return stock_qty
 
 
-def _resolve_available_sub_assembly(
-	d, stock_qty, sub_assembly_items, bin_details, company, warehouse, skip_available
-):
-	if skip_available and d.item_code not in sub_assembly_items:
-		bin_details.setdefault(d.item_code, get_bin_details(d, company, for_warehouse=warehouse))
-		return _consume_projected_qty(d, stock_qty, sub_assembly_items, bin_details)
+def _resolve_available_sub_assembly(d, stock_qty, bin_details, company, warehouse, skip_available):
+	if warehouse and d.item_code not in bin_details:
+		bins = _get_bin_details(d, company, for_warehouse=warehouse)
+		bin_details[d.item_code] = frappe._dict(aggregate_bin_details(bins))
 
-	if warehouse:
-		bin_details.setdefault(d.item_code, get_bin_details(d, company, for_warehouse=warehouse))
+	if skip_available:
+		return _consume_projected_qty(d, stock_qty, bin_details)
 	return stock_qty
 
 
-def _consume_projected_qty(d, stock_qty, sub_assembly_items, bin_details):
-	for _bin_dict in bin_details[d.item_code]:
-		_bin_dict.original_projected_qty = _bin_dict.projected_qty
-		if _bin_dict.original_projected_qty <= 0:
-			continue
+def _consume_projected_qty(d, stock_qty, bin_details):
+	bin_dict = bin_details[d.item_code]
+	available_qty = bin_dict.get("available_qty", bin_dict.projected_qty)
+	if available_qty <= 0:
+		return stock_qty
 
-		if _bin_dict.original_projected_qty >= stock_qty:
-			_bin_dict.original_projected_qty -= stock_qty
-			stock_qty = 0
-			continue
+	if available_qty >= stock_qty:
+		bin_dict.available_qty = available_qty - stock_qty
+		return 0
 
-		stock_qty -= _bin_dict.original_projected_qty
-		sub_assembly_items.append(d.item_code)
-	return stock_qty
+	bin_dict.available_qty = 0
+	return stock_qty - available_qty
 
 
 def _sub_assembly_row(d, parent_item_code, bom_no, bin_details, stock_qty, required_qty, indent, precision):
-	bins = bin_details.get(d.item_code)
-	actual_qty = bins[0].get("actual_qty", 0) if bins else 0
-	projected_qty = bins[0].get("projected_qty", 0) if bins else 0
+	bin_dict = bin_details.get(d.item_code) or {}
 	return frappe._dict(
 		{
-			"actual_qty": actual_qty,
+			"actual_qty": bin_dict.get("actual_qty", 0),
 			"parent_item_code": parent_item_code,
 			"description": d.description,
 			"production_item": d.item_code,
@@ -135,7 +138,8 @@ def _sub_assembly_row(d, parent_item_code, bom_no, bin_details, stock_qty, requi
 			"indent": indent,
 			"stock_qty": flt(stock_qty, precision),
 			"required_qty": flt(required_qty, precision),
-			"projected_qty": projected_qty,
+			"process_loss_percentage": d.process_loss_percentage,
+			"projected_qty": bin_dict.get("projected_qty", 0),
 			"main_bom": bom_no,
 		}
 	)
@@ -305,3 +309,80 @@ def _merge_sub_assembly_rm(item, item_details):
 		details.qty += item.get("qty")
 	else:
 		item_details.setdefault(key, item)
+
+
+def get_subcontracted_received_qty(po_details):
+	"""Accepted finished good qty from Subcontracting Receipts, by Purchase Order Item."""
+	if not po_details:
+		return {}
+
+	scr_item = frappe.qb.DocType("Subcontracting Receipt Item")
+	sco_item = frappe.qb.DocType("Subcontracting Order Item")
+	# return rows don't carry purchase_order_item, so link via the subcontracting order item
+	return_against = frappe.qb.DocType("Subcontracting Receipt Item").as_("return_against")
+
+	return frappe._dict(
+		frappe.qb.from_(scr_item)
+		.inner_join(sco_item)
+		.on(scr_item.subcontracting_order_item == sco_item.name)
+		.left_join(return_against)
+		.on(scr_item.subcontracting_receipt_item == return_against.name)
+		.select(sco_item.purchase_order_item, Sum(scr_item.qty))
+		.where(
+			(scr_item.docstatus == 1)
+			& sco_item.purchase_order_item.isin(po_details)
+			# skip returns of rejected qty, they come out of the rejected warehouse
+			& (
+				return_against.name.isnull()
+				| (scr_item.warehouse != IfNull(return_against.rejected_warehouse, ""))
+			)
+		)
+		.groupby(sco_item.purchase_order_item)
+		.run()
+	)
+
+
+def update_subcontracted_received_qty(subcontracting_order_items: list[str]):
+	"""Set the accepted finished good qty received on the plan's subcontracted sub-assembly rows."""
+	if not subcontracting_order_items:
+		return
+
+	po_item = frappe.qb.DocType("Purchase Order Item")
+	sco_item = frappe.qb.DocType("Subcontracting Order Item")
+	sub_assembly_items = (
+		frappe.qb.from_(sco_item)
+		.inner_join(po_item)
+		.on(po_item.name == sco_item.purchase_order_item)
+		.select(po_item.production_plan_sub_assembly_item)
+		.distinct()
+		.where(
+			sco_item.name.isin(subcontracting_order_items)
+			& (IfNull(po_item.production_plan_sub_assembly_item, "") != "")
+		)
+		.run(pluck=True)
+	)
+	if not sub_assembly_items:
+		return
+
+	po_items = frappe.get_all(
+		"Purchase Order Item",
+		filters={"production_plan_sub_assembly_item": ("in", sub_assembly_items), "docstatus": 1},
+		fields=["name", "production_plan_sub_assembly_item", "production_plan"],
+	)
+	received_qty = get_subcontracted_received_qty([row.name for row in po_items])
+
+	sub_assembly_received_qty = dict.fromkeys(sub_assembly_items, 0.0)
+	for row in po_items:
+		sub_assembly_received_qty[row.production_plan_sub_assembly_item] += flt(received_qty.get(row.name))
+
+	precision = frappe.get_precision("Production Plan Sub Assembly Item", "received_qty")
+	for name, qty in sub_assembly_received_qty.items():
+		frappe.db.set_value("Production Plan Sub Assembly Item", name, "received_qty", flt(qty, precision))
+
+	# so an open plan form can't save its stale received qty back
+	frappe.db.set_value(
+		"Production Plan",
+		{"name": ("in", list({row.production_plan for row in po_items}))},
+		{"modified": now(), "modified_by": frappe.session.user},
+		update_modified=False,
+	)

@@ -8,6 +8,7 @@ import frappe
 from frappe import qb
 from frappe.query_builder.functions import Sum
 from frappe.utils import add_days, nowdate, today
+from frappe.utils.logging import get_log_db
 
 from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
 from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
@@ -74,6 +75,7 @@ class TestRepostAccountingLedger(ERPNextTestSuite):
 		def repost_voucher(doc, delete_cancelled_entries):
 			reposted.append(doc.name)
 			if doc.doctype in fail_for:
+				# nosemgrep: frappe-semgrep-rules.rules.frappe-missing-translate-function-python -- test-only message
 				frappe.throw(SIMULATED_FAILURE)
 			_repost_vouchers(doc, delete_cancelled_entries)
 
@@ -409,6 +411,7 @@ class TestRepostAccountingLedger(ERPNextTestSuite):
 
 		# the job dies after the loop committed the invoice, e.g. killed or timed out
 		try:
+			# nosemgrep: frappe-semgrep-rules.rules.frappe-missing-translate-function-python -- test-only message
 			frappe.throw(SIMULATED_FAILURE)
 		except frappe.ValidationError:
 			_record_repost_failure(ral)
@@ -419,7 +422,7 @@ class TestRepostAccountingLedger(ERPNextTestSuite):
 		self.assertEqual(ral.status, "Partially Reposted")
 		self.assertIn(SIMULATED_FAILURE, ral.error_log)
 		self.assertTrue(
-			frappe.db.exists("Error Log", {"reference_doctype": ral.doctype, "reference_name": ral.name})
+			get_log_db().exists("Error Log", {"reference_doctype": ral.doctype, "reference_name": ral.name})
 		)
 
 	@ERPNextTestSuite.change_settings("Accounts Settings", {"delete_linked_ledger_entries": 1})

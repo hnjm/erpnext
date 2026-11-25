@@ -8,9 +8,11 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.query_builder.functions import Coalesce, Concat, Date, Round
-from frappe.utils import flt, get_datetime, getdate
+from frappe.utils import cint, cstr, flt, get_datetime, getdate, nowdate
 from frappe.utils.deprecations import deprecated
 
+import erpnext
+from erpnext import _refuse, require_permission
 from erpnext.setup.utils import get_exchange_rate
 
 
@@ -67,16 +69,48 @@ class Timesheet(Document):
 
 	def validate(self):
 		self.set_status()
+		self.set_user()
 		self.validate_dates()
 		self.calculate_hours()
 		self.validate_time_logs()
+		self.check_task_and_project_access(self.time_logs)
+		self.validate_tasks_not_cancelled()
+		self.set_dates()
+		self.set_exchange_rate()
 		self.update_cost()
 		self.calculate_total_amounts()
 		self.calculate_percentage_billed()
-		self.set_dates()
+
+	def set_exchange_rate(self):
+		"""A company currency Timesheet always has rate 1. A foreign one without a rate gets
+		the current rate. A rate that is set, 1 included, is kept."""
+		company_currency = self.get_company_currency()
+		if not self.currency or self.currency == company_currency:
+			self.exchange_rate = 1
+		elif not flt(self.exchange_rate):
+			self.exchange_rate = get_exchange_rate(self.currency, company_currency) or 1
+
+	def get_company_currency(self):
+		if self.company:
+			return erpnext.get_company_currency(self.company)
+		return erpnext.get_default_currency() or frappe.defaults.get_global_default("currency")
+
+	def validate_tasks_not_cancelled(self):
+		tasks = [log.task for log in self.time_logs if log.task]
+		if not tasks:
+			return
+
+		cancelled_tasks = frappe.get_all(
+			"Task", filters={"name": ["in", tasks], "status": "Cancelled"}, pluck="name"
+		)
+		if cancelled_tasks:
+			frappe.throw(_("Cannot log time against cancelled Tasks: {0}").format(", ".join(cancelled_tasks)))
 
 	def on_discard(self):
 		self.db_set("status", "Cancelled")
+
+	def before_update_after_submit(self):
+		self.check_task_and_project_access(self.get_time_logs_that_change_totals())
 
 	def on_update_after_submit(self):
 		self.validate_mandatory_fields()
@@ -136,6 +170,9 @@ class Timesheet(Document):
 		if self.sales_invoice:
 			self.status = "Completed"
 
+	def set_user(self):
+		self.user = frappe.db.get_value("Employee", self.employee, "user_id") if self.employee else self.owner
+
 	def set_dates(self):
 		if self.docstatus < 2 and self.time_logs:
 			start_date = min(getdate(d.from_time) for d in self.time_logs)
@@ -147,6 +184,13 @@ class Timesheet(Document):
 
 	def before_cancel(self):
 		self.set_status()
+		# cancel does not run validate, but still saves the rows it is sent
+		if self.get_time_logs_that_change_totals():
+			frappe.throw(
+				_("Time logs cannot be changed when a Timesheet is cancelled."),
+				title=_("Cannot Cancel Timesheet"),
+			)
+		self.check_task_and_project_access(self.time_logs)
 
 	def on_cancel(self):
 		self.update_task_and_project()
@@ -173,12 +217,7 @@ class Timesheet(Document):
 			if data.task and data.task not in tasks:
 				task = frappe.get_doc("Task", data.task)
 				task.update_time_and_costing()
-				time_logs_completed = all(tl.completed for tl in self.time_logs if tl.task == task.name)
-
-				if time_logs_completed:
-					task.status = "Completed"
-				else:
-					task.status = "Working"
+				task.status = get_task_status(task)
 				task.save(ignore_permissions=True)
 				tasks.append(data.task)
 
@@ -195,12 +234,52 @@ class Timesheet(Document):
 			time_log.validate_dates()
 
 	def validate_time_logs(self):
+		previous = self.get_doc_before_save()
+		saved_activity_types = (
+			{row.name: row.activity_type for row in previous.time_logs}
+			if previous and previous.docstatus == 1
+			else {}
+		)
 		for time_log in self.time_logs:
 			time_log.set_to_time()
 			self.validate_overlap(time_log)
 			time_log.set_project()
 			time_log.validate_parent_project(self.parent_project)
 			time_log.validate_task_project()
+			if time_log.activity_type != saved_activity_types.get(time_log.name):
+				time_log.validate_activity_type()
+
+	def get_time_logs_that_change_totals(self):
+		"""Saved and new versions of the rows whose values used in totals change, and the removed rows."""
+		previous = self.get_doc_before_save()
+		saved_rows = {row.name: row for row in previous.time_logs} if previous else {}
+		changed = []
+		for row in self.time_logs:
+			saved_row = saved_rows.pop(row.name, None)
+			if get_values_used_in_totals(row) != get_values_used_in_totals(saved_row):
+				changed.extend(log for log in (row, saved_row) if log)
+		return changed + list(saved_rows.values())
+
+	def check_task_and_project_access(self, time_logs):
+		"""update_task_and_project saves the Task and Project of these rows ignoring permissions,
+		so the user must be allowed to pick them."""
+		if self.flags.ignore_permissions:
+			return
+
+		tasks = {log.task for log in time_logs if log.task}
+		projects = {log.project for log in time_logs if log.project}
+		# saving a task also recalculates the project it is in now
+		if tasks:
+			projects.update(
+				project
+				for project in frappe.get_all("Task", filters={"name": ["in", list(tasks)]}, pluck="project")
+				if project
+			)
+
+		for task in tasks:
+			require_permission("Task", task, "select")
+		for project in projects:
+			require_permission("Project", project, "select")
 
 	def validate_overlap(self, data):
 		settings = frappe.get_single("Projects Settings")
@@ -284,7 +363,7 @@ class Timesheet(Document):
 
 	def update_cost(self):
 		for time_log in self.time_logs:
-			time_log.update_cost(self.employee)
+			time_log.update_cost(self.employee, self.currency, self.exchange_rate)
 
 	def update_time_rates(self, ts_detail):
 		if not ts_detail.is_billable:
@@ -301,6 +380,45 @@ class Timesheet(Document):
 		self.set_status()
 
 
+def get_values_used_in_totals(time_log: Document | None) -> tuple | None:
+	"""The values of a time log that Task and Project totals use, unrounded so that any change counts."""
+	if not time_log:
+		return None
+
+	return (
+		time_log.task or None,
+		time_log.project or None,
+		get_datetime(time_log.from_time) if time_log.from_time else None,
+		get_datetime(time_log.to_time) if time_log.to_time else None,
+		*(
+			flt(time_log.get(fieldname))
+			for fieldname in (
+				"hours",
+				"costing_amount",
+				"billing_amount",
+				"base_costing_amount",
+				"base_billing_amount",
+			)
+		),
+		cint(time_log.completed),
+	)
+
+
+def get_task_status(task: Document) -> str:
+	"""Status from the task's submitted time logs; a Completed or Cancelled task is never reopened."""
+	if task.status in ("Completed", "Cancelled"):
+		return task.status
+
+	completed = frappe.get_all(
+		"Timesheet Detail",
+		filters={"task": task.name, "docstatus": 1, "parenttype": "Timesheet"},
+		pluck="completed",
+	)
+	if not completed:
+		return "Open"
+	return "Completed" if any(completed) else "Working"
+
+
 @frappe.whitelist()
 def get_projectwise_timesheet_data(
 	project: str | None = None,
@@ -310,6 +428,12 @@ def get_projectwise_timesheet_data(
 ):
 	tsd = frappe.qb.DocType("Timesheet Detail")
 	ts = frappe.qb.DocType("Timesheet")
+
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+	allowed_projects = frappe.get_list("Project", pluck="name")
+
+	if not allowed_timesheets:
+		return []
 
 	query = (
 		frappe.qb.from_(tsd)
@@ -331,9 +455,15 @@ def get_projectwise_timesheet_data(
 			(tsd.parenttype == "Timesheet")
 			& (tsd.docstatus == 1)
 			& (tsd.is_billable == 1)
-			& tsd.sales_invoice.isnull()
+			& (Coalesce(tsd.sales_invoice, "") == "")
+			& (tsd.parent.isin(allowed_timesheets))
 		)
 	)
+
+	if allowed_projects:
+		query = query.where((tsd.project.isin(allowed_projects)) | (Coalesce(tsd.project, "") == ""))
+	else:
+		query = query.where(Coalesce(tsd.project, "") == "")
 
 	if project:
 		query = query.where(tsd.project == project)
@@ -347,6 +477,11 @@ def get_projectwise_timesheet_data(
 
 @frappe.whitelist()
 def get_timesheet_detail_rate(timelog: str, currency: str):
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+
+	if not allowed_timesheets:
+		return 0.0
+
 	ts = frappe.qb.DocType("Timesheet")
 	ts_detail = frappe.qb.DocType("Timesheet Detail")
 
@@ -354,10 +489,20 @@ def get_timesheet_detail_rate(timelog: str, currency: str):
 		frappe.qb.from_(ts_detail)
 		.inner_join(ts)
 		.on(ts.name == ts_detail.parent)
-		.select(ts_detail.billing_amount.as_("billing_amount"), ts.currency.as_("currency"))
-		.where(ts_detail.name == timelog)
+		.select(
+			ts_detail.billing_amount.as_("billing_amount"),
+			ts.currency.as_("currency"),
+			ts.name.as_("timesheet"),
+		)
+		.where((ts_detail.name == timelog) & ts_detail.parent.isin(allowed_timesheets))
+		.limit(1)
 		.run(as_dict=1)
-	)[0]
+	)
+
+	if not timelog_detail:
+		return 0.0
+
+	timelog_detail = timelog_detail[0]
 
 	if timelog_detail.currency:
 		exchange_rate = get_exchange_rate(timelog_detail.currency, currency)
@@ -371,6 +516,11 @@ def get_timesheet_detail_rate(timelog: str, currency: str):
 def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict):
 	if not filters:
 		filters = {}
+
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+
+	if not allowed_timesheets:
+		return []
 
 	tsd = frappe.qb.DocType("Timesheet Detail")
 	ts = frappe.qb.DocType("Timesheet")
@@ -386,6 +536,7 @@ def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len
 			& (tsd.docstatus == 1)
 			& (ts.total_billable_amount > 0)
 			& tsd.parent.like(f"%{txt}%")
+			& tsd.parent.isin(allowed_timesheets)
 		)
 	)
 
@@ -396,12 +547,12 @@ def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len
 
 
 @frappe.whitelist()
-def get_timesheet_data(name: str, project: str):
+def get_timesheet_data(name: str, project: str | None = None):
 	data = None
-	if project and project != "":
+	if project:
 		data = get_projectwise_timesheet_data(project, name)
 	else:
-		data = frappe.get_all(
+		data = frappe.get_list(
 			"Timesheet",
 			fields=[
 				{"SUB": ["total_billable_amount", "total_billed_amount"], "as": "billing_amt"},
@@ -422,6 +573,7 @@ def make_sales_invoice(
 ):
 	target = frappe.new_doc("Sales Invoice")
 	timesheet = frappe.get_doc("Timesheet", source_name)
+	timesheet.check_permission("read")
 
 	if not timesheet.total_billable_hours:
 		frappe.throw(_("Invoice can't be made for zero billing hour"))
@@ -433,8 +585,10 @@ def make_sales_invoice(
 	billing_amount = flt(timesheet.total_billable_amount) - flt(timesheet.total_billed_amount)
 	billing_rate = billing_amount / hours
 
+	projects = {log.project for log in timesheet.time_logs if log.is_billable and not log.sales_invoice}
+
 	target.company = timesheet.company
-	target.project = timesheet.parent_project
+	target.project = timesheet.parent_project or (projects.pop() if len(projects) == 1 else None)
 	if customer:
 		target.customer = customer
 		default_price_list = frappe.get_value("Customer", customer, "default_price_list")
@@ -474,6 +628,21 @@ def make_sales_invoice(
 def get_activity_cost(
 	employee: str | None = None, activity_type: str | None = None, currency: str | None = None
 ):
+	if not frappe.has_permission("Timesheet", "read"):
+		_refuse()
+	activity_type = cstr(activity_type)
+	if not activity_type or not frappe.has_permission("Activity Type", "select", doc=activity_type):
+		_refuse()
+	if employee:
+		employee = cstr(employee)
+		if not frappe.has_permission("Employee", "select", doc=employee):
+			_refuse()
+	return _get_activity_cost(employee, activity_type, currency)
+
+
+def _get_activity_cost(
+	employee: str | None = None, activity_type: str | None = None, currency: str | None = None
+):
 	base_currency = frappe.defaults.get_global_default("currency")
 	rate = frappe.db.get_values(
 		"Activity Cost",
@@ -481,6 +650,13 @@ def get_activity_cost(
 		["costing_rate", "billing_rate"],
 		as_dict=True,
 	)
+	if not rate and employee:
+		rate = frappe.db.get_values(
+			"Activity Cost",
+			{"employee": ("is", "not set"), "activity_type": activity_type},
+			["costing_rate", "billing_rate"],
+			as_dict=True,
+		)
 	if not rate:
 		rate = frappe.db.get_values(
 			"Activity Type",
@@ -488,10 +664,17 @@ def get_activity_cost(
 			["costing_rate", "billing_rate"],
 			as_dict=True,
 		)
-		if rate and currency and currency != base_currency:
-			exchange_rate = get_exchange_rate(base_currency, currency)
-			rate[0]["costing_rate"] = rate[0]["costing_rate"] * exchange_rate
-			rate[0]["billing_rate"] = rate[0]["billing_rate"] * exchange_rate
+	if rate and currency and currency != base_currency:
+		exchange_rate = get_exchange_rate(base_currency, currency)
+		if not exchange_rate:
+			frappe.throw(
+				_(
+					"Unable to find exchange rate for {0} to {1} for key date {2}. Please create a Currency Exchange record manually."
+				).format(base_currency, currency, nowdate())
+			)
+
+		rate[0]["costing_rate"] = rate[0]["costing_rate"] * exchange_rate
+		rate[0]["billing_rate"] = rate[0]["billing_rate"] * exchange_rate
 
 	return rate[0] if rate else {}
 
@@ -536,19 +719,20 @@ def get_events(start: str, end: str, filters: str | list | dict | None = None):
 
 
 def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20, order_by="creation"):
-	user = frappe.session.user
-	# find customer name from contact.
-	customer = ""
+	from frappe.utils.user import is_website_user
 
-	contact = frappe.db.exists("Contact", {"user": user})
-	if contact:
-		# find customer
-		contact = frappe.get_doc("Contact", contact)
-		customer = contact.get_link_for("Customer")
+	from erpnext.controllers.website_list_for_contact import get_parents_for_user
 
-	if customer:
-		sales_invoices = frappe.get_all("Sales Invoice", filters={"customer": customer}, pluck="name")
-		projects = frappe.get_all("Project", filters={"customer": customer}, pluck="name")
+	customers = get_parents_for_user("Customer") if is_website_user() else []
+	if customers:
+		sales_invoices = frappe.get_all(
+			"Sales Invoice",
+			filters={"customer": ["in", customers], "docstatus": ["!=", 2]},
+			pluck="name",
+		)
+		projects = frappe.get_all("Project", filters={"customer": ["in", customers]}, pluck="name")
+		if not (sales_invoices or projects):
+			return []
 
 		# Return timesheet related data to web portal.
 		table = frappe.qb.DocType("Timesheet")
@@ -565,6 +749,7 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 				Coalesce(table.sales_invoice, child_table.sales_invoice).as_("sales_invoice"),
 				child_table.project,
 			)
+			.where(table.docstatus == 1)
 			.orderby(table.end_date)
 			.limit(limit_page_length)
 			.offset(limit_start)
@@ -578,10 +763,7 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 		if projects:
 			conditions.append(child_table.project.isin(projects))
 
-		if conditions:
-			query = query.where(frappe.qb.terms.Criterion.any(conditions))
-
-		return query.run(as_dict=True)
+		return query.where(frappe.qb.terms.Criterion.any(conditions)).run(as_dict=True)
 	else:
 		return {}
 

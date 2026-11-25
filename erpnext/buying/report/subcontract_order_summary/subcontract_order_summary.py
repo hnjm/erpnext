@@ -5,8 +5,12 @@
 import frappe
 from frappe import _
 
+from erpnext.accounts.report.utils import validate_date_range
+
 
 def execute(filters=None):
+	validate_date_range(filters)
+
 	columns, data = [], []
 	columns = get_columns(filters)
 	data = get_data(filters)
@@ -35,11 +39,12 @@ def get_subcontracted_orders(report_filters):
 		"`tabSubcontracting Order Item`.`name`",
 		"`tabSubcontracting Order Item`.`received_qty`",
 		"`tabSubcontracting Order`.`status`",
+		"`tabSubcontracting Order`.`supplier`",
 	]
 
 	filters = get_filters(report_filters)
 
-	return frappe.get_all("Subcontracting Order", fields=fields, filters=filters) or []
+	return frappe.get_list("Subcontracting Order", fields=fields, filters=filters) or []
 
 
 def get_filters(report_filters):
@@ -106,9 +111,13 @@ def prepare_subcontracted_data(orders, supplied_items):
 def get_subcontracted_data(order_details, data):
 	for _key, details in order_details.items():
 		res = details.order_item
+		# all materials sourced by the job worker: show the order row alone
+		if not details.supplied_items:
+			data.append(res)
+
 		for index, row in enumerate(details.supplied_items):
 			if index != 0:
-				res = {}
+				res = {"order_id": details.order_item.order_id}
 
 			res.update(row)
 			data.append(res)
@@ -122,6 +131,13 @@ def get_columns(filters):
 			"fieldtype": "Link",
 			"options": "Subcontracting Order",
 			"width": 100,
+		},
+		{
+			"label": _("Supplier"),
+			"fieldname": "supplier",
+			"fieldtype": "Link",
+			"options": "Supplier",
+			"width": 120,
 		},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 80},
 		{

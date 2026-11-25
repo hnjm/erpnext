@@ -3,6 +3,10 @@
 
 frappe.provide("erpnext.stock");
 
+erpnext.stock.is_subcontracting_or_return_transfer = (doc) => {
+	return doc.purpose == "Send to Subcontractor" || (doc.purpose == "Material Transfer" && doc.is_return);
+};
+
 erpnext.stock.StockController = class StockController extends frappe.ui.form.Controller {
 	onload() {
 		// warehouse query if company
@@ -93,7 +97,7 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 	show_stock_ledger() {
 		var me = this;
 		if (this.frm.doc.docstatus > 0) {
-			cur_frm.add_custom_button(
+			this.frm.add_custom_button(
 				__("Stock Ledger"),
 				function () {
 					frappe.route_options = {
@@ -114,7 +118,7 @@ erpnext.stock.StockController = class StockController extends frappe.ui.form.Con
 	show_general_ledger() {
 		let me = this;
 		if (this.frm.doc.docstatus > 0) {
-			cur_frm.add_custom_button(
+			this.frm.add_custom_button(
 				__("Accounting Ledger"),
 				function () {
 					frappe.route_options = {

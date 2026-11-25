@@ -27,6 +27,12 @@ const virtual_field_map = {
 };
 
 frappe.ui.form.on("Item", {
+	stock_uom(frm) {
+		// Each factor is relative to Stock UOM and becomes invalid when it changes.
+		frm.clear_table("uoms");
+		frm.refresh_field("uoms");
+	},
+
 	valuation_method(frm) {
 		if (!frm.is_new() && frm.doc.valuation_method === "Moving Average") {
 			let stock_exists = frm.doc.__onload && frm.doc.__onload.stock_exists ? 1 : 0;
@@ -67,6 +73,7 @@ frappe.ui.form.on("Item", {
 	},
 
 	setup: function (frm) {
+		frm.set_query("item_group", () => ({ filters: { is_group: 0 } }));
 		frm.set_query("allowed_companies", () => ({
 			query: "erpnext.stock.doctype.company_restriction.company_restriction.company_query",
 		}));
@@ -164,7 +171,7 @@ frappe.ui.form.on("Item", {
 		if (frappe.defaults.get_default("item_naming_by") != "Naming Series" || frm.doc.variant_of) {
 			frm.toggle_display("naming_series", false);
 		} else {
-			erpnext.toggle_naming_series();
+			erpnext.toggle_naming_series(frm);
 		}
 
 		frm.toggle_display(["standard_rate"], frappe.model.can_create("Item Price"));
@@ -290,7 +297,10 @@ frappe.ui.form.on("Item", {
 		if (frm.doc.variant_of) {
 			frm.set_intro(
 				__("This Item is a Variant of {0} (Template).", [
-					`<a href="/app/item/${frm.doc.variant_of}" onclick="location.reload()">${frm.doc.variant_of}</a>`,
+					`<a href="${frappe.utils.get_form_link(
+						"Item",
+						frm.doc.variant_of
+					)}" onclick="location.reload()">${frappe.utils.escape_html(frm.doc.variant_of)}</a>`,
 				]),
 				true
 			);
@@ -305,15 +315,16 @@ frappe.ui.form.on("Item", {
 		erpnext.item.render_item_prices(frm);
 
 		frm.add_custom_button(__("Duplicate"), function () {
-			var new_item = frappe.model.copy_doc(frm.doc);
-			// Duplicate item could have different name, causing "copy paste" error.
-			if (new_item.item_name === new_item.item_code) {
-				new_item.item_name = null;
-			}
-			if (new_item.item_code === new_item.description || new_item.item_code === new_item.description) {
-				new_item.description = null;
-			}
-			frappe.set_route("Form", "Item", new_item.name);
+			// frm.copy_doc skips link triggers, so stock_uom does not clear the copied UOMs
+			frm.copy_doc((new_item) => {
+				// Duplicate item could have different name, causing "copy paste" error.
+				if (new_item.item_name === new_item.item_code) {
+					new_item.item_name = null;
+				}
+				if (new_item.item_code === new_item.description) {
+					new_item.description = null;
+				}
+			});
 		});
 
 		const stock_exists = frm.doc.__onload && frm.doc.__onload.stock_exists ? 1 : 0;
@@ -856,57 +867,107 @@ $.extend(erpnext.item, {
 		}
 		frm.toggle_display("prices_html", true);
 
-		const requested_item = frm.doc.name;
-		const container = frm.fields_dict["prices_html"].$wrapper;
+		frappe.require("embedded_list.bundle.js", () => erpnext.item.build_prices_list(frm));
+	},
 
-		container.html(
-			`<div class="text-muted text-center" style="padding: 20px;">${__("Loading...")}</div>`
-		);
+	build_prices_list: function (frm) {
+		const item_code = frm.doc.name;
+		const container = frm.fields_dict["prices_html"].$wrapper.empty();
 
-		frappe.call({
-			method: "erpnext.stock.doctype.item.item.get_item_prices",
-			args: { item_code: requested_item },
-
-			callback: function (r) {
-				if (requested_item !== frm.doc.name) return;
-
-				if (!r.message) return;
-
-				const { prices, has_more } = r.message;
-
-				const html = frappe.render_template("item_prices", {
-					prices,
-					has_more,
-					item_code: requested_item,
-					stock_uom: frm.doc.stock_uom,
-				});
-
-				container.html(html);
-
-				container.find(".add-price-btn").on("click", () => {
-					const filters = {};
-					if (frm.doc.is_sales_item && !frm.doc.is_purchase_item) {
-						filters.selling = 1;
-					} else if (frm.doc.is_purchase_item && !frm.doc.is_sales_item) {
-						filters.buying = 1;
-					}
-					frappe.new_doc(
-						"Item Price",
-						{ item_code: requested_item, uom: frm.doc.stock_uom },
-						(dialog) => {
-							if (Object.keys(filters).length) {
-								dialog.fields_dict.price_list.get_query = () => ({ filters });
-							}
-						}
-					);
-				});
-
-				container.find(".price-row").on("click", function (e) {
-					if ($(e.target).is("a")) return;
-
-					frappe.set_route("Form", "Item Price", $(this).data("name"));
+		const list = new frappe.ui.EmbeddedList({
+			wrapper: $("<div></div>").appendTo(container),
+			description: __("All active prices for this item across buying and selling price lists."),
+			show_index: true,
+			show_search: false,
+			empty_icon: "tag",
+			empty_message: __("No active item prices found."),
+			add_button: {
+				label: __("Add Price"),
+				action: () => erpnext.item.new_item_price(frm),
+			},
+			on_row_click: (row) => frappe.set_route("Form", "Item Price", row.name),
+			get_data() {
+				return frappe
+					.xcall("erpnext.stock.doctype.item.item.get_item_prices", { item_code })
+					.then((r) => {
+						this._has_more = r.has_more;
+						return r.prices;
+					});
+			},
+			before_render() {
+				this._all_data.forEach((row) => {
+					row.price_type =
+						row.buying && row.selling
+							? __("Buy & Sell")
+							: row.buying
+							? __("Buying")
+							: __("Selling");
 				});
 			},
+			columns: [
+				{ label: __("Price List"), fieldname: "price_list" },
+				{
+					label: __("Type"),
+					type: "badge",
+					fieldname: "price_type",
+				},
+				{
+					label: __("Party"),
+					type: "link",
+					text: (row) => row.customer || row.supplier || "",
+					route: (row) => [
+						"Form",
+						row.customer ? "Customer" : "Supplier",
+						row.customer || row.supplier,
+					],
+				},
+				{
+					label: __("Rate"),
+					fieldname: "price_list_rate",
+					render: (row) => format_currency(row.price_list_rate, row.currency),
+				},
+				{
+					label: __("UOM"),
+					fieldname: "uom",
+					render: (row) => frappe.utils.escape_html(row.uom || frm.doc.stock_uom || ""),
+				},
+				{
+					label: __("Valid Upto"),
+					fieldname: "valid_upto",
+					render: (row) => (row.valid_upto ? frappe.datetime.str_to_user(row.valid_upto) : ""),
+				},
+			],
+		});
+
+		list.refresh().then(() => {
+			if (!list._has_more) return;
+			frappe.ui
+				.button({
+					label: __("View All Prices"),
+					variant: "subtle",
+					size: "sm",
+					onclick: () => {
+						frappe.route_options = { item_code };
+						frappe.set_route("List", "Item Price");
+					},
+				})
+				.appendTo(
+					$('<div class="flex justify-end" style="margin-bottom: 8px;"></div>').appendTo(container)
+				);
+		});
+	},
+
+	new_item_price: function (frm) {
+		const filters = {};
+		if (frm.doc.is_sales_item && !frm.doc.is_purchase_item) {
+			filters.selling = 1;
+		} else if (frm.doc.is_purchase_item && !frm.doc.is_sales_item) {
+			filters.buying = 1;
+		}
+		frappe.new_doc("Item Price", { item_code: frm.doc.name, uom: frm.doc.stock_uom }, (dialog) => {
+			if (Object.keys(filters).length) {
+				dialog.fields_dict.price_list.get_query = () => ({ filters });
+			}
 		});
 	},
 
@@ -1074,10 +1135,7 @@ $.extend(erpnext.item, {
 			],
 		});
 
-		dialog.set_primary_action(__("Create"), function () {
-			var data = dialog.get_values();
-			if (!data) return;
-
+		dialog.set_primary_action(__("Create"), function (data) {
 			// call the server to make the variant
 			data.template = frm.doc.name;
 			frappe.call({
@@ -1416,15 +1474,13 @@ $.extend(erpnext.item, {
 			fields: fields,
 		});
 
-		d.set_primary_action(__("Create"), function () {
-			var args = d.get_values();
-			if (!args) return;
+		d.set_primary_action(__("Create"), function (args) {
 			frappe.call({
 				method: "erpnext.controllers.item_variant.get_variant",
 				btn: d.get_primary_btn(),
 				args: {
 					template: frm.doc.name,
-					args: d.get_values(),
+					args: args,
 				},
 				callback: function (r) {
 					// returns variant item
@@ -1451,7 +1507,7 @@ $.extend(erpnext.item, {
 							method: "erpnext.controllers.item_variant.create_variant",
 							args: {
 								item: frm.doc.name,
-								args: d.get_values(),
+								args: args,
 								use_template_image: args.use_template_image,
 							},
 							callback: function (r) {
@@ -1592,7 +1648,7 @@ frappe.tour["Item"] = [
 	},
 	{
 		fieldname: "include_item_in_manufacturing",
-		title: "Include Item in Manufacturing",
+		title: __("Include Item in Manufacturing"),
 		description: __(
 			"This is for raw material Items that'll be used to create finished goods. If the Item is an additional service like 'washing' that'll be used in the BOM, keep this unchecked."
 		),

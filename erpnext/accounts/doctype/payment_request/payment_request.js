@@ -1,9 +1,7 @@
-cur_frm.add_fetch("payment_gateway_account", "payment_account", "payment_account");
-cur_frm.add_fetch("payment_gateway_account", "payment_gateway", "payment_gateway");
-cur_frm.add_fetch("payment_gateway_account", "message", "message");
-
 frappe.ui.form.on("Payment Request", {
 	setup: function (frm) {
+		frm.add_fetch("payment_gateway_account", "message", "message");
+
 		frm.set_query("party_type", function () {
 			return {
 				query: "erpnext.setup.doctype.party_type.party_type.get_party_type",
@@ -14,6 +12,17 @@ frappe.ui.form.on("Payment Request", {
 			return {
 				filters: {
 					company: frm.doc.company,
+				},
+			};
+		});
+
+		frm.set_query("bank_account", function () {
+			return {
+				query: "erpnext.accounts.doctype.payment_request.payment_request.get_bank_account_query",
+				filters: {
+					company: frm.doc.company,
+					party_type: frm.doc.party_type,
+					party: frm.doc.party,
 				},
 			};
 		});
@@ -65,19 +74,24 @@ frappe.ui.form.on("Payment Request", "refresh", function (frm) {
 		frm.doc.payment_request_type == "Outward" &&
 		["Initiated", "Partially Paid"].includes(frm.doc.status)
 	) {
-		frm.add_custom_button(__("Create Payment Entry"), function () {
-			frappe.call({
-				method: "erpnext.accounts.doctype.payment_request.payment_request.make_payment_entry",
-				args: { docname: frm.doc.name },
-				freeze: true,
-				callback: function (r) {
-					if (!r.exc) {
-						var doc = frappe.model.sync(r.message);
-						frappe.set_route("Form", r.message.doctype, r.message.name);
-					}
-				},
-			});
-		}).addClass("btn-primary");
+		frm.add_custom_button(
+			__("Create Payment Entry"),
+			function () {
+				frappe.call({
+					method: "erpnext.accounts.doctype.payment_request.payment_request.make_payment_entry",
+					args: { docname: frm.doc.name },
+					freeze: true,
+					callback: function (r) {
+						if (!r.exc) {
+							var doc = frappe.model.sync(r.message);
+							frappe.set_route("Form", r.message.doctype, r.message.name);
+						}
+					},
+				});
+			},
+			null,
+			"primary"
+		);
 	}
 });
 
@@ -92,6 +106,7 @@ frappe.ui.form.on("Payment Request", "is_a_subscription", function (frm) {
 			freeze: true,
 			callback: function (data) {
 				if (!data.exc) {
+					frm.clear_table("subscription_plans");
 					$.each(data.message || [], function (i, v) {
 						var d = frappe.model.add_child(
 							frm.doc,

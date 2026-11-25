@@ -1,14 +1,131 @@
 # Copyright (c) 2019, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 
-import frappe
+from unittest.mock import patch
 
+import frappe
+from frappe.handler import execute_cmd
+from frappe.utils import set_request
+
+from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
+	BLANK_ACCOUNTING_DIMENSION,
+	get_accounting_dimensions,
+	get_checks_for_pl_and_bs_accounts,
+	get_dimension_filter_sql_condition,
+	get_dimension_filter_values,
+	get_dimensions,
+	get_dimensions_for_user,
+)
 from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
+from erpnext.tests.permission_test_utils import as_user, make_fenced_user
 from erpnext.tests.utils import ERPNextTestSuite
+
+GET_DIMENSIONS = "erpnext.accounts.doctype.accounting_dimension.accounting_dimension.get_dimensions"
 
 
 class TestAccountingDimension(ERPNextTestSuite):
+	def test_dimension_lookups_refresh_after_changes(self):
+		dimension = frappe.get_doc("Accounting Dimension", "Location")
+		original_disabled = dimension.disabled
+		original_mandatory = dimension.dimension_defaults[0].mandatory_for_bs
+		try:
+			dimension.disabled = 0
+			dimension.save()
+			dimensions = get_accounting_dimensions(as_list=False)
+			checks = get_checks_for_pl_and_bs_accounts()
+			with patch.object(frappe.db, "sql", wraps=frappe.db.sql) as queries:
+				self.assertEqual(get_accounting_dimensions(), [d.fieldname for d in dimensions])
+				self.assertEqual(get_checks_for_pl_and_bs_accounts(), checks)
+				self.assertEqual(queries.call_count, 0)
+
+			dimensions[0].fieldname = "changed"
+			checks[0].mandatory_for_bs = "changed"
+			self.assertNotIn("changed", get_accounting_dimensions())
+			self.assertNotIn("changed", [d.mandatory_for_bs for d in get_checks_for_pl_and_bs_accounts()])
+
+			dimension.dimension_defaults[0].mandatory_for_bs = not original_mandatory
+			dimension.save()
+			self.assertEqual(
+				next(
+					d.mandatory_for_bs
+					for d in get_checks_for_pl_and_bs_accounts()
+					if d.fieldname == dimension.fieldname
+					and d.company == dimension.dimension_defaults[0].company
+				),
+				not original_mandatory,
+			)
+
+			dimension.disabled = 1
+			dimension.save()
+			self.assertNotIn(dimension.fieldname, get_accounting_dimensions())
+			self.assertNotIn(dimension.fieldname, [d.fieldname for d in get_checks_for_pl_and_bs_accounts()])
+		finally:
+			dimension.disabled = original_disabled
+			dimension.dimension_defaults[0].mandatory_for_bs = original_mandatory
+			dimension.save()
+
+	def test_blank_dimension_filter_sql_condition(self):
+		condition, values = get_dimension_filter_sql_condition(
+			"department",
+			f'["_Test Department - _TC", "{BLANK_ACCOUNTING_DIMENSION}"]',
+		)
+
+		self.assertEqual(
+			condition,
+			"(department IN (?) OR (department IS NULL OR department = ''))",
+		)
+		self.assertEqual(values, ["_Test Department - _TC"])
+
+	def test_dimension_filter_values_preserve_plain_string_names(self):
+		values, include_blank = get_dimension_filter_values("null")
+
+		self.assertEqual(values, ["null"])
+		self.assertFalse(include_blank)
+
+		values, include_blank = get_dimension_filter_values("__blank__")
+
+		self.assertEqual(values, ["__blank__"])
+		self.assertFalse(include_blank)
+
+	def test_client_dimension_defaults_only_for_companies_the_user_can_see(self):
+		add_dimension_default("Department", "_Test Company 1", "_Test Department 1 - _TC1")
+		limited_user = make_fenced_user(
+			"_test_dimension_limited@example.com", ["Accounts User"], [("Company", "_Test Company")]
+		)
+		stock_user = make_fenced_user("_test_dimension_stock@example.com", ["Stock User"])
+		dimensions = get_dimensions()[0]
+
+		self.addCleanup(setattr, frappe.local, "request", None)
+		with as_user(limited_user):
+			limited_dimensions, limited_defaults = get_dimensions_for_user()
+			# client scripts call the old path, which the hooks send to get_dimensions_for_user
+			set_request(method="GET", path=f"/api/method/{GET_DIMENSIONS}")
+			self.assertEqual(execute_cmd(GET_DIMENSIONS)[1], limited_defaults)
+		self.assertEqual(limited_dimensions, dimensions)
+		self.assertEqual(set(limited_defaults), {"_Test Company"})
+
+		with as_user(stock_user):
+			stock_dimensions, stock_defaults = get_dimensions_for_user(with_cost_center_and_project="true")
+		self.assertEqual(stock_defaults["_Test Company 1"], {"department": "_Test Department 1 - _TC1"})
+		self.assertEqual(
+			[d.fieldname for d in stock_dimensions][-2:],
+			["cost_center", "project"],
+		)
+
+	def test_client_dimension_lookup_refuses_website_users(self):
+		website_user = make_fenced_user("_test_dimension_website@example.com", [])
+		self.addCleanup(setattr, frappe.local, "request", None)
+
+		with as_user(website_user):
+			self.assertRaises(frappe.PermissionError, get_dimensions_for_user)
+
+			set_request(method="GET", path=f"/api/method/{GET_DIMENSIONS}")
+			self.assertRaises(frappe.PermissionError, execute_cmd, GET_DIMENSIONS)
+
+			# server code keeps the unscoped lookup for any user
+			self.assertIn("_Test Company", get_dimensions()[1])
+
 	def test_dimension_against_sales_invoice(self):
 		si = create_sales_invoice(do_not_save=1)
 
@@ -51,6 +168,28 @@ class TestAccountingDimension(ERPNextTestSuite):
 		self.assertEqual(gle.get("department"), "_Test Department - _TC")
 		self.assertEqual(gle1.get("department"), "_Test Department - _TC")
 
+	def test_child_table_not_allowed_as_dimension(self):
+		dimension = frappe.get_doc({"doctype": "Accounting Dimension", "document_type": "Sales Team"})
+		self.assertRaises(frappe.ValidationError, dimension.insert)
+
+	def test_single_doctype_not_allowed_as_dimension(self):
+		dimension = frappe.get_doc({"doctype": "Accounting Dimension", "document_type": "Selling Settings"})
+		self.assertRaises(frappe.ValidationError, dimension.insert)
+
+	def test_non_scalar_dimension_value_skipped_in_gl_dict(self):
+		si = create_sales_invoice(do_not_save=1)
+
+		si.department = "_Test Department - _TC"
+		self.assertEqual(si.get_gl_dict({}).get("department"), "_Test Department - _TC")
+
+		si.department = ["_Test Department - _TC"]
+		self.assertNotIn("department", si.get_gl_dict({}))
+
+	def test_resave_does_not_warn_about_its_own_fields(self):
+		frappe.clear_messages()
+		frappe.get_doc("Accounting Dimension", "Location").save()
+		self.assertFalse([m for m in frappe.message_log if m.get("title") == "Fieldname Conflict"])
+
 	def test_mandatory(self):
 		location = frappe.get_doc("Accounting Dimension", "Location")
 		location.dimension_defaults[0].mandatory_for_bs = True
@@ -73,3 +212,19 @@ class TestAccountingDimension(ERPNextTestSuite):
 
 		si.save()
 		self.assertRaises(frappe.ValidationError, si.submit)
+
+
+def add_dimension_default(dimension, company, default_dimension):
+	dimension_doc = frappe.get_doc("Accounting Dimension", dimension)
+	frappe.get_doc(
+		{
+			"doctype": "Accounting Dimension Detail",
+			"parent": dimension_doc.name,
+			"parenttype": "Accounting Dimension",
+			"parentfield": "dimension_defaults",
+			"idx": len(dimension_doc.dimension_defaults) + 1,
+			"company": company,
+			"reference_document": dimension_doc.document_type,
+			"default_dimension": default_dimension,
+		}
+	).db_insert()

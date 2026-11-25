@@ -4,13 +4,48 @@
 """Small query helpers shared by Production Plan material planning."""
 
 import json
+import math
 
 import frappe
 from frappe.query_builder.functions import IfNull, Sum
+from frappe.utils import flt
 from pypika.terms import ExistsCriterion
 
 from erpnext.manufacturing.doctype.work_order.work_order import get_item_details
 from erpnext.stock.doctype.item.item import get_uom_conv_factor
+
+
+def get_planned_process_loss_percentage(bom_no):
+	"""BOM process loss % to add to the quantity, 0 when the BOM loses everything."""
+	return get_planned_loss_percentage(frappe.get_cached_value("BOM", bom_no, "process_loss_percentage"))
+
+
+def get_plan_process_loss_percentage(plan, bom_no):
+	"""BOM process loss % a Production Plan orders for, 0 unless it considers process loss."""
+	if not plan.get("consider_process_loss"):
+		return 0
+	return get_planned_process_loss_percentage(bom_no)
+
+
+def get_planned_loss_percentage(loss_percentage):
+	"""Process loss % to plan for, 0 when everything is lost."""
+	loss_percentage = flt(loss_percentage)
+	return loss_percentage if loss_percentage < 100 else 0
+
+
+def get_qty_before_process_loss(qty, loss_percentage, uom):
+	"""Quantity to make so that `qty` is left after `loss_percentage` process loss."""
+	loss_percentage = get_planned_loss_percentage(loss_percentage)
+	if not loss_percentage:
+		return flt(qty)
+	return round_up_to_whole_unit(flt(qty) / (1 - loss_percentage / 100), uom)
+
+
+def round_up_to_whole_unit(qty, uom):
+	"""A fraction of a whole number UOM cannot be made, so make the next whole unit."""
+	if uom and frappe.get_cached_value("UOM", uom, "must_be_whole_number"):
+		return math.ceil(flt(qty, frappe.get_precision("Work Order", "qty")))
+	return qty
 
 
 def get_uom_conversion_factor(item_code, uom):
@@ -31,11 +66,21 @@ def get_bin_details(
 	row: str | dict, company: str, for_warehouse: str | None = None, all_warehouse: bool = False
 ):
 	frappe.has_permission("Production Plan", "read", throw=True)
+	row = frappe.parse_json(row)
+	return _get_bin_details(row, company, for_warehouse, all_warehouse, ignore_permissions=False)
 
-	row = frappe._dict(frappe.parse_json(row))
 
+@frappe.whitelist()
+def get_pooled_bin_details(row: str | dict, company: str, for_warehouse: str):
+	frappe.has_permission("Production Plan", "read", throw=True)
+	row = frappe.parse_json(row)
+	return aggregate_bin_details(_get_bin_details(row, company, for_warehouse, ignore_permissions=False))
+
+
+def _get_bin_details(row, company, for_warehouse=None, all_warehouse=False, ignore_permissions=True):
+	row = frappe._dict(row)
 	bin = frappe.qb.DocType("Bin")
-	subquery = _bin_warehouse_subquery(bin, company, row, for_warehouse, all_warehouse)
+	subquery = _bin_warehouse_subquery(bin, company, row, for_warehouse, all_warehouse, ignore_permissions)
 	query = (
 		frappe.qb.from_(bin)
 		.select(bin.warehouse, *_bin_qty_columns(bin))
@@ -45,9 +90,11 @@ def get_bin_details(
 	return query.run(as_dict=True)
 
 
-def _bin_warehouse_subquery(bin, company, row, for_warehouse, all_warehouse):
+def _bin_warehouse_subquery(bin, company, row, for_warehouse, all_warehouse, ignore_permissions):
 	wh = frappe.qb.DocType("Warehouse")
-	subquery = frappe.qb.from_(wh).select(wh.name).where(wh.company == company)
+	subquery = frappe.qb.get_query("Warehouse", fields=["name"], ignore_permissions=ignore_permissions).where(
+		wh.company == company
+	)
 
 	warehouse = ""
 	if not all_warehouse:
@@ -67,6 +114,21 @@ def _bin_qty_columns(bin):
 		IfNull(Sum(bin.reserved_qty_for_production), 0).as_("reserved_qty_for_production"),
 		IfNull(Sum(bin.planned_qty), 0).as_("planned_qty"),
 	]
+
+
+def aggregate_bin_details(bin_list):
+	qty_fields = (
+		"projected_qty",
+		"actual_qty",
+		"ordered_qty",
+		"reserved_qty_for_production",
+		"planned_qty",
+	)
+	aggregated = {field: 0 for field in qty_fields}
+	for row in bin_list or []:
+		for field in qty_fields:
+			aggregated[field] += flt(row.get(field))
+	return aggregated
 
 
 def get_warehouse_list(warehouses):
@@ -108,7 +170,7 @@ def get_sales_orders(self):
 	so = frappe.qb.DocType("Sales Order")
 	so_item = frappe.qb.DocType("Sales Order Item")
 
-	bom_subquery = frappe.qb.from_(bom).select(bom.name).where(bom.is_active == 1)
+	bom_subquery = get_item_or_template_bom_query(bom, so_item)
 	query = _open_so_base_query(self, so, so_item)
 	query = _apply_open_so_filters(self, query, so, so_item)
 
@@ -121,6 +183,68 @@ def get_sales_orders(self):
 	return query.run(as_dict=True)
 
 
+def get_item_or_template_bom_query(bom, so_item):
+	"""Active BOMs of the Sales Order item or of its template."""
+	item = frappe.qb.DocType("Item")
+	return (
+		frappe.qb.from_(bom)
+		.from_(item)
+		.select(bom.name)
+		.where(
+			(item.name == so_item.item_code)
+			& bom.item.isin([item.name, item.variant_of])
+			& (bom.is_active == 1)
+		)
+	)
+
+
+def get_reserved_qty_from_stock(so_item):
+	"""Reserved qty of a Sales Order Item, less the Work Order output that work_order_qty already counts."""
+	return so_item.stock_reserved_qty - get_reserved_work_order_output_qty(so_item)
+
+
+def get_reserved_work_order_output_qty(so_item):
+	"""Open reservations of the output of a Sales Order Item's own Work Orders, or of Work Orders
+	planned for it, which production_plan_qty already counts."""
+	sre = frappe.qb.DocType("Stock Reservation Entry")
+	stock_entry = frappe.qb.DocType("Stock Entry")
+	work_order = frappe.qb.DocType("Work Order")
+	plan_item = frappe.qb.DocType("Production Plan Item")
+	work_order_output_qty = (
+		frappe.qb.from_(sre)
+		.inner_join(stock_entry)
+		.on(stock_entry.name == sre.from_voucher_no)
+		.inner_join(work_order)
+		.on(work_order.name == stock_entry.work_order)
+		.left_join(plan_item)
+		.on(plan_item.name == work_order.production_plan_item)
+		.select(Sum(sre.reserved_qty - sre.delivered_qty - sre.transferred_qty - sre.consumed_qty))
+		.where(
+			(sre.docstatus == 1)
+			& (sre.voucher_type == "Sales Order")
+			& (sre.voucher_detail_no == so_item.name)
+			& (sre.from_voucher_type == "Stock Entry")
+			& ((work_order.sales_order_item == so_item.name) | (plan_item.sales_order_item == so_item.name))
+		)
+	)
+	return IfNull(work_order_output_qty, 0)
+
+
+def get_reserved_packed_item_qty(packed_item):
+	"""Open reservations of a bundle component, which reserves against its Packed Item."""
+	sre = frappe.qb.DocType("Stock Reservation Entry")
+	reserved_qty = (
+		frappe.qb.from_(sre)
+		.select(Sum(sre.reserved_qty - sre.delivered_qty - sre.transferred_qty - sre.consumed_qty))
+		.where(
+			(sre.docstatus == 1)
+			& (sre.voucher_type == "Sales Order")
+			& (sre.voucher_detail_no == packed_item.name)
+		)
+	)
+	return IfNull(reserved_qty, 0)
+
+
 def _open_so_base_query(plan, so, so_item):
 	return (
 		frappe.qb.from_(so)
@@ -130,9 +254,10 @@ def _open_so_base_query(plan, so, so_item):
 		.where(
 			(so_item.parent == so.name)
 			& (so.docstatus == 1)
+			& (so_item.closed == 0)
 			& (so.status.notin(["Stopped", "Closed"]))
 			& (so.company == plan.company)
-			& (so_item.qty > so_item.production_plan_qty)
+			& ((so_item.stock_qty - get_reserved_qty_from_stock(so_item)) > so_item.production_plan_qty)
 		)
 	)
 

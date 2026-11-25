@@ -2,6 +2,8 @@
 # See license.txt
 
 import frappe
+from frappe.core.doctype.user_permission.test_user_permission import create_user
+from frappe.permissions import add_user_permission
 
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
@@ -28,3 +30,52 @@ class TestWarehouseWiseStockBalance(ERPNextTestSuite):
 		self.assertEqual(self.row(data, child)["stock_balance"], 1000)
 		# the group warehouse rolls up its children
 		self.assertEqual(self.row(data, parent)["stock_balance"], 1000)
+
+	def test_nested_warehouses_roll_up_and_indent(self):
+		top = create_warehouse("_Test WWSB Top", properties={"is_group": 1})
+		middle = create_warehouse("_Test WWSB Middle", properties={"is_group": 1, "parent_warehouse": top})
+		leaf = create_warehouse("_Test WWSB Leaf", properties={"parent_warehouse": middle})
+		make_stock_entry(item_code="_Test Item", to_warehouse=leaf, qty=10, rate=100)
+
+		data = self.run_report()
+
+		for warehouse in (top, middle, leaf):
+			self.assertEqual(self.row(data, warehouse)["stock_balance"], 1000)
+		self.assertEqual(self.row(data, middle)["indent"], self.row(data, top)["indent"] + 1)
+		self.assertEqual(self.row(data, leaf)["indent"], self.row(data, middle)["indent"] + 1)
+
+	def test_disabled_warehouses_with_stock_stay_in_the_totals(self):
+		group = create_warehouse("_Test WWSB Disabled Group", properties={"is_group": 1})
+		child = create_warehouse("_Test WWSB Disabled Child", properties={"parent_warehouse": group})
+		make_stock_entry(item_code="_Test Item", to_warehouse=child, qty=5, rate=100)
+		frappe.db.set_value("Warehouse", group, "disabled", 1)
+		root = frappe.db.get_value("Warehouse", group, "parent_warehouse")
+
+		data = self.run_report()
+		with_disabled = self.run_report(show_disabled_warehouses=1)
+
+		self.assertEqual(
+			self.row(data, root)["stock_balance"], self.row(with_disabled, root)["stock_balance"]
+		)
+		self.assertEqual(self.row(data, child)["indent"], self.row(with_disabled, child)["indent"])
+
+	def test_empty_disabled_warehouse_shows_only_when_asked(self):
+		empty = create_warehouse("_Test WWSB Empty Disabled")
+		frappe.db.set_value("Warehouse", empty, "disabled", 1)
+
+		self.assertNotIn(empty, [row["name"] for row in self.run_report()])
+		self.assertIn(empty, [row["name"] for row in self.run_report(show_disabled_warehouses=1)])
+
+	def test_company_user_permission_limits_warehouses(self):
+		warehouse = create_warehouse("_Test WWSB Company Permission")
+		make_stock_entry(item_code="_Test Item", to_warehouse=warehouse, qty=10, rate=100)
+		restricted_user = create_user("wwsb_other_company@example.com", "Stock User")
+		add_user_permission("Company", "_Test Company 1", restricted_user.name)
+		permitted_user = create_user("wwsb_same_company@example.com", "Stock User")
+		add_user_permission("Company", "_Test Company", permitted_user.name)
+
+		with self.set_user(restricted_user.name):
+			self.assertEqual(self.run_report(), [])
+
+		with self.set_user(permitted_user.name):
+			self.assertEqual(self.row(self.run_report(), warehouse)["stock_balance"], 1000)

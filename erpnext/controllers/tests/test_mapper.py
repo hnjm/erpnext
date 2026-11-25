@@ -8,6 +8,25 @@ from frappe.utils import add_months, nowdate
 from erpnext.tests.utils import ERPNextTestSuite
 
 
+def make_internal_delivery_note():
+	from erpnext.stock.doctype.delivery_note.test_delivery_note import create_delivery_note
+	from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+
+	company = "_Test Company with perpetual inventory"
+	pr = make_purchase_receipt(warehouse="Stores - TCP1", company=company)
+	return create_delivery_note(
+		item_code=pr.items[0].item_code,
+		company=company,
+		customer="_Test Internal Customer 2",
+		cost_center="Main - TCP1",
+		expense_account="Cost of Goods Sold - TCP1",
+		qty=5,
+		rate=500,
+		warehouse="Stores - TCP1",
+		target_warehouse="Work In Progress - TCP1",
+	)
+
+
 class TestMapper(ERPNextTestSuite):
 	def setUp(self):
 		self.load_test_records("Sales Order")
@@ -29,6 +48,102 @@ class TestMapper(ERPNextTestSuite):
 		# Assert that all inserted items are present in updated sales order
 		src_items = item_list_1 + item_list_2 + item_list_3
 		self.assertEqual(set(d for d in src_items), set(d.item_code for d in updated_so.items))
+
+	def test_get_items_from_is_idempotent(self):
+		"""Selecting the same source document twice must not duplicate rows in the target.
+
+		"Get Items From" hands the in-progress document back to the mapper as `target_doc`.
+		Its rows are unsaved, so the mappers' pending-qty queries (submitted documents only)
+		cannot see them -- every mapper has to discount them explicitly.
+		"""
+		for label, make_source, method in self.idempotency_cases():
+			with self.subTest(label):
+				source = make_source()
+				target = frappe.get_attr(method)(source.name)
+				mapped_rows = len(target.items)
+				self.assertTrue(mapped_rows, f"{label}: nothing was mapped")
+
+				target = frappe.get_attr(method)(source.name, target)
+				self.assertEqual(len(target.items), mapped_rows, f"{label}: rows were duplicated")
+
+	def idempotency_cases(self):
+		"""(label, source factory, mapper method) for every "Get Items From" button.
+
+		Quotation -> Sales Invoice is absent: Sales Invoice Item keeps no reference to the
+		Quotation row, so there is nothing to deduplicate on.
+		"""
+		from erpnext.accounts.doctype.purchase_invoice.test_purchase_invoice import make_purchase_invoice
+		from erpnext.buying.doctype.purchase_order.test_purchase_order import create_purchase_order
+		from erpnext.selling.doctype.quotation.test_quotation import make_quotation
+		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
+		from erpnext.stock.doctype.delivery_note.test_delivery_note import create_delivery_note
+		from erpnext.stock.doctype.material_request.test_material_request import (
+			make_material_request_for_items,
+		)
+		from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+
+		self.load_test_records("Supplier Quotation")
+
+		def make_supplier_quotation():
+			return frappe.copy_doc(self.globalTestRecords["Supplier Quotation"][0]).submit()
+
+		return [
+			(
+				"Quotation -> Sales Order",
+				lambda: make_quotation(),
+				"erpnext.selling.doctype.quotation.mapper.make_sales_order",
+			),
+			(
+				"Sales Order -> Sales Invoice",
+				lambda: make_sales_order(),
+				"erpnext.selling.doctype.sales_order.mapper.make_sales_invoice",
+			),
+			(
+				"Sales Order -> Delivery Note",
+				lambda: make_sales_order(),
+				"erpnext.selling.doctype.sales_order.mapper.make_delivery_note",
+			),
+			(
+				"Delivery Note -> Sales Invoice",
+				lambda: create_delivery_note(),
+				"erpnext.stock.doctype.delivery_note.mapper.make_sales_invoice",
+			),
+			(
+				"Material Request -> Purchase Order",
+				lambda: make_material_request_for_items(["_Test Item"]),
+				"erpnext.stock.doctype.material_request.mapper.make_purchase_order",
+			),
+			(
+				"Supplier Quotation -> Purchase Order",
+				make_supplier_quotation,
+				"erpnext.buying.doctype.supplier_quotation.mapper.make_purchase_order",
+			),
+			(
+				"Purchase Order -> Purchase Receipt",
+				lambda: create_purchase_order(),
+				"erpnext.buying.doctype.purchase_order.mapper.make_purchase_receipt",
+			),
+			(
+				"Purchase Order -> Purchase Invoice",
+				lambda: create_purchase_order(),
+				"erpnext.buying.doctype.purchase_order.mapper.make_purchase_invoice",
+			),
+			(
+				"Purchase Receipt -> Purchase Invoice",
+				lambda: make_purchase_receipt(),
+				"erpnext.stock.doctype.purchase_receipt.mapper.make_purchase_invoice",
+			),
+			(
+				"Purchase Invoice -> Purchase Receipt",
+				lambda: make_purchase_invoice(),
+				"erpnext.accounts.doctype.purchase_invoice.mapper.make_purchase_receipt",
+			),
+			(
+				"Delivery Note -> Purchase Receipt",
+				make_internal_delivery_note,
+				"erpnext.stock.doctype.delivery_note.mapper.make_inter_company_purchase_receipt",
+			),
+		]
 
 	def make_quotation(self, item_list, customer):
 		qtn = frappe.get_doc(

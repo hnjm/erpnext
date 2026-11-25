@@ -3,12 +3,13 @@
  "allow_import": 1,
  "autoname": "naming_series:",
  "creation": "2013-02-28 17:57:33",
+ "description": "Time spent on tasks and activities, to bill or cost.",
  "doctype": "DocType",
  "document_type": "Document",
+ "documentation": "https://docs.frappe.io/erpnext/user/manual/en/timesheets",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "title",
   "naming_series",
   "company",
   "customer",
@@ -44,14 +45,14 @@
   "per_billed",
   "section_break_18",
   "note",
-  "amended_from"
+  "amended_from",
+  "title"
  ],
  "fields": [
   {
    "allow_on_submit": 1,
    "fieldname": "title",
    "fieldtype": "Data",
-   "hidden": 1,
    "label": "Title",
    "no_copy": 1,
    "print_hide": 1
@@ -299,7 +300,6 @@
    "read_only": 1
   },
   {
-   "default": "1",
    "fieldname": "exchange_rate",
    "fieldtype": "Float",
    "label": "Exchange Rate"
@@ -310,11 +310,12 @@
    "label": "Billing"
   }
  ],
- "icon": "fa fa-clock-o",
+ "icon": "clock",
  "idx": 1,
  "is_submittable": 1,
+ "link_display_mode": "Search",
  "links": [],
- "modified": "2026-07-30 11:04:12.882140",
+ "modified": "2026-11-24 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Projects",
  "name": "Timesheet",

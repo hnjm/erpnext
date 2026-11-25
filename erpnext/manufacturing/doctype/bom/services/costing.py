@@ -9,7 +9,7 @@ delegating stubs so external callers (bom_update_log, etc.) keep working.
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cstr, flt
 
 
 class BOMCostingService:
@@ -33,10 +33,15 @@ class BOMCostingService:
 			self.doc.rm_cost_as_per = "Valuation Rate"
 
 		rate = self._raw_material_rate(arg, notify) if arg else 0
-		return flt(rate) * flt(self.doc.plc_conversion_rate or 1) / (self.doc.conversion_rate or 1)
+		return flt(rate) / (self.doc.conversion_rate or 1)
 
 	def _raw_material_rate(self, arg, notify):
-		from erpnext.manufacturing.doctype.bom.bom import get_bom_item_rate
+		from erpnext.manufacturing.doctype.bom.bom import get_bom_item_rate, get_valuation_rate
+
+		# Valuation Rate secondary items ignore the BOM's rm_cost_as_per method: bin-average
+		# valuation like the raw materials, scoped to the default target warehouse when set.
+		if arg.get("force_valuation_rate"):
+			return get_valuation_rate(arg)
 
 		# Customer Provided parts and Supplier sourced parts will have zero rate
 		if frappe.db.get_value("Item", arg["item_code"], "is_customer_provided_item") or arg.get(
@@ -45,13 +50,17 @@ class BOMCostingService:
 			return 0
 
 		if arg.get("bom_no") and (
-			self.doc.set_rate_of_sub_assembly_item_based_on_bom or arg.get("is_phantom_item")
+			arg.get("set_rate_of_sub_assembly_item_based_on_bom") or arg.get("is_phantom_item")
 		):
 			return flt(self.get_bom_unitcost(arg["bom_no"])) * (arg.get("conversion_factor") or 1)
 
 		rate = get_bom_item_rate(arg, self.doc)
 		if not rate:
 			self._warn_rate_not_found(arg, notify)
+
+		if self.doc.rm_cost_as_per == "Price List":
+			rate = flt(rate) * flt(self.doc.plc_conversion_rate or 1)
+
 		return rate
 
 	def _warn_rate_not_found(self, arg, notify):
@@ -76,17 +85,18 @@ class BOMCostingService:
 			return
 
 		self.doc.flags.cost_updated = False
-		existing_bom_cost = self.doc.total_cost
+		existing_costs = (self.doc.total_cost, self.doc.base_total_cost)
 
 		if self.doc.docstatus == 1:
 			self.doc.flags.ignore_validate_update_after_submit = True
 
+		self.doc.set_plc_conversion_rate()
 		self.calculate_cost(save_updates=save, update_hour_rate=update_hour_rate)
 
 		if save:
 			self.doc.db_update()
 
-		if self.doc.total_cost != existing_bom_cost and update_parent:
+		if update_parent and (self.doc.total_cost, self.doc.base_total_cost) != existing_costs:
 			self._update_parent_boms()
 
 		if not from_child_bom:
@@ -107,11 +117,11 @@ class BOMCostingService:
 		).run(pluck=True)
 
 		for bom in parent_boms:
-			frappe.get_doc("BOM", bom).update_cost(from_child_bom=True)
+			BOMCostingService(frappe.get_doc("BOM", bom)).update_cost(from_child_bom=True)
 
 	def update_parent_cost(self):
 		if self.doc.total_cost:
-			cost = self.doc.total_cost / self.doc.quantity
+			cost = self.doc.total_cost / get_good_qty(self.doc)
 
 			bom_item = frappe.qb.DocType("BOM Item")
 			(
@@ -129,19 +139,17 @@ class BOMCostingService:
 		bom_table = frappe.qb.DocType("BOM")
 		bom = (
 			frappe.qb.from_(bom_table)
-			.select(
-				bom_table.name,
-				(bom_table.base_total_cost / bom_table.quantity).as_("unit_cost"),
-			)
+			.select(bom_table.base_total_cost, bom_table.quantity, bom_table.process_loss_qty)
 			.where((bom_table.is_active == 1) & (bom_table.name == bom_no))
 		).run(as_dict=1)
-		return bom and bom[0]["unit_cost"] or 0
+		return flt(bom[0].base_total_cost) / get_good_qty(bom[0]) if bom else 0
 
 	def calculate_cost(self, save_updates=False, update_hour_rate=False):
 		"""Calculate bom totals"""
-		self.calculate_op_cost(update_hour_rate)
+		self.calculate_op_cost(update_hour_rate, save=save_updates)
 		self.calculate_rm_cost(save=save_updates)
 		self.calculate_secondary_items_costs(save=save_updates)
+		self.doc.set_fg_cost_allocation()
 		if save_updates:
 			# not via doc event, table is not regenerated and needs updation
 			self.calculate_exploded_cost()
@@ -151,32 +159,37 @@ class BOMCostingService:
 		self.doc.total_cost = (
 			self.doc.operating_cost + self.doc.raw_material_cost - self.doc.secondary_items_cost
 		)
-		self.doc.base_total_cost = (
+		self.doc.base_total_cost = flt(
 			self.doc.base_operating_cost
 			+ self.doc.base_raw_material_cost
-			- self.doc.base_secondary_items_cost
+			- self.doc.base_secondary_items_cost,
+			self.doc.precision("base_total_cost"),
 		)
 
 		if self.doc.total_cost != old_cost:
 			self.doc.flags.cost_updated = True
 
-	def calculate_op_cost(self, update_hour_rate=False):
+	def calculate_op_cost(self, update_hour_rate=False, save=True):
 		"""Update workstation rate and calculates totals"""
 		self.doc.operating_cost = 0
 		self.doc.base_operating_cost = 0
 		if self.doc.get("with_operations"):
 			for d in self.doc.get("operations"):
-				self._accumulate_operation_cost(d, update_hour_rate)
+				self._accumulate_operation_cost(d, update_hour_rate, save)
 		elif self.doc.get("fg_based_operating_cost"):
 			self._set_fg_based_operating_cost()
 
-	def _accumulate_operation_cost(self, d, update_hour_rate):
+		self.doc.base_operating_cost = flt(
+			self.doc.base_operating_cost, self.doc.precision("base_operating_cost")
+		)
+
+	def _accumulate_operation_cost(self, d, update_hour_rate, save=True):
 		if d.workstation or d.workstation_type:
-			self.update_rate_and_time(d, update_hour_rate)
+			self.update_rate_and_time(d, update_hour_rate, save)
 
 		operating_cost = d.operating_cost
 		base_operating_cost = d.base_operating_cost
-		if d.set_cost_based_on_bom_qty:
+		if is_costed_per_batch(d):
 			operating_cost = flt(d.cost_per_unit) * flt(self.doc.quantity)
 			base_operating_cost = flt(d.base_cost_per_unit) * flt(self.doc.quantity)
 
@@ -186,19 +199,39 @@ class BOMCostingService:
 	def _set_fg_based_operating_cost(self):
 		total = flt(self.doc.get("quantity")) * flt(self.doc.get("operating_cost_per_bom_quantity"))
 		self.doc.operating_cost = total
-		self.doc.base_operating_cost = flt(total * self.doc.conversion_rate, 2)
+		self.doc.base_operating_cost = total * self.doc.conversion_rate
 
-	def update_rate_and_time(self, row, update_hour_rate=False):
+	def update_rate_and_time(self, row, update_hour_rate=False, save=True):
+		self.update_stale_hour_rate(row)
+
 		if not row.hour_rate or update_hour_rate:
 			self._set_row_hour_rate(row)
 
-		if row.hour_rate:
-			row.base_hour_rate = flt(row.hour_rate) * flt(self.doc.conversion_rate)
-			if row.time_in_mins:
-				self._set_row_operating_costs(row)
+		row.base_hour_rate = flt(
+			flt(row.hour_rate) * flt(self.doc.conversion_rate), row.precision("base_hour_rate")
+		)
+		if row.time_in_mins:
+			self._set_row_operating_costs(row)
 
-		if update_hour_rate:
+		if update_hour_rate and save:
 			row.db_update()
+
+	def update_stale_hour_rate(self, row):
+		"""Workstation or conversion rate changed but the hour rate did not, e.g. through the API."""
+		before = self.doc.get_doc_before_save()
+		previous = before and before.get("operations", {"name": row.name})
+		if not previous or flt(previous[0].hour_rate) != flt(row.hour_rate):
+			return
+
+		old_rate, new_rate = flt(before.conversion_rate), flt(self.doc.conversion_rate)
+		if any(
+			cstr(previous[0].get(field)) != cstr(row.get(field))
+			for field in ("workstation", "workstation_type")
+		):
+			row.hour_rate = 0
+		elif old_rate and new_rate and old_rate != new_rate:
+			# keeps the rate in company currency, also a manual one
+			row.hour_rate = flt(flt(row.hour_rate) * old_rate / new_rate, row.precision("hour_rate"))
 
 	def _set_row_hour_rate(self, row):
 		hour_rate = 0
@@ -208,15 +241,14 @@ class BOMCostingService:
 			hour_rate = flt(frappe.get_cached_value("Workstation Type", row.workstation_type, "hour_rate"))
 
 		if hour_rate:
-			row.hour_rate = (
-				hour_rate / flt(self.doc.conversion_rate) if self.doc.conversion_rate else hour_rate
-			)
+			row.hour_rate = flt(hour_rate / (flt(self.doc.conversion_rate) or 1), row.precision("hour_rate"))
 
 	def _set_row_operating_costs(self, row):
 		row.operating_cost = flt(row.hour_rate) * flt(row.time_in_mins) / 60.0
-		row.base_operating_cost = flt(row.operating_cost) * flt(self.doc.conversion_rate)
+		base_operating_cost = flt(row.operating_cost) * flt(self.doc.conversion_rate)
+		row.base_operating_cost = flt(base_operating_cost, row.precision("base_operating_cost"))
 		row.cost_per_unit = row.operating_cost / (row.batch_size or 1.0)
-		row.base_cost_per_unit = row.base_operating_cost / (row.batch_size or 1.0)
+		row.base_cost_per_unit = base_operating_cost / (row.batch_size or 1.0)
 
 	def calculate_rm_cost(self, save=False):
 		"""Fetch RM rate as per today's valuation rate and calculate totals"""
@@ -224,18 +256,20 @@ class BOMCostingService:
 		base_total_rm_cost = 0
 
 		for d in self.doc.get("items"):
-			old_rate = d.rate
+			old_rate, old_base_amount = d.rate, d.base_amount
 			if d.is_stock_item or d.is_phantom_item:
 				d.rate = self.get_rm_rate(self._rm_rate_args(d), notify=False)
 
 			self._set_item_amounts(d)
 			total_rm_cost += d.amount
 			base_total_rm_cost += d.base_amount
-			if save and (old_rate != d.rate):
+			if save and (old_rate != d.rate or old_base_amount != d.base_amount):
 				d.db_update()
 
 		self.doc.raw_material_cost = total_rm_cost
-		self.doc.base_raw_material_cost = base_total_rm_cost
+		self.doc.base_raw_material_cost = flt(
+			base_total_rm_cost, self.doc.precision("base_raw_material_cost")
+		)
 
 	def _rm_rate_args(self, d):
 		return {
@@ -248,6 +282,8 @@ class BOMCostingService:
 			"conversion_factor": d.conversion_factor,
 			"sourced_by_supplier": d.sourced_by_supplier,
 			"is_phantom_item": d.is_phantom_item,
+			"set_rate_of_sub_assembly_item_based_on_bom": d.set_rate_of_sub_assembly_item_based_on_bom,
+			"source_warehouse": d.source_warehouse or self.doc.default_source_warehouse,
 		}
 
 	def _set_item_amounts(self, d):
@@ -255,59 +291,103 @@ class BOMCostingService:
 		d.amount = flt(
 			flt(d.rate, d.precision("rate")) * flt(d.qty, d.precision("qty")), d.precision("amount")
 		)
-		d.base_amount = d.amount * flt(self.doc.conversion_rate)
+		d.base_amount = flt(d.amount * flt(self.doc.conversion_rate), d.precision("base_amount"))
 		d.qty_consumed_per_unit = flt(d.stock_qty, d.precision("stock_qty")) / flt(
 			self.doc.quantity, self.doc.precision("quantity")
 		)
 
 	def calculate_secondary_items_costs(self, save=False):
-		"""Fetch RM rate as per today's valuation rate and calculate totals"""
+		"""Valuation Rate and Manual rows carry their own cost, deducted from the raw
+		material cost; the % of Component Cost rows split the remainder by their percentage."""
 		total_sm_cost = 0
 		base_total_sm_cost = 0
 		precision = self.doc.precision("raw_material_cost")
+		allocation_basis = flt(self.doc.raw_material_cost) - self._set_own_cost_secondary_items(
+			precision, save
+		)
 
 		for d in self.doc.get("secondary_items"):
-			if not d.is_legacy:
-				d.cost = flt(self.doc.raw_material_cost * (d.cost_allocation_per / 100), precision)
+			if d.valuation_type not in ("Valuation Rate", "Manual"):
+				d.cost = flt(allocation_basis * (flt(d.cost_allocation_per) / 100), precision)
 				d.base_cost = flt(d.cost * self.doc.conversion_rate, precision)
-
-				total_sm_cost += d.cost
-				base_total_sm_cost += d.base_cost
 				if save:
 					d.db_update()
+
+			total_sm_cost += d.cost
+			base_total_sm_cost += d.base_cost
 
 		self.doc.secondary_items_cost = total_sm_cost
 		self.doc.base_secondary_items_cost = base_total_sm_cost
 
+	def _set_own_cost_secondary_items(self, precision, save) -> float:
+		"""Cost of the rows valued on their own: fetched for Valuation Rate, kept for Manual."""
+		total = 0.0
+		for d in self.doc.get("secondary_items"):
+			if d.valuation_type == "Valuation Rate":
+				rate = self.get_rm_rate(self._secondary_item_rate_args(d))
+				# set here too, so Update Cost saves the loss the cost is net of
+				d.process_loss_qty = get_secondary_process_loss_qty(d)
+				d.cost = flt(flt(rate) * (flt(d.stock_qty) - d.process_loss_qty), precision)
+			elif d.valuation_type == "Manual":
+				d.cost = flt(d.cost, precision)
+			else:
+				continue
+
+			d.base_cost = flt(d.cost * self.doc.conversion_rate, precision)
+			total += d.cost
+			if save:
+				d.db_update()
+
+		return total
+
+	def _secondary_item_rate_args(self, d):
+		return {
+			"item_code": d.item_code,
+			"company": self.doc.company,
+			"warehouse": self.doc.default_target_warehouse,
+			"set_rate_based_on_warehouse": 1,
+			"force_valuation_rate": 1,
+		}
+
 	def calculate_exploded_cost(self):
-		"Set exploded row cost from it's parent BOM."
-		rm_rate_map = self.get_rm_rate_map()
+		"Set exploded row cost from the BOM rows and sub-assembly BOMs."
+		from erpnext.manufacturing.doctype.bom.services.exploded_items import BOMExplodedItemsService
+
+		exploded = BOMExplodedItemsService(self.doc)
+		exploded.get_exploded_items()
 
 		for row in self.doc.get("exploded_items"):
 			old_rate = flt(row.rate)
-			row.rate = rm_rate_map.get(row.item_code)
+			current = self.doc.cur_exploded_items.get(exploded.get_key(row))
+			row.rate = current.rate if current else 0
 			row.amount = flt(row.stock_qty) * flt(row.rate)
 
 			if old_rate != row.rate:
 				# Only db_update if changed
 				row.db_update()
 
-	def get_rm_rate_map(self) -> dict[str, float]:
-		"Create Raw Material-Rate map for Exploded Items. Fetch rate from Items table or Subassembly BOM."
-		rm_rate_map = {}
 
-		for item in self.doc.get("items"):
-			if item.bom_no:
-				# Get Item-Rate from Subassembly BOM
-				explosion_items = frappe.get_all(
-					"BOM Explosion Item",
-					filters={"parent": item.bom_no},
-					fields=["item_code", "rate"],
-					order_by=None,  # to avoid sort index creation at db level (granular change)
-				)
-				explosion_item_rate = {item.item_code: flt(item.rate) for item in explosion_items}
-				rm_rate_map.update(explosion_item_rate)
-			else:
-				rm_rate_map[item.item_code] = flt(item.base_rate) / flt(item.conversion_factor or 1.0)
+def is_costed_per_batch(row) -> bool:
+	"""As in the Work Order: never for fixed time, always for a batch based Operation."""
+	return not row.fixed_time and bool(
+		row.set_cost_based_on_bom_qty
+		or frappe.get_cached_value("Operation", row.operation, "create_job_card_based_on_batch_size")
+	)
 
-		return rm_rate_map
+
+def get_secondary_process_loss_qty(row) -> float:
+	"""Rounded process loss qty of a secondary row, capped as rounding can take it above the row's qty."""
+	return min(
+		flt(flt(row.stock_qty) * flt(row.process_loss_per) / 100, row.precision("process_loss_qty")),
+		flt(row.stock_qty),
+	)
+
+
+def get_good_qty(bom):
+	good_qty = flt(bom.quantity) - flt(bom.process_loss_qty)
+	return good_qty if good_qty > 0 else flt(bom.quantity) or 1
+
+
+def get_exploded_good_qty(bom):
+	"""Qty a child BOM's components are spread over when exploded: a phantom BOM's loss is ignored."""
+	return (flt(bom.quantity) or 1) if bom.is_phantom_bom else get_good_qty(bom)

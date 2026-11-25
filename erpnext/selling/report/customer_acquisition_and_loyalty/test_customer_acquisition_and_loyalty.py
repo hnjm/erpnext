@@ -2,10 +2,13 @@
 # License: GNU General Public License v3. See license.txt
 
 import frappe
+from frappe.permissions import add_user_permission
 from frappe.utils import getdate, random_string
 
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
+from erpnext.buying.test_utils import create_user_with_roles
 from erpnext.selling.report.customer_acquisition_and_loyalty.customer_acquisition_and_loyalty import (
+	execute,
 	get_customer_stats,
 )
 from erpnext.tests.utils import ERPNextTestSuite
@@ -42,8 +45,9 @@ class TestCustomerAcquisitionAndLoyalty(ERPNextTestSuite):
 		base_repeat = base_bucket["repeat"][0]
 		base_repeat_rev = base_bucket["repeat"][1]
 
-		# Two submitted invoices for the SAME customer in the SAME month:
-		# the earlier one is the customer's FIRST invoice -> "new", the later -> "repeat".
+		# Two submitted invoices for the SAME customer in the SAME month: the customer is
+		# acquired that month, so they count once as "new" and never as "repeat"; both
+		# invoices' revenue lands in the new bucket.
 		si1 = create_sales_invoice(
 			customer=customer.name, company="_Test Company", posting_date=first_date, rate=100
 		)
@@ -55,14 +59,14 @@ class TestCustomerAcquisitionAndLoyalty(ERPNextTestSuite):
 		bucket = stats.get(month_key)
 		self.assertIsNotNone(bucket, "expected a bucket for posting month " + month_key)
 
-		# Exactly one NEW and one REPEAT were added for this customer's activity.
+		# One NEW customer, no REPEAT: a second invoice in the acquisition month does not
+		# turn one customer into two.
 		self.assertEqual(bucket["new"][0] - base_new, 1)
-		self.assertEqual(bucket["repeat"][0] - base_repeat, 1)
+		self.assertEqual(bucket["repeat"][0] - base_repeat, 0)
 
-		# Revenue is attributed by base_grand_total of the corresponding invoice:
-		# the first (new) invoice carries si1's total, the second (repeat) carries si2's.
-		self.assertAlmostEqual(bucket["new"][1] - base_new_rev, si1.base_grand_total)
-		self.assertAlmostEqual(bucket["repeat"][1] - base_repeat_rev, si2.base_grand_total)
+		# Both invoices' revenue is attributed to the new bucket; repeat is untouched.
+		self.assertAlmostEqual(bucket["new"][1] - base_new_rev, si1.base_grand_total + si2.base_grand_total)
+		self.assertAlmostEqual(bucket["repeat"][1] - base_repeat_rev, 0.0)
 
 	def test_territory_tree_view_classification(self):
 		# Covers the tree_view=True path of get_customer_stats, where buckets are keyed
@@ -97,7 +101,8 @@ class TestCustomerAcquisitionAndLoyalty(ERPNextTestSuite):
 		base_repeat_rev = base_bucket["repeat"][1]
 
 		# get_party_details copies the customer's territory onto the invoice, so both
-		# invoices land in the "_Test Territory" bucket: first -> "new", second -> "repeat".
+		# invoices land in the "_Test Territory" bucket, which is the customer's acquisition
+		# territory: they count once as "new" with both invoices' revenue.
 		si1 = create_sales_invoice(
 			customer=customer.name, company="_Test Company", posting_date=first_date, rate=100
 		)
@@ -112,10 +117,94 @@ class TestCustomerAcquisitionAndLoyalty(ERPNextTestSuite):
 		bucket = stats.get(territory)
 		self.assertIsNotNone(bucket, "expected a bucket keyed by territory " + territory)
 
-		# Exactly one NEW and one REPEAT attributable to this customer in the bucket.
+		# One NEW customer, no REPEAT, in the acquisition territory bucket.
 		self.assertEqual(bucket["new"][0] - base_new, 1)
-		self.assertEqual(bucket["repeat"][0] - base_repeat, 1)
+		self.assertEqual(bucket["repeat"][0] - base_repeat, 0)
 
-		# Revenue follows base_grand_total of the corresponding invoice.
-		self.assertAlmostEqual(bucket["new"][1] - base_new_rev, si1.base_grand_total)
-		self.assertAlmostEqual(bucket["repeat"][1] - base_repeat_rev, si2.base_grand_total)
+		# Both invoices' revenue follows into the new bucket; repeat is untouched.
+		self.assertAlmostEqual(bucket["new"][1] - base_new_rev, si1.base_grand_total + si2.base_grand_total)
+		self.assertAlmostEqual(bucket["repeat"][1] - base_repeat_rev, 0.0)
+
+	def test_credit_note_nets_revenue_without_counting(self):
+		# A credit note must not add a customer to the headcount, but its (negative) amount
+		# should still net down that customer's revenue for the period.
+		first_date = "2017-06-05"
+		return_date = "2017-06-20"
+		month_key = getdate(first_date).strftime("%Y-%m")
+		filters = frappe._dict(
+			{"from_date": "2017-01-01", "to_date": "2017-06-30", "company": "_Test Company"}
+		)
+
+		customer = frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": "_Test CAL Return Customer " + random_string(8),
+				"customer_group": "_Test Customer Group",
+				"customer_type": "Individual",
+				"territory": "_Test Territory",
+			}
+		).insert()
+
+		base = get_customer_stats(filters)
+		base_bucket = base.get(month_key, {"new": [0, 0.0], "repeat": [0, 0.0]})
+		base_new, base_new_rev = base_bucket["new"]
+		base_repeat, base_repeat_rev = base_bucket["repeat"]
+
+		si = create_sales_invoice(
+			customer=customer.name, company="_Test Company", posting_date=first_date, rate=100
+		)
+		cn = create_sales_invoice(
+			customer=customer.name,
+			company="_Test Company",
+			posting_date=return_date,
+			qty=-1,
+			rate=100,
+			is_return=1,
+			return_against=si.name,
+		)
+
+		bucket = get_customer_stats(filters).get(month_key)
+		self.assertIsNotNone(bucket, "expected a bucket for posting month " + month_key)
+
+		# One new customer, no repeat added by the credit note.
+		self.assertEqual(bucket["new"][0] - base_new, 1)
+		self.assertEqual(bucket["repeat"][0] - base_repeat, 0)
+
+		# Revenue is the sale netted by the credit note, all in the new bucket.
+		self.assertAlmostEqual(bucket["new"][1] - base_new_rev, si.base_grand_total + cn.base_grand_total)
+		self.assertAlmostEqual(bucket["repeat"][1] - base_repeat_rev, 0.0)
+
+	def test_company_restricted_user(self):
+		customer = frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": "_Test CAL Company Customer " + random_string(8),
+				"customer_group": "_Test Customer Group",
+				"customer_type": "Individual",
+				"territory": "_Test Territory",
+			}
+		).insert()
+		create_sales_invoice(customer=customer.name, company="_Test Company", posting_date="2017-07-05")
+		filters = frappe._dict(
+			{"view_type": "Territory Wise", "from_date": "2017-07-01", "to_date": "2017-07-31"}
+		)
+		self.addCleanup(frappe.set_user, "Administrator")
+
+		# a restriction for all doctypes and one scoped to Sales Invoice both apply
+		for applicable_for in (None, "Sales Invoice"):
+			with self.subTest(applicable_for=applicable_for):
+				frappe.set_user("Administrator")
+				email = f"test_cal_company_{frappe.scrub(applicable_for or 'all')}@example.com"
+				create_user_with_roles(email, "Sales User")
+				add_user_permission("Company", "_Test Company 1", email, applicable_for=applicable_for)
+				frappe.set_user(email)
+
+				# another company is refused
+				with self.assertRaises(frappe.PermissionError):
+					execute(frappe._dict(filters, company="_Test Company"))
+
+				# the permitted company still runs
+				execute(frappe._dict(filters, company="_Test Company 1"))
+
+				# without a company, only the permitted company's invoices count
+				self.assertNotIn("_Test Territory", get_customer_stats(filters, tree_view=True))

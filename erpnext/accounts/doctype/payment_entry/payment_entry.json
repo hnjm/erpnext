@@ -4,9 +4,13 @@
  "allow_import": 1,
  "autoname": "naming_series:",
  "creation": "2016-06-01 14:38:51.012597",
+ "description": "Money you received or paid, matched against invoices.",
  "doctype": "DocType",
+ "documentation": "https://docs.frappe.io/erpnext/user/manual/en/payment-entry",
+ "enable_upload_first_workflow": 1,
  "engine": "InnoDB",
  "field_order": [
+  "payment_tab",
   "type_of_payment",
   "naming_series",
   "payment_type",
@@ -14,51 +18,74 @@
   "column_break_5",
   "posting_date",
   "company",
-  "mode_of_payment",
   "party_section",
+  "party_column",
   "party_type",
   "party",
-  "party_name",
-  "book_advance_payments_in_separate_party_account",
-  "reconcile_on_advance_payment_date",
-  "apply_tds",
-  "tax_withholding_category",
-  "column_break_11",
-  "bank_account",
   "party_bank_account",
+  "party_name",
   "contact_person",
   "contact_email",
+  "column_break_11",
+  "mode_of_payment",
+  "bank_account",
+  "reference_no",
+  "reference_date",
+  "clearance_date",
+  "book_advance_payments_in_separate_party_account",
+  "reconcile_on_advance_payment_date",
   "payment_accounts_section",
   "paid_from",
   "paid_from_account_type",
   "paid_from_account_currency",
+  "paid_from_bank_account",
   "column_break_18",
   "paid_to",
   "paid_to_account_type",
   "paid_to_account_currency",
+  "paid_to_bank_account",
   "payment_amounts_section",
   "paid_amount",
-  "paid_amount_after_tax",
   "source_exchange_rate",
   "base_paid_amount",
   "base_paid_amount_after_tax",
   "column_break_21",
   "received_amount",
-  "received_amount_after_tax",
   "target_exchange_rate",
   "base_received_amount",
   "base_received_amount_after_tax",
+  "paid_amount_after_tax",
+  "received_amount_after_tax",
   "section_break_14",
   "get_outstanding_invoices",
   "get_outstanding_orders",
   "references",
+  "payment_term_discounts_calculated",
   "section_break_34",
   "total_allocated_amount",
   "base_total_allocated_amount",
   "column_break_36",
   "unallocated_amount",
+  "column_break_allocation",
   "difference_amount",
   "write_off_difference_amount",
+  "deductions_or_loss_section",
+  "deductions",
+  "accounting_dimensions_section",
+  "project",
+  "dimension_col_break",
+  "cost_center",
+  "taxes_tab",
+  "tax_withholding_section",
+  "apply_tds",
+  "tax_withholding_category",
+  "section_tax_withholding_entry",
+  "tax_withholding_group",
+  "column_break_tax_withholding_entry",
+  "ignore_tax_withholding_threshold",
+  "override_tax_withholding_entries",
+  "tax_withholding_entries_section",
+  "tax_withholding_entries",
   "taxes_and_charges_section",
   "purchase_taxes_and_charges_template",
   "sales_taxes_and_charges_template",
@@ -67,45 +94,33 @@
   "base_total_taxes_and_charges",
   "column_break_61",
   "total_taxes_and_charges",
-  "deductions_or_loss_section",
-  "deductions",
-  "section_tax_withholding_entry",
-  "tax_withholding_group",
-  "ignore_tax_withholding_threshold",
-  "override_tax_withholding_entries",
-  "tax_withholding_entries",
-  "transaction_references",
-  "reference_no",
-  "column_break_23",
-  "reference_date",
-  "clearance_date",
-  "accounting_dimensions_section",
-  "project",
-  "dimension_col_break",
-  "cost_center",
-  "section_break_12",
-  "status",
+  "more_info_tab",
+  "remarks_section",
   "custom_remarks",
   "remarks",
-  "base_in_words",
-  "is_opening",
-  "title",
-  "column_break_16",
+  "print_settings_section",
   "letter_head",
+  "column_break_print",
   "print_heading",
+  "section_break_12",
+  "status",
+  "title",
+  "is_opening",
+  "base_in_words",
+  "column_break_16",
   "bank",
   "bank_account_no",
   "payment_order",
   "in_words",
   "amended_from",
   "auto_repeat_section",
-  "auto_repeat"
+  "auto_repeat",
+  "connections_tab"
  ],
  "fields": [
   {
    "fieldname": "type_of_payment",
-   "fieldtype": "Section Break",
-   "label": "Type of Payment"
+   "fieldtype": "Section Break"
   },
   {
    "bold": 1,
@@ -161,19 +176,25 @@
   {
    "fieldname": "mode_of_payment",
    "fieldtype": "Link",
+   "in_import_template": 1,
    "label": "Mode of Payment",
    "options": "Mode of Payment"
   },
   {
-   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type)",
    "fieldname": "party_section",
    "fieldtype": "Section Break",
-   "label": "Payment From / To"
+   "label": "Payment Details"
   },
   {
-   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type) && doc.docstatus==0",
+   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type)",
+   "fieldname": "party_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type)",
    "fieldname": "party_type",
    "fieldtype": "Link",
+   "in_import_template": 1,
    "in_standard_filter": 1,
    "label": "Party Type",
    "options": "DocType",
@@ -185,13 +206,14 @@
    "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type) && doc.party_type",
    "fieldname": "party",
    "fieldtype": "Dynamic Link",
+   "in_import_template": 1,
    "in_standard_filter": 1,
    "label": "Party",
    "options": "party_type"
   },
   {
    "allow_on_submit": 1,
-   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type) && doc.party_type",
+   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type) && doc.party_type && doc.party_name && doc.party_name != doc.party",
    "fieldname": "party_name",
    "fieldtype": "Data",
    "in_global_search": 1,
@@ -217,7 +239,6 @@
    "read_only": 1
   },
   {
-   "collapsible": 1,
    "fieldname": "payment_accounts_section",
    "fieldtype": "Section Break",
    "label": "Accounts"
@@ -227,7 +248,6 @@
    "depends_on": "eval:(in_list([\"Internal Transfer\", \"Pay\"], doc.payment_type) || doc.party)",
    "fieldname": "paid_from",
    "fieldtype": "Link",
-   "in_global_search": 1,
    "in_list_view": 1,
    "label": "Account Paid From",
    "options": "Account",
@@ -245,6 +265,14 @@
    "reqd": 1
   },
   {
+   "depends_on": "eval:doc.payment_type == \"Internal Transfer\"",
+   "fieldname": "paid_from_bank_account",
+   "fieldtype": "Link",
+   "label": "Bank Account (From)",
+   "options": "Bank Account",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_18",
    "fieldtype": "Column Break"
   },
@@ -252,7 +280,6 @@
    "depends_on": "eval:(in_list([\"Internal Transfer\", \"Receive\"], doc.payment_type) || doc.party)",
    "fieldname": "paid_to",
    "fieldtype": "Link",
-   "in_global_search": 1,
    "in_list_view": 1,
    "label": "Account Paid To",
    "options": "Account",
@@ -270,6 +297,14 @@
    "reqd": 1
   },
   {
+   "depends_on": "eval:doc.payment_type == \"Internal Transfer\"",
+   "fieldname": "paid_to_bank_account",
+   "fieldtype": "Link",
+   "label": "Bank Account (To)",
+   "options": "Bank Account",
+   "read_only": 1
+  },
+  {
    "depends_on": "eval:(doc.paid_to && doc.paid_from)",
    "fieldname": "payment_amounts_section",
    "fieldtype": "Section Break",
@@ -279,6 +314,7 @@
    "bold": 1,
    "fieldname": "paid_amount",
    "fieldtype": "Currency",
+   "in_list_view": 1,
    "label": "Paid Amount",
    "options": "paid_from_account_currency",
    "reqd": 1
@@ -344,13 +380,14 @@
    "options": "Payment Entry Reference"
   },
   {
+   "depends_on": "eval:doc.paid_from && doc.paid_to && (doc.party || doc.difference_amount)",
    "fieldname": "section_break_34",
    "fieldtype": "Section Break",
    "label": "Writeoff"
   },
   {
    "bold": 1,
-   "depends_on": "eval:(doc.paid_amount && doc.received_amount && doc.references)",
+   "depends_on": "eval:(doc.party && doc.paid_amount && doc.received_amount && doc.references)",
    "fieldname": "total_allocated_amount",
    "fieldtype": "Currency",
    "label": "Total Allocated Amount",
@@ -370,21 +407,26 @@
    "fieldtype": "Column Break"
   },
   {
-   "depends_on": "eval:(doc.paid_amount && doc.received_amount && doc.references)",
+   "depends_on": "eval:doc.party && doc.paid_amount && doc.received_amount && doc.references && (doc.docstatus == 0 || doc.unallocated_amount)",
+   "description": "Not matched to any invoice or order, so it stays on the party's account as an advance until you allocate it.",
    "fieldname": "unallocated_amount",
    "fieldtype": "Currency",
    "label": "Unallocated Amount",
-   "print_hide": 1
+   "print_hide": 1,
+   "read_only": 1,
+   "show_description_on_click": 1
   },
   {
    "bold": 1,
-   "depends_on": "eval:(doc.paid_amount && doc.received_amount)",
+   "depends_on": "eval:doc.docstatus == 0 && doc.paid_amount && doc.received_amount",
+   "description": "Must be zero to submit. Use Write Off Difference Amount, or add a row under Deductions or Loss.",
    "fieldname": "difference_amount",
    "fieldtype": "Currency",
    "label": "Difference Amount (Company Currency)",
    "options": "Company:company:default_currency",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "show_description_on_click": 1
   },
   {
    "depends_on": "difference_amount",
@@ -401,53 +443,51 @@
    "label": "Deductions or Loss"
   },
   {
+   "description": "Bank charges, discounts or rounding that make up the difference between the amount paid and the invoices settled. Each row is booked to its own account.",
    "fieldname": "deductions",
    "fieldtype": "Table",
    "label": "Payment Deductions or Loss",
    "options": "Payment Entry Deduction"
   },
   {
-   "fieldname": "transaction_references",
-   "fieldtype": "Section Break",
-   "label": "Transaction ID"
-  },
-  {
    "bold": 1,
    "depends_on": "eval:(doc.paid_from && doc.paid_to)",
+   "description": "Cheque Number, UTR or Bank Transaction ID.",
    "fieldname": "reference_no",
    "fieldtype": "Data",
+   "in_global_search": 1,
+   "in_import_template": 1,
    "in_standard_filter": 1,
    "label": "Cheque/Reference No",
-   "mandatory_depends_on": "eval:(doc.paid_from_account_type == 'Bank' || doc.paid_to_account_type == 'Bank')"
-  },
-  {
-   "fieldname": "column_break_23",
-   "fieldtype": "Column Break"
+   "mandatory_depends_on": "eval:(doc.paid_from_account_type == 'Bank' || doc.paid_to_account_type == 'Bank')",
+   "show_description_on_click": 1
   },
   {
    "bold": 1,
    "depends_on": "eval:(doc.paid_from && doc.paid_to)",
    "fieldname": "reference_date",
    "fieldtype": "Date",
+   "in_import_template": 1,
    "label": "Cheque/Reference Date",
    "mandatory_depends_on": "eval:(doc.paid_from_account_type == 'Bank' || doc.paid_to_account_type == 'Bank')",
    "search_index": 1
   },
   {
    "depends_on": "eval:doc.docstatus==1",
+   "description": "Date the payment cleared in the bank. Set from Bank Clearance or the Bank Reconciliation Tool.",
    "fieldname": "clearance_date",
    "fieldtype": "Date",
    "label": "Clearance Date",
    "no_copy": 1,
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "show_description_on_click": 1
   },
   {
    "collapsible": 1,
-   "depends_on": "eval:(doc.paid_from && doc.paid_to && doc.paid_amount && doc.received_amount)",
    "fieldname": "section_break_12",
    "fieldtype": "Section Break",
-   "label": "More Information"
+   "label": "Other Details"
   },
   {
    "allow_on_submit": 1,
@@ -483,12 +523,14 @@
    "print_hide": 1
   },
   {
+   "description": "Fetched from the Company Bank Account.",
    "fetch_from": "bank_account.bank",
    "fieldname": "bank",
    "fieldtype": "Read Only",
    "label": "Bank"
   },
   {
+   "description": "Fetched from the Company Bank Account.",
    "fetch_from": "bank_account.bank_account_no",
    "fieldname": "bank_account_no",
    "fieldtype": "Read Only",
@@ -531,7 +573,7 @@
    "read_only": 1
   },
   {
-   "depends_on": "party",
+   "depends_on": "eval:in_list([\"Receive\", \"Pay\"], doc.payment_type)",
    "fieldname": "bank_account",
    "fieldtype": "Link",
    "label": "Company Bank Account",
@@ -567,6 +609,7 @@
    "default": "Draft",
    "fieldname": "status",
    "fieldtype": "Select",
+   "hidden": 1,
    "label": "Status",
    "no_copy": 1,
    "options": "\nDraft\nSubmitted\nCancelled",
@@ -574,6 +617,7 @@
   },
   {
    "default": "0",
+   "description": "Enable to write your own remarks. Otherwise, remarks are generated automatically on save.",
    "fieldname": "custom_remarks",
    "fieldtype": "Check",
    "label": "Custom Remarks"
@@ -587,6 +631,7 @@
    "options": "Tax Withholding Category"
   },
   {
+   "description": "Taxes and charges that apply to this payment, such as tax on an advance.",
    "fieldname": "taxes_and_charges_section",
    "fieldtype": "Section Break",
    "hide_border": 1,
@@ -614,11 +659,20 @@
    "options": "Advance Taxes and Charges"
   },
   {
+   "depends_on": "eval:doc.taxes && doc.taxes.length",
+   "fieldname": "section_break_60",
+   "fieldtype": "Section Break"
+  },
+  {
    "fieldname": "base_total_taxes_and_charges",
    "fieldtype": "Currency",
    "label": "Total Taxes and Charges (Company Currency)",
    "options": "Company:company:default_currency",
    "read_only": 1
+  },
+  {
+   "fieldname": "column_break_61",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "total_taxes_and_charges",
@@ -627,11 +681,12 @@
    "read_only": 1
   },
   {
+   "depends_on": "eval:doc.payment_type == 'Pay' && doc.taxes && doc.taxes.length",
    "fieldname": "paid_amount_after_tax",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Paid Amount After Tax",
    "options": "paid_from_account_currency",
+   "print_hide": 1,
    "read_only": 1
   },
   {
@@ -643,12 +698,12 @@
    "read_only": 1
   },
   {
-   "depends_on": "eval:doc.received_amount && doc.payment_type != 'Internal Transfer'",
+   "depends_on": "eval:doc.payment_type == 'Receive' && doc.taxes && doc.taxes.length",
    "fieldname": "received_amount_after_tax",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Received Amount After Tax",
    "options": "paid_to_account_currency",
+   "print_hide": 1,
    "read_only": 1
   },
   {
@@ -675,27 +730,23 @@
    "label": "Paid To Account Type"
   },
   {
-   "fieldname": "column_break_61",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "section_break_60",
-   "fieldtype": "Section Break"
-  },
-  {
    "depends_on": "eval:doc.docstatus==0",
    "fieldname": "get_outstanding_invoices",
    "fieldtype": "Button",
+   "hidden": 1,
    "label": "Get Outstanding Invoices"
   },
   {
    "depends_on": "eval:doc.docstatus==0",
    "fieldname": "get_outstanding_orders",
    "fieldtype": "Button",
+   "hidden": 1,
    "label": "Get Outstanding Orders"
   },
   {
    "default": "0",
+   "depends_on": "book_advance_payments_in_separate_party_account",
+   "description": "Enabled when the Company books advances in a separate account and this payment is an advance.",
    "fetch_from": "company.book_advance_payments_in_separate_party_account",
    "fieldname": "book_advance_payments_in_separate_party_account",
    "fieldtype": "Check",
@@ -730,6 +781,7 @@
   {
    "default": "No",
    "depends_on": "eval: doc.book_advance_payments_in_separate_party_account == 1",
+   "description": "Set to Yes only for an advance entered as part of your opening balances.",
    "fieldname": "is_opening",
    "fieldtype": "Select",
    "label": "Is Opening",
@@ -740,19 +792,19 @@
   {
    "default": "0",
    "depends_on": "eval:doc.party_type == 'Supplier'",
+   "description": "Applies only to the advance part of this payment: the unallocated amount and any amount allocated to orders.",
    "fieldname": "apply_tds",
    "fieldtype": "Check",
    "label": "Consider for Tax Withholding"
   },
   {
-   "collapsible": 1,
-   "collapsible_depends_on": "eval: doc.apply_tds && doc.docstatus == 0",
    "depends_on": "eval: doc.apply_tds",
    "fieldname": "section_tax_withholding_entry",
    "fieldtype": "Section Break",
-   "label": "Tax Withholding Entry"
+   "hide_border": 1
   },
   {
+   "description": "Selects which rates of the Tax Withholding Category apply. Leave empty to use the rates that have no group.",
    "fieldname": "tax_withholding_group",
    "fieldtype": "Link",
    "label": "Tax Withholding Group",
@@ -773,6 +825,7 @@
   },
   {
    "default": "0",
+   "description": "Enable to edit the entries below manually. Otherwise, they are calculated automatically on save.",
    "fieldname": "override_tax_withholding_entries",
    "fieldtype": "Check",
    "label": "Edit Tax Withholding Entries"
@@ -781,13 +834,79 @@
    "fieldname": "auto_repeat_section",
    "fieldtype": "Section Break",
    "label": "Auto Repeat"
+  },
+  {
+   "default": "0",
+   "fieldname": "payment_term_discounts_calculated",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Payment Term Discounts Calculated",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_tab",
+   "fieldtype": "Tab Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "more_info_tab",
+   "fieldtype": "Tab Break",
+   "label": "More Info"
+  },
+  {
+   "fieldname": "column_break_allocation",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "taxes_tab",
+   "fieldtype": "Tab Break",
+   "label": "Taxes"
+  },
+  {
+   "fieldname": "connections_tab",
+   "fieldtype": "Tab Break",
+   "label": "Connections",
+   "show_dashboard": 1
+  },
+  {
+   "fieldname": "remarks_section",
+   "fieldtype": "Section Break",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "print_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Print Settings"
+  },
+  {
+   "fieldname": "column_break_print",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "tax_withholding_section",
+   "fieldtype": "Section Break",
+   "hide_border": 1,
+   "label": "Tax Withholding"
+  },
+  {
+   "fieldname": "column_break_tax_withholding_entry",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval: doc.apply_tds",
+   "fieldname": "tax_withholding_entries_section",
+   "fieldtype": "Section Break",
+   "hide_border": 1
   }
  ],
  "grid_page_length": 50,
- "index_web_pages_for_search": 1,
+ "icon": "banknote",
  "is_submittable": 1,
+ "link_display_mode": "Search",
  "links": [
   {
+   "group": "Banking",
    "is_child_table": 1,
    "link_doctype": "Bank Transaction Payments",
    "link_fieldname": "payment_entry",
@@ -795,7 +914,7 @@
    "table_fieldname": "payment_entries"
   }
  ],
- "modified": "2026-05-15 13:31:01.166010",
+ "modified": "2026-11-24 01:08:11.570380",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Payment Entry",

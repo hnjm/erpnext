@@ -267,6 +267,7 @@ class TaxWithholdingEntry(Document):
 		}
 
 		if self.is_taxable_different:
+			self._validate_no_return_reversed_tax()
 			frappe.db.set_value(
 				DOCTYPE,
 				filters,
@@ -296,6 +297,51 @@ class TaxWithholdingEntry(Document):
 						"status": "Over Withheld",
 					},
 				)
+
+	def _validate_no_return_reversed_tax(self):
+		"""
+		A return against the taxable document reverses the tax this document withheld for it.
+		Cancelling would leave that reversal with no tax to reverse.
+		"""
+		if not self.withholding_amount or not frappe.get_meta(self.taxable_doctype).has_field(
+			"return_against"
+		):
+			return
+
+		returns = frappe.get_all(
+			self.taxable_doctype,
+			filters={"return_against": self.taxable_name, "is_return": 1, "docstatus": 1},
+			pluck="name",
+		)
+		if not returns:
+			return
+
+		reversed_in = frappe.get_all(
+			DOCTYPE,
+			filters={
+				"parenttype": self.taxable_doctype,
+				"parent": ["in", returns],
+				"tax_withholding_category": self.tax_withholding_category,
+				"withholding_amount": ["!=", 0],
+				"docstatus": 1,
+			},
+			pluck="parent",
+			distinct=True,
+		)
+		if not reversed_in:
+			return
+
+		frappe.throw(
+			_(
+				"Cannot cancel {0} {1} because it withheld tax for {2} {3}, and the return {4} reversed that tax. Cancel the return first."
+			).format(
+				_(self.withholding_doctype),
+				frappe.bold(self.withholding_name),
+				_(self.taxable_doctype),
+				frappe.bold(self.taxable_name),
+				", ".join(frappe.bold(name) for name in reversed_in),
+			)
+		)
 
 	def _handle_return_invoice_cancellation(self, filters):
 		# Get old entries that need adjustment - inspired by _adjust_against_old_entries
@@ -424,7 +470,9 @@ class TaxWithholdingController:
 		entries.extend(self._adjust_under_over_withheld(under_entries, over_entries, category))
 
 		# Case 4: Lower Deduction Certificate processing
-		if category.ldc_unutilized_amount:
+		if self._is_return_against_invoice():
+			entries.extend(self._process_return_ldc_entries(under_entries, category))
+		elif category.ldc_unutilized_amount:
 			entries.extend(self._process_ldc_entries(under_entries, over_entries, category))
 
 		# Case 5: Regular tax withholding processing
@@ -522,6 +570,77 @@ class TaxWithholdingController:
 			default_obj=ldc_config,
 		)
 
+	def _is_return_against_invoice(self) -> bool:
+		return bool(self.doc.get("is_return") and self.doc.get("return_against"))
+
+	def _process_return_ldc_entries(self, under_entries: deque, category: dict) -> list:
+		"""Reverse a return at each certificate rate applied on the original invoice, up to the
+		amount deducted under that certificate, so that its limit is given back."""
+		current_entry = under_entries[0] if under_entries else None
+		if not (current_entry and current_entry.taxable_name == self.doc.name):
+			return []
+
+		entries = []
+		for ldc_entry in self._get_original_ldc_entries(category):
+			if flt(current_entry.taxable_amount, self.precision) >= 0:
+				break
+			entries.extend(self._reverse_ldc_entry(current_entry, ldc_entry, category))
+
+		if not flt(current_entry.taxable_amount, self.precision):
+			under_entries.popleft()
+
+		return entries
+
+	def _reverse_ldc_entry(self, current_entry: dict, ldc_entry: dict, category: dict) -> list:
+		ldc_part = current_entry.copy()
+		ldc_part.taxable_amount = max(current_entry.taxable_amount, -ldc_entry.taxable_amount)
+		current_entry.taxable_amount -= ldc_part.taxable_amount
+
+		return self._merge_entries(
+			deque([ldc_part]),
+			deque(),
+			category,
+			tax_rate=ldc_entry.tax_rate,
+			default_obj={
+				"under_withheld_reason": "Lower Deduction Certificate",
+				"lower_deduction_certificate": ldc_entry.lower_deduction_certificate,
+			},
+		)
+
+	def _get_original_ldc_entries(self, category: dict) -> list:
+		"""Certificate, rate and net taxable amount deducted under it for the original invoice
+		and its earlier returns, including deductions made through later documents."""
+		entry = frappe.qb.DocType(DOCTYPE)
+		taxable_amount = Sum(entry.taxable_amount)
+
+		return (
+			frappe.qb.from_(entry)
+			.select(
+				entry.lower_deduction_certificate,
+				entry.tax_rate,
+				taxable_amount.as_("taxable_amount"),
+			)
+			.where(entry.taxable_doctype == self.doc.doctype)
+			.where(entry.taxable_name.isin(self._get_original_and_return_names()))
+			.where(entry.tax_withholding_category == category.name)
+			.where(IfNull(entry.lower_deduction_certificate, "") != "")
+			.where(entry.status == "Settled")
+			.where(entry.docstatus == 1)
+			.groupby(entry.lower_deduction_certificate, entry.tax_rate)
+			.having(taxable_amount > 0)
+			.orderby(entry.lower_deduction_certificate)
+			.orderby(entry.tax_rate)
+			.run(as_dict=True)
+		)
+
+	def _get_original_and_return_names(self) -> list[str]:
+		returns = frappe.get_all(
+			self.doc.doctype,
+			filters={"return_against": self.doc.return_against, "docstatus": 1},
+			pluck="name",
+		)
+		return [self.doc.return_against, *returns]
+
 	def _update_taxable_amounts(self):
 		if not self.doc.base_net_total:
 			return
@@ -561,6 +680,10 @@ class TaxWithholdingController:
 				continue
 
 			if row.tax.is_tax_withholding_account:
+				continue
+
+			# a Valuation charge is not billed by this party, it only adds to the stock value
+			if row.tax.get("category") == "Valuation":
 				continue
 
 			item._item_total_tax_amount = flt(item._item_total_tax_amount + row.amount, precision)
@@ -1276,7 +1399,9 @@ class JournalTaxWithholding(TaxWithholdingController):
 			sum(
 				d.get(self.reverse_field) - d.get(self.party_field)
 				for d in self.doc.get("accounts")
-				if account_type_map.get(d.account) not in ("Tax", "Chargeable")
+				# GST and other taxes are not part of the base. "Chargeable" is the type of
+				# ordinary expense accounts too (Freight, Marketing), so it must stay in.
+				if account_type_map.get(d.account) != "Tax"
 				and d.account != self.party_account
 				and not d.get("is_tax_withholding_account")
 			),
@@ -1293,30 +1418,39 @@ class JournalTaxWithholding(TaxWithholdingController):
 
 	def update_tax_rows(self):
 		if not self._should_apply_tds():
-			self._cleanup_duplicate_tds_rows(None)
+			self._remove_tds_rows()
 			return
 
 		if self.has_multiple_parties:
 			frappe.throw(_("Cannot apply TDS against multiple parties in one entry"))
 
-		account_amount_map = self._calculate_account_wise_amount()
-
-		if not account_amount_map:
-			return
-
 		self._reset_existing_tds()
 
-		for account_head, tax_amount in account_amount_map.items():
+		tax_row = None
+		for account_head, tax_amount in self._calculate_account_wise_amount().items():
 			if not tax_amount:
 				continue
 
-			self._create_or_update_tds_row(account_head, tax_amount)
+			tax_row = self._create_or_update_tds_row(account_head, tax_amount)
 			self._update_party_amount(tax_amount, is_reversal=False)
+
+		# no tax is due now, so the row of an earlier save must go
+		if not tax_row:
+			self._cleanup_duplicate_tds_rows(None)
 
 		self._recalculate_totals()
 
 	def _should_apply_tds(self):
 		return self.doc.apply_tds and self.doc.voucher_type in ("Debit Note", "Credit Note")
+
+	def _remove_tds_rows(self):
+		"""Give the TDS of an earlier save back to the party and remove its row"""
+		if not (self.existing_tds_rows and self.party_row):
+			return
+
+		self._reset_existing_tds()
+		self._cleanup_duplicate_tds_rows(None)
+		self._recalculate_totals()
 
 	def _reset_existing_tds(self):
 		for row in self.existing_tds_rows:
@@ -1418,6 +1552,7 @@ class JournalTaxWithholding(TaxWithholdingController):
 		)
 
 		self._cleanup_duplicate_tds_rows(tax_row)
+		return tax_row
 
 	def _cleanup_duplicate_tds_rows(self, current_tax_row):
 		rows_to_remove = [
@@ -1435,15 +1570,12 @@ class JournalTaxWithholding(TaxWithholdingController):
 		self.doc.set_against_account()
 
 	def _is_tax_withholding_applicable(self):
-		if not self._should_apply_tds():
-			self.doc.tax_withholding_entries = []
-			return False
+		if self._should_apply_tds() and self.doc.tax_withholding_category:
+			return True
 
-		if not self.doc.tax_withholding_category:
-			self.doc.tax_withholding_entries = []
-			return False
-
-		return True
+		self.doc.tax_withholding_entries = []
+		self._remove_tds_rows()
+		return False
 
 	def _get_linked_payments(self):
 		"""Journal Entry doesn't have advances like invoices"""

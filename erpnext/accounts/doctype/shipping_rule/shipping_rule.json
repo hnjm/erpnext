@@ -3,8 +3,9 @@
  "allow_import": 1,
  "autoname": "field:label",
  "creation": "2013-06-25 11:48:03",
- "description": "Specify conditions to calculate shipping amount",
+ "description": "Works out the shipping charge on a sale or purchase.",
  "doctype": "DocType",
+ "documentation": "https://docs.frappe.io/erpnext/user/manual/en/shipping-rule",
  "engine": "InnoDB",
  "field_order": [
   "label",
@@ -90,6 +91,7 @@
   },
   {
    "default": "Fixed",
+   "description": "With a discount on Grand Total, Net Total is taken before the discount.",
    "fieldname": "calculate_based_on",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -146,10 +148,10 @@
    "options": "Project"
   }
  ],
- "icon": "fa fa-truck",
+ "icon": "truck",
  "idx": 1,
  "links": [],
- "modified": "2026-07-22 14:53:27.315435",
+ "modified": "2026-11-03 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Shipping Rule",
@@ -195,6 +197,38 @@
    "role": "Sales Master Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "role": "Delivery Manager",
+   "select": 1
+  },
+  {
+   "role": "Delivery User",
+   "select": 1
+  },
+  {
+   "role": "Maintenance Manager",
+   "select": 1
+  },
+  {
+   "role": "Maintenance User",
+   "select": 1
+  },
+  {
+   "role": "Manufacturing Manager",
+   "select": 1
+  },
+  {
+   "role": "Purchase Manager",
+   "select": 1
+  },
+  {
+   "role": "Purchase User",
+   "select": 1
+  },
+  {
+   "role": "Stock Manager",
+   "select": 1
   }
  ],
  "row_format": "Dynamic",

@@ -4,6 +4,13 @@
 frappe.ui.form.on("Item Group", {
 	onload: function (frm) {
 		frm.list_route = "Tree/Item Group";
+		frm.set_df_property(
+			"item_group_defaults",
+			"description",
+			__(
+				"All populated defaults are copied to items without Item Defaults. Group changes do not replace copied values. Empty defaults still inherit."
+			)
+		);
 
 		//get query select item group
 		frm.fields_dict["parent_item_group"].get_query = function (doc, cdt, cdn) {
@@ -76,7 +83,38 @@ frappe.ui.form.on("Item Group", {
 			};
 		};
 
-		["expenses_added_to_stock_account", "expenses_added_to_stock_contra_account"].forEach((field) => {
+		frm.set_query("default_warehouse", "item_group_defaults", (doc, cdt, cdn) => {
+			const row = locals[cdt][cdn];
+			return {
+				filters: { company: row.company, is_group: 0 },
+			};
+		});
+
+		frm.set_query("default_inventory_account", "item_group_defaults", (doc, cdt, cdn) => {
+			const row = locals[cdt][cdn];
+			return {
+				filters: { company: row.company, account_type: "Stock", is_group: 0 },
+			};
+		});
+
+		frm.set_query("default_provisional_account", "item_group_defaults", (doc, cdt, cdn) => {
+			const row = locals[cdt][cdn];
+			return {
+				filters: {
+					company: row.company,
+					root_type: ["in", ["Liability", "Asset"]],
+					is_group: 0,
+				},
+			};
+		});
+
+		[
+			"purchase_expense_account",
+			"purchase_expense_contra_account",
+			"default_cogs_account",
+			"expenses_added_to_stock_account",
+			"expenses_added_to_stock_contra_account",
+		].forEach((field) => {
 			frm.fields_dict["item_group_defaults"].grid.get_field(field).get_query = function (
 				doc,
 				cdt,

@@ -1,17 +1,30 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
-import frappe
-from frappe.utils import add_days, getdate, nowdate
 
-from erpnext.projects.doctype.task.task import CircularReferenceError, ParentIsGroupError
+from unittest.mock import patch
+
+import frappe
+from frappe.utils import add_days, get_datetime, getdate, nowdate
+
+from erpnext.projects.doctype.task.task import (
+	CircularReferenceError,
+	ParentIsGroupError,
+	set_tasks_as_overdue,
+)
+from erpnext.tests.permission_test_utils import (
+	OTHER_COMPANY,
+	as_user,
+	assert_refused,
+	make_company_fenced_user,
+)
 from erpnext.tests.utils import ERPNextTestSuite
 
 
 class TestTask(ERPNextTestSuite):
 	def test_task_total_costing_and_billing_amount(self):
 		from erpnext.projects.doctype.project.test_project import make_project
-		from erpnext.projects.doctype.timesheet.test_timesheet import make_timesheet
+		from erpnext.projects.doctype.timesheet.test_timesheet import make_timesheet, patch_usd_rate
 		from erpnext.setup.doctype.employee.test_employee import make_employee
 
 		project_name = "Test Project Costing"
@@ -20,20 +33,58 @@ class TestTask(ERPNextTestSuite):
 		task = create_task("_Test Task 1")
 		task.project = project.name
 		task.save()
-		timesheet = make_timesheet(
-			employee=employee,
-			is_billable=1,
-			currency="USD",
-			project=project.name,
-			simulate=True,
-			exchange_rate=80,
-			task=task.name,
-		)
+		with patch_usd_rate(80):
+			timesheet = make_timesheet(
+				employee=employee,
+				is_billable=1,
+				currency="USD",
+				timesheet_currency="USD",
+				project=project.name,
+				simulate=True,
+				exchange_rate=80,
+				task=task.name,
+			)
 		timesheet.reload()
 		project.reload()
 		task.reload()
-		self.assertEqual(task.total_costing_amount, 3200)
-		self.assertEqual(task.total_billing_amount, 8000)
+		# 2 hours at 20 INR, logged as 0.25 USD a hour at 80
+		self.assertEqual(task.total_costing_amount, 40)
+		self.assertEqual(task.total_billing_amount, timesheet.base_total_billable_amount)
+
+	def test_move_task_to_another_project(self):
+		from erpnext.projects.doctype.project.test_project import make_project
+
+		old_project = make_project({"project_name": "_Test Project Task Moved Out"})
+		new_project = make_project({"project_name": "_Test Project Task Moved In"})
+		completed_task = create_task("_Test Task Completed In Old Project", save=False)
+		completed_task.update({"project": old_project.name, "status": "Completed"})
+		completed_task.save()
+		moved_task = create_task("_Test Task Moved", save=False)
+		moved_task.project = old_project.name
+		moved_task.save()
+
+		moved_task.project = new_project.name
+		moved_task.save()
+
+		self.assertEqual(frappe.db.get_value("Project", old_project.name, "percent_complete"), 100)
+
+	def test_timesheet_on_cancelled_task(self):
+		from erpnext.projects.doctype.timesheet.test_timesheet import make_timesheet
+		from erpnext.setup.doctype.employee.test_employee import make_employee
+
+		task = create_task("_Test Cancelled Task With Timesheet")
+		task.status = "Cancelled"
+		task.save()
+		employee = make_employee("test_task_cancelled_timesheet@example.com", company="_Test Company")
+
+		self.assertRaises(
+			frappe.ValidationError,
+			make_timesheet,
+			employee,
+			simulate=True,
+			project=task.project,
+			task=task.name,
+		)
 
 	def test_circular_reference(self):
 		task1 = create_task("_Test Task 1", add_days(nowdate(), -15), add_days(nowdate(), -10))
@@ -53,17 +104,9 @@ class TestTask(ERPNextTestSuite):
 		task3.append("depends_on", {"task": task4.name})
 
 	def test_reschedule_dependent_task(self):
-		project = frappe.get_value("Project", {"project_name": "_Test Project"})
-
 		task1 = create_task("_Test Task 1", nowdate(), add_days(nowdate(), 10))
-
 		task2 = create_task("_Test Task 2", add_days(nowdate(), 11), add_days(nowdate(), 15), task1.name)
-		task2.get("depends_on")[0].project = project
-		task2.save()
-
 		task3 = create_task("_Test Task 3", add_days(nowdate(), 11), add_days(nowdate(), 15), task2.name)
-		task3.get("depends_on")[0].project = project
-		task3.save()
 
 		task1.update({"exp_end_date": add_days(nowdate(), 20)})
 		task1.save()
@@ -85,6 +128,239 @@ class TestTask(ERPNextTestSuite):
 		self.assertEqual(
 			getdate(frappe.db.get_value("Task", task3.name, "exp_end_date")), getdate(add_days(nowdate(), 30))
 		)
+
+	def test_child_task_does_not_reschedule_its_parent(self):
+		parent = create_task("_Test Parent Not Rescheduled", nowdate(), add_days(nowdate(), 10), is_group=1)
+		child = create_task(
+			"_Test Child Of Parent Not Rescheduled",
+			nowdate(),
+			add_days(nowdate(), 3),
+			parent_task=parent.name,
+		)
+
+		child.save()
+
+		self.assertEqual(
+			getdate(frappe.db.get_value("Task", parent.name, "exp_start_date")), getdate(nowdate())
+		)
+
+	def test_reschedule_started_dependent_tasks(self):
+		prerequisite = create_task("_Test Task Before Started Tasks", nowdate(), add_days(nowdate(), 2))
+		working = create_task(
+			"_Test Working Dependent", add_days(nowdate(), 1), add_days(nowdate(), 3), prerequisite.name
+		)
+		overdue = create_task(
+			"_Test Overdue Dependent", add_days(nowdate(), -3), add_days(nowdate(), -1), prerequisite.name
+		)
+		working.db_set("status", "Working")
+		overdue.db_set("status", "Overdue")
+
+		prerequisite.save()
+
+		for task in (working, overdue):
+			self.assertEqual(
+				getdate(frappe.db.get_value("Task", task.name, "exp_start_date")),
+				getdate(add_days(nowdate(), 3)),
+			)
+
+	def test_reschedule_past_parent_end_date_warns(self):
+		parent = create_task("_Test Group Ending Soon", nowdate(), add_days(nowdate(), 10), is_group=1)
+		prerequisite = create_task("_Test Task Before Grouped Task", nowdate(), add_days(nowdate(), 2))
+		dependent = create_task(
+			"_Test Grouped Dependent",
+			add_days(nowdate(), 3),
+			add_days(nowdate(), 5),
+			prerequisite.name,
+			parent_task=parent.name,
+		)
+
+		prerequisite.exp_end_date = add_days(nowdate(), 8)
+		prerequisite.save()
+
+		self.assertEqual(
+			getdate(frappe.db.get_value("Task", dependent.name, "exp_end_date")),
+			getdate(add_days(nowdate(), 11)),
+		)
+		self.assertIn(dependent.name, frappe.get_message_log()[-1]["message"])
+
+	def test_rescheduled_task_saves_after_reload(self):
+		parent = create_task("_Test Group Of Rescheduled", nowdate(), add_days(nowdate(), 10), is_group=1)
+		prerequisite = create_task("_Test Task Before Rescheduled", nowdate(), add_days(nowdate(), 2))
+		dependent = create_task(
+			"_Test Rescheduled Past Group",
+			add_days(nowdate(), 3),
+			add_days(nowdate(), 5),
+			prerequisite.name,
+			parent_task=parent.name,
+		)
+		prerequisite.exp_end_date = add_days(nowdate(), 8)
+		prerequisite.save()
+
+		dependent.reload()
+		dependent.status = "Working"
+		dependent.save()
+
+		dependent.exp_end_date = add_days(nowdate(), 12)
+		self.assertRaises(frappe.exceptions.InvalidDates, dependent.save)
+
+	def test_reschedule_dependent_task_from_actual_end_date(self):
+		prerequisite = create_task("_Test Task Actual End", save=False)
+		prerequisite.exp_start_date = prerequisite.exp_end_date = None
+		prerequisite.save()
+		dependent = create_task(
+			"_Test Task After Actual End", add_days(nowdate(), -5), add_days(nowdate(), -3), prerequisite.name
+		)
+
+		prerequisite.act_end_date = nowdate()
+		prerequisite.save()
+
+		self.assertEqual(
+			getdate(frappe.db.get_value("Task", dependent.name, "exp_start_date")),
+			getdate(add_days(nowdate(), 1)),
+		)
+
+	def test_reschedule_dependent_starting_on_predecessor_end_day(self):
+		prerequisite = create_task("_Test Task Ending On Dependent Start", nowdate(), add_days(nowdate(), 4))
+		dependent = create_task(
+			"_Test Task Starting On Prerequisite End",
+			add_days(nowdate(), 5),
+			add_days(nowdate(), 7),
+			prerequisite.name,
+		)
+
+		prerequisite.exp_end_date = add_days(nowdate(), 5)
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(getdate(dependent.exp_start_date), getdate(add_days(nowdate(), 6)))
+		self.assertEqual(getdate(dependent.exp_end_date), getdate(add_days(nowdate(), 8)))
+
+	def test_reschedule_keeps_dependent_times(self):
+		prerequisite = create_task(
+			"_Test Task Ending At Five", nowdate(), get_datetime(f"{add_days(nowdate(), 4)} 17:00:00")
+		)
+		dependent = create_task(
+			"_Test Task Of Nine Hours",
+			get_datetime(f"{add_days(nowdate(), 5)} 09:00:00"),
+			get_datetime(f"{add_days(nowdate(), 5)} 18:00:00"),
+			prerequisite.name,
+		)
+
+		prerequisite.exp_end_date = get_datetime(f"{add_days(nowdate(), 5)} 17:00:00")
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(dependent.exp_start_date, get_datetime(f"{add_days(nowdate(), 6)} 09:00:00"))
+		self.assertEqual(dependent.exp_end_date, get_datetime(f"{add_days(nowdate(), 6)} 18:00:00"))
+
+	def test_reschedule_keeps_dependent_starting_after_predecessor_end_on_same_day(self):
+		prerequisite = create_task(
+			"_Test Task Ending At Noon", nowdate(), get_datetime(f"{add_days(nowdate(), 5)} 12:00:00")
+		)
+		dependent = create_task(
+			"_Test Task Starting After Noon",
+			get_datetime(f"{add_days(nowdate(), 5)} 13:00:00"),
+			get_datetime(f"{add_days(nowdate(), 5)} 18:00:00"),
+			prerequisite.name,
+		)
+
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(dependent.exp_start_date, get_datetime(f"{add_days(nowdate(), 5)} 13:00:00"))
+
+	def test_reschedule_from_actual_end_after_expected_end(self):
+		prerequisite = create_task(
+			"_Test Task Running Late", add_days(nowdate(), -10), add_days(nowdate(), -6)
+		)
+		dependent = create_task(
+			"_Test Task After Late Task", add_days(nowdate(), -5), add_days(nowdate(), -3), prerequisite.name
+		)
+
+		prerequisite.act_end_date = add_days(nowdate(), -2)
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(getdate(dependent.exp_start_date), getdate(add_days(nowdate(), -1)))
+		self.assertEqual(getdate(dependent.exp_end_date), getdate(add_days(nowdate(), 1)))
+
+	def test_reschedule_dependent_without_end_date(self):
+		prerequisite = create_task("_Test Task Before Open Ended Task", nowdate(), add_days(nowdate(), 4))
+		dependent = create_task(
+			"_Test Open Ended Task", add_days(nowdate(), 5), depends_on=prerequisite.name, save=False
+		)
+		dependent.exp_end_date = None
+		dependent.save()
+
+		prerequisite.exp_end_date = add_days(nowdate(), 9)
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(getdate(dependent.exp_start_date), getdate(add_days(nowdate(), 10)))
+		self.assertIsNone(dependent.exp_end_date)
+
+	def test_reschedule_moves_dependents_back_when_end_moves_earlier(self):
+		prerequisite = create_task("_Test Task Moved Out And Back", nowdate(), add_days(nowdate(), 4))
+		dependent = create_task(
+			"_Test Task After Moved Task", add_days(nowdate(), 5), add_days(nowdate(), 7), prerequisite.name
+		)
+		last = create_task(
+			"_Test Last Task In Chain", add_days(nowdate(), 8), add_days(nowdate(), 9), dependent.name
+		)
+
+		prerequisite.exp_end_date = add_days(nowdate(), 9)
+		prerequisite.save()
+		prerequisite.exp_end_date = add_days(nowdate(), 4)
+		prerequisite.save()
+
+		for task, start, end in ((dependent, 5, 7), (last, 8, 9)):
+			task.reload()
+			self.assertEqual(getdate(task.exp_start_date), getdate(add_days(nowdate(), start)))
+			self.assertEqual(getdate(task.exp_end_date), getdate(add_days(nowdate(), end)))
+
+	def test_reschedule_moves_dependent_back_only_to_its_latest_predecessor(self):
+		prerequisite = create_task("_Test Task Moved Back Early", nowdate(), add_days(nowdate(), 9))
+		other = create_task("_Test Task Ending Later", nowdate(), add_days(nowdate(), 6))
+		dependent = create_task(
+			"_Test Task After Two Tasks", add_days(nowdate(), 10), add_days(nowdate(), 12), prerequisite.name
+		)
+		dependent.append("depends_on", {"task": other.name})
+		dependent.save()
+
+		prerequisite.exp_end_date = add_days(nowdate(), 4)
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(getdate(dependent.exp_start_date), getdate(add_days(nowdate(), 7)))
+		self.assertEqual(getdate(dependent.exp_end_date), getdate(add_days(nowdate(), 9)))
+
+	def test_reschedule_keeps_dependent_with_a_gap_when_end_moves_earlier(self):
+		prerequisite = create_task("_Test Task Moved Back Before Gap", nowdate(), add_days(nowdate(), 9))
+		dependent = create_task(
+			"_Test Task After A Gap", add_days(nowdate(), 12), add_days(nowdate(), 14), prerequisite.name
+		)
+
+		prerequisite.exp_end_date = add_days(nowdate(), 4)
+		prerequisite.save()
+
+		dependent.reload()
+		self.assertEqual(getdate(dependent.exp_start_date), getdate(add_days(nowdate(), 12)))
+
+	def test_actual_dates_outside_project_dates(self):
+		project = frappe.get_value("Project", {"project_name": "_Test Project"})
+		frappe.db.set_value(
+			"Project",
+			project,
+			{"expected_start_date": add_days(nowdate(), -10), "expected_end_date": add_days(nowdate(), 5)},
+		)
+		task = create_task("_Test Task Late Work", nowdate(), add_days(nowdate(), 3))
+		task.act_start_date = task.act_end_date = add_days(nowdate(), 8)
+
+		with patch.object(frappe, "in_test", False):
+			task.validate_parent_project_dates()
+
+			task.exp_end_date = add_days(nowdate(), 8)
+			self.assertRaises(frappe.exceptions.InvalidDates, task.validate_parent_project_dates)
 
 	def test_close_assignment(self):
 		if not frappe.db.exists("Task", "Test Close Assignment"):
@@ -129,14 +405,57 @@ class TestTask(ERPNextTestSuite):
 		self.assertEqual(todo.allocated_to, "test@example.com")
 		self.assertEqual(todo.status, "Closed")
 
+	def test_complete_assigned_task_without_task_read_permission(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+		from frappe.desk.form import assign_to
+
+		task = create_task("_Test Assigned Task Completed By Timesheet")
+		assign_to.add({"doctype": task.doctype, "name": task.name, "assign_to": ["test@example.com"]})
+		user = create_user("test_task_timesheet_user@example.com", "HR User")
+
+		with self.set_user(user.name):
+			task.status = "Completed"
+			task.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value(
+				"ToDo", {"reference_type": task.doctype, "reference_name": task.name}, "status"
+			),
+			"Closed",
+		)
+
 	def test_overdue(self):
 		task = create_task("Testing Overdue", add_days(nowdate(), -10), add_days(nowdate(), -5))
-
-		from erpnext.projects.doctype.task.task import set_tasks_as_overdue
 
 		set_tasks_as_overdue()
 
 		self.assertEqual(frappe.db.get_value("Task", task.name, "status"), "Overdue")
+
+	def test_overdue_cleared_when_end_date_moves_out(self):
+		task = create_task("_Test Task Overdue Moved Out", add_days(nowdate(), -10), add_days(nowdate(), -5))
+		set_tasks_as_overdue()
+
+		task.reload()
+		task.exp_end_date = add_days(nowdate(), 10)
+		task.save()
+
+		self.assertEqual(task.status, "Open")
+
+	def test_task_due_today_is_not_overdue(self):
+		task = create_task("_Test Task Due Today", add_days(nowdate(), -2), nowdate())
+
+		set_tasks_as_overdue()
+
+		self.assertEqual(frappe.db.get_value("Task", task.name, "status"), "Open")
+
+	def test_template_task_is_not_overdue(self):
+		task = create_task(
+			"_Test Template Task Overdue", add_days(nowdate(), -10), add_days(nowdate(), -5), is_template=1
+		)
+
+		set_tasks_as_overdue()
+
+		self.assertEqual(frappe.db.get_value("Task", task.name, "status"), "Template")
 
 	def test_parent_task_must_be_group(self):
 		parent_task = create_task(
@@ -151,6 +470,123 @@ class TestTask(ERPNextTestSuite):
 		)
 
 		self.assertRaises(ParentIsGroupError, child_task.save)
+
+	def test_parent_task_must_be_in_the_same_project(self):
+		other_project = frappe.get_doc(
+			doctype="Project", project_name="_Test Parent Task Project", company="_Test Company"
+		).insert()
+		group = frappe.get_doc(
+			doctype="Task", subject="_Test Other Project Group", project=other_project.name, is_group=1
+		).insert()
+
+		child_task = create_task("_Test Child In Another Project", parent_task=group.name, save=False)
+		self.assertRaises(frappe.ValidationError, child_task.save)
+
+		child_without_project = frappe.get_doc(
+			doctype="Task", subject="_Test Child Without Project", parent_task=group.name
+		).insert()
+		self.assertEqual(child_without_project.project, other_project.name)
+
+	def test_child_takes_the_company_of_the_inherited_project(self):
+		project = frappe.get_doc(
+			doctype="Project", project_name="_Test Inherited Company Project", company="_Test Company 1"
+		).insert()
+		group = frappe.get_doc(
+			doctype="Task", subject="_Test Inherited Company Group", project=project.name, is_group=1
+		).insert()
+
+		child = frappe.get_doc(
+			doctype="Task", subject="_Test Inherited Company Child", parent_task=group.name
+		).insert()
+		self.assertEqual(child.company, "_Test Company 1")
+
+	def test_child_with_blank_project_saves_under_a_group_without_project(self):
+		group = frappe.get_doc(doctype="Task", subject="_Test Group Without Project", is_group=1).insert()
+
+		child = frappe.get_doc(
+			doctype="Task", subject="_Test Child With Blank Project", project="", parent_task=group.name
+		).insert()
+		self.assertFalse(child.project)
+
+	def test_group_with_children_cannot_move_to_another_project(self):
+		from erpnext.projects.doctype.project.test_project import make_project
+
+		group = create_task("_Test Group Moving Project", is_group=1)
+		create_task("_Test Child Of Group Moving Project", parent_task=group.name)
+		group.reload()
+
+		group.project = make_project({"project_name": "_Test Project Group Target"}).name
+		self.assertRaises(frappe.ValidationError, group.save)
+
+		group_without_project = frappe.get_doc(
+			doctype="Task", subject="_Test Group Without Project", is_group=1
+		).insert()
+		frappe.get_doc(
+			doctype="Task", subject="_Test Child Without Project", parent_task=group_without_project.name
+		).insert()
+		group_without_project.reload()
+		group_without_project.project = group.project
+		self.assertRaises(frappe.ValidationError, group_without_project.save)
+
+	def test_open_task_under_completed_parent(self):
+		parent = create_task("_Test Completed Parent", is_group=1)
+		parent.status = "Completed"
+		parent.save()
+		child = create_task("_Test Open Child Of Completed Parent", parent_task=parent.name, save=False)
+
+		self.assertRaises(frappe.ValidationError, child.save)
+
+	def test_group_cannot_end_before_its_child(self):
+		group = create_task("_Test Group Ending Before Child", nowdate(), add_days(nowdate(), 10), is_group=1)
+		create_task(
+			"_Test Child Ending After Group",
+			add_days(nowdate(), 1),
+			add_days(nowdate(), 9),
+			parent_task=group.name,
+		)
+		group.reload()
+
+		group.exp_end_date = add_days(nowdate(), 5)
+		self.assertRaises(frappe.exceptions.InvalidDates, group.save)
+
+		group.reload()
+		group.exp_end_date = add_days(nowdate(), 9)
+		group.save()
+
+	def test_group_with_children_cannot_become_non_group(self):
+		group = create_task("_Test Group Unticked With Child", is_group=1)
+		create_task("_Test Child Of Unticked Group", parent_task=group.name)
+		group.reload()
+
+		group.is_group = 0
+		self.assertRaises(frappe.ValidationError, group.save)
+
+	def test_end_date_from_expected_time_is_checked_against_group(self):
+		group = create_task("_Test Group For Expected Time", nowdate(), add_days(nowdate(), 5), is_group=1)
+		child = create_task(
+			"_Test Child Ending From Expected Time",
+			add_days(nowdate(), 4),
+			parent_task=group.name,
+			save=False,
+		)
+		child.exp_end_date = None
+		child.expected_time = 48
+
+		self.assertRaises(frappe.exceptions.InvalidDates, child.save)
+
+	def test_end_date_from_expected_time_is_checked_against_project(self):
+		project = frappe.get_value("Project", {"project_name": "_Test Project"})
+		frappe.db.set_value(
+			"Project",
+			project,
+			{"expected_start_date": nowdate(), "expected_end_date": add_days(nowdate(), 10)},
+		)
+		task = create_task("_Test Task Ending After Project", add_days(nowdate(), 9), save=False)
+		task.exp_end_date = None
+		task.expected_time = 72
+
+		with patch.object(frappe, "in_test", False):
+			self.assertRaises(frappe.exceptions.InvalidDates, task.save)
 
 	def test_expected_end_date(self):
 		task = create_task("Testing End Date", add_days(nowdate(), 1), add_days(nowdate(), 5))
@@ -169,6 +605,37 @@ class TestTask(ERPNextTestSuite):
 		self.assertEqual(frappe.db.get_value("Task", task1.name, "status"), "Completed")
 		self.assertEqual(frappe.db.get_value("Task", task2.name, "status"), "Completed")
 
+	def test_completing_sets_completed_on(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		task = create_task("_Test Complete Without Date")
+		user = create_user("test_task_completer@example.com", "Projects User")
+		with self.set_user(user.name):
+			frappe.set_value("Task", task.name, "status", "Completed")
+
+		self.assertEqual(frappe.db.get_value("Task", task.name, "completed_on"), getdate())
+
+	def test_negative_progress(self):
+		task = create_task("_Test Task Negative Progress", save=False)
+		task.progress = -50
+
+		self.assertRaises(frappe.ValidationError, task.save)
+
+	def test_reopen_completed_task(self):
+		task = create_task("_Test Task Reopened")
+		task.status = "Completed"
+		task.save()
+
+		task.status = "Open"
+		task.save()
+		self.assertEqual((task.progress, task.completed_on), (0, None))
+
+		task.status = "Completed"
+		task.save()
+		task.update({"status": "Working", "progress": 60})
+		task.save()
+		self.assertEqual(task.progress, 60)
+
 	def test_add_multiple_tasks_under_parent(self):
 		from erpnext.projects.doctype.task.task import add_multiple_tasks
 
@@ -180,6 +647,18 @@ class TestTask(ERPNextTestSuite):
 		children = frappe.get_all("Task", filters={"parent_task": parent.name}, pluck="subject")
 		# the row with a blank subject is skipped
 		self.assertEqual(sorted(children), ["_Test Bulk Child A", "_Test Bulk Child B"])
+
+	def test_add_multiple_tasks_under_project_root(self):
+		from erpnext.projects.doctype.task.task import add_multiple_tasks
+
+		project = frappe.get_value("Project", {"project_name": "_Test Project"})
+
+		add_multiple_tasks(frappe.as_json([{"subject": "_Test Bulk Root Task"}]), project, project)
+
+		self.assertEqual(
+			frappe.db.get_value("Task", {"subject": "_Test Bulk Root Task"}, ["project", "parent_task"]),
+			(project, None),
+		)
 
 	def test_template_task_dependency_must_be_template(self):
 		normal_task = create_task("_Test Non Template Dependency")
@@ -194,12 +673,180 @@ class TestTask(ERPNextTestSuite):
 
 		self.assertRaises(frappe.ValidationError, parent.delete)
 
+	def test_move_child_task_to_another_parent(self):
+		old_parent = create_task("_Test Old Parent", is_group=1)
+		new_parent = create_task("_Test New Parent", is_group=1)
+		child = create_task("_Test Moved Child", parent_task=old_parent.name)
+
+		child.parent_task = new_parent.name
+		child.save()
+
+		self.assertFalse(frappe.get_all("Task Depends On", filters={"parent": old_parent.name}))
+		self.assertEqual(
+			frappe.get_all("Task Depends On", filters={"parent": new_parent.name}, pluck="task"), [child.name]
+		)
+
+	def test_moving_child_out_does_not_reschedule_old_parent(self):
+		group = create_task("_Test Group Left By Child", nowdate(), add_days(nowdate(), 19), is_group=1)
+		child = create_task(
+			"_Test Child Leaving Group",
+			add_days(nowdate(), 4),
+			add_days(nowdate(), 9),
+			parent_task=group.name,
+		)
+		dependent = create_task(
+			"_Test Task After Left Group", add_days(nowdate(), 20), add_days(nowdate(), 21), group.name
+		)
+
+		child.parent_task = None
+		child.save()
+
+		self.assertEqual(
+			getdate(frappe.db.get_value("Task", group.name, "exp_end_date")), getdate(add_days(nowdate(), 19))
+		)
+		self.assertEqual(
+			getdate(frappe.db.get_value("Task", dependent.name, "exp_start_date")),
+			getdate(add_days(nowdate(), 20)),
+		)
+
 	def test_child_task_registers_in_parent_depends_on(self):
 		parent = create_task("_Test Parent Depends On", is_group=1)
 		child = create_task("_Test Child Depends On", parent_task=parent.name)
 
 		parent.reload()
 		self.assertIn(child.name, [row.task for row in parent.depends_on])
+
+	def test_delete_child_task_without_parent_write_permission(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		from erpnext.projects.doctype.project.test_project import make_project
+
+		parent = create_task("_Test Parent In Restricted Project", is_group=1)
+		child = create_task("_Test Child In Permitted Project", parent_task=parent.name)
+		child_project = make_project({"project_name": "_Test Project Child Only"}).name
+		frappe.db.set_value("Task", child.name, "project", child_project)
+		user = create_user("test_task_child_deleter@example.com", "Projects User")
+		frappe.permissions.add_user_permission("Project", child_project, user.name)
+
+		with self.set_user(user.name):
+			frappe.delete_doc("Task", child.name)
+
+		self.assertFalse(frappe.db.exists("Task", child.name))
+
+	def test_child_tasks_are_listed_only_for_a_readable_task(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		from erpnext.projects.doctype.project.test_project import make_project
+		from erpnext.projects.doctype.task.task import check_if_child_exists
+
+		group = create_task("_Test Group Hidden From User", is_group=1)
+		create_task("_Test Child Hidden From User", parent_task=group.name)
+		user = create_user("test_task_child_lister@example.com", "Projects User")
+		other_project = make_project({"project_name": "_Test Project Child Lister"}).name
+		frappe.permissions.add_user_permission("Project", other_project, user.name)
+
+		with self.set_user(user.name):
+			self.assertRaises(frappe.PermissionError, check_if_child_exists, group.name)
+
+	def test_root_tasks_are_not_listed_as_children_of_an_empty_name(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		from erpnext.projects.doctype.project.test_project import make_project
+		from erpnext.projects.doctype.task.task import check_if_child_exists
+
+		create_task("_Test Root Hidden From User")
+		user = create_user("test_task_root_lister@example.com", "Projects User")
+		other_project = make_project({"project_name": "_Test Project Root Lister"}).name
+		frappe.permissions.add_user_permission("Project", other_project, user.name)
+
+		with self.set_user(user.name):
+			self.assertRaises(frappe.DoesNotExistError, check_if_child_exists, "")
+
+	def test_task_needs_access_to_its_project(self):
+		own_project, other_project, user = make_project_access_fixtures("Task Joined")
+
+		with as_user(user):
+			task = insert_completed_task("_Test Fenced Task", own_project)
+			self.assertEqual(frappe.db.get_value("Project", own_project, "percent_complete"), 100)
+
+			assert_refused(self, insert_completed_task, "_Test Fenced Task", other_project)
+			task.project = other_project
+			assert_refused(self, task.save)
+
+		self.assertEqual(
+			frappe.db.get_value("Project", other_project, ["status", "percent_complete"]), ("Open", 0)
+		)
+
+	def test_task_changes_need_access_to_its_project(self):
+		_own_project, other_project, user = make_project_access_fixtures("Task Left")
+		task = insert_completed_task("_Test Fenced Left Task", other_project).name
+		open_task = frappe.get_doc(
+			{"doctype": "Task", "subject": "_Test Fenced Open Task", "project": other_project}
+		).insert()
+		# tasks the user may edit, in a project the user may not pick
+		frappe.db.set_value("Task", {"name": ["in", [task, open_task.name]]}, "company", "_Test Company")
+
+		with as_user(user):
+			for name, changes in (
+				(task, {"project": None}),
+				(task, {"status": "Open"}),
+				(task, {"task_weight": 5}),
+				(open_task.name, {"progress": 50}),
+			):
+				changed = frappe.get_doc("Task", name)
+				changed.update(changes)
+				assert_refused(self, changed.save)
+			assert_refused(self, frappe.get_doc("Task", task).delete)
+
+			edited = frappe.get_doc("Task", task)
+			edited.description = "Edited by a user who cannot pick the project"
+			edited.save()
+
+		self.assertEqual(
+			frappe.db.get_value("Project", other_project, ["status", "percent_complete"]), ("Open", 50)
+		)
+
+	def test_web_form_task_needs_access_to_the_project_it_leaves(self):
+		from frappe.website.doctype.web_form.web_form import accept
+		from frappe.website.doctype.web_form.web_form import delete as delete_from_web_form
+
+		own_project, other_project, user = make_project_access_fixtures("Task Web Form")
+		task = insert_completed_task("_Test Web Form Task", other_project)
+		frappe.db.set_value("Task", task.name, "owner", user)
+		move_out = {"doctype": "Task", "name": task.name, "subject": task.subject, "project": own_project}
+
+		try:
+			with as_user(user):
+				assert_refused(self, accept, "tasks", move_out)
+				assert_refused(self, delete_from_web_form, "tasks", task.name)
+			self.assertEqual(frappe.db.get_value("Project", other_project, "percent_complete"), 100)
+
+			project = frappe.get_doc("Project", other_project)
+			project.append("users", {"user": user})
+			project.save()
+			with as_user(user):
+				accept("tasks", move_out)
+			self.assertEqual(frappe.db.get_value("Task", task.name, "project"), own_project)
+		finally:
+			frappe.flags.in_web_form = False
+
+
+def make_project_access_fixtures(label):
+	"""A project of _Test Company, a project of another company, and a Projects User limited to _Test Company."""
+	from erpnext.projects.doctype.project.test_project import make_project
+
+	own_project = make_project({"project_name": f"_Test Project {label} Own"}).name
+	other_project = make_project(
+		{"project_name": f"_Test Project {label} Other", "company": OTHER_COMPANY}
+	).name
+	email = f"{label.lower().replace(' ', '-')}@example.com"
+	return own_project, other_project, make_company_fenced_user(email, ["Projects User"], "_Test Company")
+
+
+def insert_completed_task(subject, project):
+	return frappe.get_doc(
+		{"doctype": "Task", "subject": subject, "project": project, "status": "Completed"}
+	).insert()
 
 
 def create_task(

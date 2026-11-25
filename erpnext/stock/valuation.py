@@ -117,6 +117,7 @@ class FIFOValuation(BinWiseValuation):
 			rate_generator = lambda: 0.0  # noqa
 
 		consumed_bins = []
+		matching_rate = round_rate(outgoing_rate)
 		while qty:
 			if not len(self.queue):
 				# rely on rate generator.
@@ -124,9 +125,8 @@ class FIFOValuation(BinWiseValuation):
 
 			index = None
 			if outgoing_rate > 0 or is_return_purchase_entry:
-				# Find the entry where rate matched with outgoing rate
 				for idx, fifo_bin in enumerate(self.queue):
-					if fifo_bin[RATE] == outgoing_rate:
+					if round_rate(fifo_bin[RATE]) == matching_rate:
 						index = idx
 						break
 
@@ -220,20 +220,29 @@ class LIFOValuation(BinWiseValuation):
 
 		args:
 		        qty: quantity to remove
-		        rate: outgoing rate - ignored. Kept for backwards compatibility.
+		        outgoing_rate: rate of the bin a purchase return takes first
 		        rate_generator: function to be called if stack is not found and rate is required.
 		"""
 		if not rate_generator:
 			rate_generator = lambda: 0.0  # noqa
 
 		consumed_bins = []
+		matching_rate = round_rate(outgoing_rate)
 		while qty:
 			if not len(self.stack):
 				# rely on rate generator.
 				self.stack.append([0, rate_generator()])
 
-			# start at the end.
 			index = -1
+			if is_return_purchase_entry:
+				index = next(
+					(
+						idx
+						for idx in reversed(range(len(self.stack)))
+						if round_rate(self.stack[idx][RATE]) == matching_rate
+					),
+					-1,
+				)
 
 			stock_bin = self.stack[index]
 			if qty >= stock_bin[QTY]:
@@ -255,6 +264,11 @@ class LIFOValuation(BinWiseValuation):
 				qty = 0
 
 		return consumed_bins
+
+
+def round_rate(rate: float) -> float:
+	"""Round a rate to database precision, to match bin rates without changing them."""
+	return flt(rate, 9, rounding_method="Commercial Rounding")
 
 
 def round_off_if_near_zero(number: float, precision: int = 7) -> float:

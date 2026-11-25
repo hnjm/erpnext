@@ -21,7 +21,7 @@ function get_filters() {
 	function get_dimensions() {
 		let result = [];
 		frappe.call({
-			method: "erpnext.accounts.doctype.accounting_dimension.accounting_dimension.get_dimensions",
+			method: "erpnext.accounts.doctype.accounting_dimension.accounting_dimension.get_dimensions_for_user",
 			args: {
 				with_cost_center_and_project: true,
 			},
@@ -101,7 +101,7 @@ function get_filters() {
 
 				const filters = budget_against !== "Branch" && company ? { company: company } : {};
 
-				return frappe.db.get_link_options(budget_against, txt, filters);
+				return erpnext.utils.get_link_options(budget_against, txt, filters);
 			},
 		},
 		{

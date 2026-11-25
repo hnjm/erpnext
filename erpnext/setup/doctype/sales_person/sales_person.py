@@ -7,13 +7,14 @@ from itertools import chain
 
 import frappe
 from frappe import _
-from frappe.query_builder import Interval
-from frappe.query_builder.functions import Count, CurDate, UnixTimestamp
-from frappe.utils import flt
+from frappe.query_builder.functions import Count, UnixTimestamp
+from frappe.utils import add_years, flt, get_link_to_form, nowdate
 from frappe.utils.data import get_url_to_list
-from frappe.utils.nestedset import NestedSet, get_root_of
+from frappe.utils.nestedset import NestedSet
 
 from erpnext import get_default_currency
+from erpnext.setup.doctype.target_detail.target_detail import validate_targets
+from erpnext.setup.utils import set_root_as_default_parent
 
 
 class SalesPerson(NestedSet):
@@ -43,11 +44,11 @@ class SalesPerson(NestedSet):
 	nsm_parent_field = "parent_sales_person"
 
 	def validate(self):
+		validate_targets(self.get("targets"))
 		if not self.enabled:
 			self.validate_sales_person()
 
-		if not self.parent_sales_person:
-			self.parent_sales_person = get_root_of("Sales Person")
+		set_root_as_default_parent(self)
 
 		for d in self.get("targets") or []:
 			if not flt(d.target_qty) and not flt(d.target_amount):
@@ -88,23 +89,49 @@ class SalesPerson(NestedSet):
 		self.validate_one_root()
 
 	def validate_sales_person(self):
+		if reason := self.get_disable_blocker():
+			frappe.throw(reason)
+
+	def get_disable_blocker(self) -> str | None:
+		"""Return why this Sales Person cannot be disabled, or None when it can."""
 		sales_team = frappe.qb.DocType("Sales Team")
 
-		query = (
+		linked_to_customer = (
 			frappe.qb.from_(sales_team)
 			.select(sales_team.sales_person)
 			.where((sales_team.sales_person == self.name) & (sales_team.parenttype == "Customer"))
-			.groupby(sales_team.sales_person)
-		).run(as_dict=True)
-
-		if query:
-			frappe.throw(
-				_("The Sales Person is linked with {0}").format(
-					frappe.bold(
-						f"""<a href="{get_url_to_list("Customer")}?sales_person={self.name}">{"Customers"}</a>"""
-					)
+			.limit(1)
+		).run()
+		if linked_to_customer:
+			return _("The Sales Person is linked with {0}").format(
+				frappe.bold(
+					f"""<a href="{get_url_to_list("Customer")}?sales_person={self.name}">{"Customers"}</a>"""
 				)
 			)
+
+		for doctype in ("Sales Order", "Delivery Note"):
+			transaction = frappe.qb.DocType(doctype)
+			unfinished = (
+				transaction.status.notin(("Completed", "Closed"))
+				if doctype == "Sales Order"
+				else transaction.status.isin(("To Bill", "Partially Billed"))
+			)
+			linked_transactions = (
+				frappe.qb.from_(transaction)
+				.join(sales_team)
+				.on((transaction.name == sales_team.parent) & (sales_team.parenttype == doctype))
+				.select(transaction.name)
+				.where((sales_team.sales_person == self.name) & (transaction.docstatus == 1) & unfinished)
+				.limit(1)
+			).run()
+			if linked_transactions:
+				return _("Sales Person {0} cannot be disabled because {1} {2} is unfinished.").format(
+					frappe.bold(self.name),
+					_(doctype),
+					get_link_to_form(doctype, linked_transactions[0][0]),
+				)
+
+		return None
 
 	def get_email_id(self):
 		if self.employee:
@@ -124,6 +151,13 @@ class SalesPerson(NestedSet):
 				)
 
 
+@frappe.whitelist()
+def get_commission_rate(sales_person: str) -> float:
+	person = frappe.get_doc("Sales Person", sales_person)
+	person.check_permission("select")
+	return flt(person.commission_rate)
+
+
 def on_doctype_update():
 	frappe.db.add_index("Sales Person", ["lft", "rgt"])
 
@@ -136,10 +170,11 @@ def get_timeline_data(doctype: str, name: str) -> dict[int, int]:
 		return dict(
 			frappe.qb.from_(transaction)
 			.join(sales_team)
-			.on(transaction.name == sales_team.parent)
+			.on((transaction.name == sales_team.parent) & (sales_team.parenttype == doctype))
 			.select(UnixTimestamp(transaction[date_field]), Count("*"))
 			.where(sales_team.sales_person == name)
-			.where(transaction[date_field] > CurDate() - Interval(years=1))
+			.where(transaction.docstatus == 1)
+			.where(transaction[date_field] > add_years(nowdate(), -1))
 			.groupby(transaction[date_field])
 			.run()
 		)

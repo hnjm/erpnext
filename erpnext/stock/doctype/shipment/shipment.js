@@ -4,7 +4,7 @@
 frappe.ui.form.on("Shipment", {
 	address_query: function (frm, link_doctype, link_name, is_your_company_address) {
 		return {
-			query: "frappe.contacts.doctype.address.address.address_query",
+			query: "erpnext.accounts.custom.address.address_query",
 			filters: {
 				link_doctype: link_doctype,
 				link_name: link_name,
@@ -80,30 +80,52 @@ frappe.ui.form.on("Shipment", {
 		frm.set_value("pickup", frm.doc[pickup_from]);
 	},
 	set_pickup_company_address: function (frm) {
-		frappe.db.get_value(
-			"Address",
-			{
-				address_title: frm.doc.pickup_company,
-				is_your_company_address: 1,
+		const company = frm.doc.pickup_company;
+		frappe.call({
+			method: "erpnext.accounts.custom.address.address_query",
+			args: {
+				doctype: "Address",
+				txt: "",
+				searchfield: "name",
+				start: 0,
+				page_len: 1,
+				filters: {
+					address_title: company,
+					link_doctype: "Company",
+					link_name: company,
+					is_your_company_address: 1,
+				},
 			},
-			"name",
-			(r) => {
-				frm.set_value("pickup_address_name", r.name);
-			}
-		);
+			callback(r) {
+				if (frm.doc.pickup_company === company) {
+					frm.set_value("pickup_address_name", r.message?.[0]?.[0] || "");
+				}
+			},
+		});
 	},
 	set_delivery_company_address: function (frm) {
-		frappe.db.get_value(
-			"Address",
-			{
-				address_title: frm.doc.delivery_company,
-				is_your_company_address: 1,
+		const company = frm.doc.delivery_company;
+		frappe.call({
+			method: "erpnext.accounts.custom.address.address_query",
+			args: {
+				doctype: "Address",
+				txt: "",
+				searchfield: "name",
+				start: 0,
+				page_len: 1,
+				filters: {
+					address_title: company,
+					link_doctype: "Company",
+					link_name: company,
+					is_your_company_address: 1,
+				},
 			},
-			"name",
-			(r) => {
-				frm.set_value("delivery_address_name", r.name);
-			}
-		);
+			callback(r) {
+				if (frm.doc.delivery_company === company) {
+					frm.set_value("delivery_address_name", r.message?.[0]?.[0] || "");
+				}
+			},
+		});
 	},
 	pickup_from_type: function (frm) {
 		if (frm.doc.pickup_from_type == "Company") {
@@ -174,7 +196,10 @@ frappe.ui.form.on("Shipment", {
 							__("Email or Phone/Mobile of the Contact are mandatory to continue.") +
 								"</br>" +
 								__("Please set Email/Phone for the contact") +
-								` <a href='/app/contact/${contact_name}'>${contact_name}</a>`
+								` <a href="${frappe.utils.get_form_link(
+									"Contact",
+									contact_name
+								)}">${frappe.utils.escape_html(contact_name)}</a>`
 						);
 					}
 					let contact_display = r.message.contact_display;
@@ -426,7 +451,7 @@ frappe.ui.form.on("Shipment", {
 	remove_email_row: function (frm, table, fieldname) {
 		$.each(frm.doc[table] || [], function (i, detail) {
 			if (detail.email === fieldname) {
-				cur_frm.get_field(table).grid.grid_rows[i].remove();
+				frm.get_field(table).grid.grid_rows[i].remove();
 			}
 		});
 	},

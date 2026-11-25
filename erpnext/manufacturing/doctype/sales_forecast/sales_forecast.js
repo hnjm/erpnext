@@ -1,5 +1,6 @@
 frappe.ui.form.on("Sales Forecast", {
 	refresh(frm) {
+		frm.fields_dict.items.grid.update_docfield_property("demand_qty", "reqd", 1);
 		frm.trigger("set_query_filters");
 		frm.trigger("set_custom_buttons");
 		frm.set_df_property("items", "cannot_add_rows", true);
@@ -31,19 +32,24 @@ frappe.ui.form.on("Sales Forecast", {
 			doc: frm.doc,
 			freeze: true,
 			callback: function (r) {
-				frm.reload_doc();
+				frm.dirty();
 			},
 		});
 	},
 
 	set_custom_buttons(frm) {
 		if (frm.doc.docstatus === 1 && frm.doc.status === "Planned") {
-			frm.add_custom_button(__("Create MPS"), () => {
-				frappe.model.open_mapped_doc({
-					method: "erpnext.manufacturing.doctype.sales_forecast.sales_forecast.create_mps",
-					frm: frm,
-				});
-			}).addClass("btn-primary");
+			frm.add_custom_button(
+				__("Create MPS"),
+				() => {
+					frappe.model.open_mapped_doc({
+						method: "erpnext.manufacturing.doctype.sales_forecast.sales_forecast.create_mps",
+						frm: frm,
+					});
+				},
+				null,
+				"primary"
+			);
 		}
 	},
 });

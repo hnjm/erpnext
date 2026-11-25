@@ -6,8 +6,9 @@
 from operator import itemgetter
 
 import frappe
-from frappe.query_builder.functions import IfNull
 from frappe.utils import flt
+
+from erpnext.manufacturing.doctype.bom.services.costing import get_exploded_good_qty
 
 
 class BOMExplodedItemsService:
@@ -47,15 +48,21 @@ class BOMExplodedItemsService:
 			}
 		)
 
-	def add_to_cur_exploded_items(self, args):
-		key = args.item_code
-		if args.operation:
-			key = (args.item_code, args.operation)
+	@staticmethod
+	def get_key(row):
+		return (row.item_code, row.operation) if row.operation else row.item_code
 
-		if self.doc.cur_exploded_items.get(key):
-			self.doc.cur_exploded_items[key]["stock_qty"] += args.stock_qty
-		else:
+	def add_to_cur_exploded_items(self, args):
+		key = self.get_key(args)
+		existing = self.doc.cur_exploded_items.get(key)
+		if not existing:
 			self.doc.cur_exploded_items[key] = args
+			return
+
+		# the same item at another rate, e.g. from a sub-assembly: merge at the weighted rate
+		amount = flt(existing.stock_qty) * flt(existing.rate) + flt(args.stock_qty) * flt(args.rate)
+		existing.stock_qty += args.stock_qty
+		existing.rate = amount / existing.stock_qty
 
 	def get_child_exploded_items(self, bom_no, stock_qty, operation=None):
 		"""Add all items from Flat BOM of child BOM"""
@@ -67,8 +74,7 @@ class BOMExplodedItemsService:
 		# Did not use qty_consumed_per_unit in the query, as it leads to rounding loss
 		bom_item = frappe.qb.DocType("BOM Explosion Item")
 		bom = frappe.qb.DocType("BOM")
-		qty_consumed_per_unit = (bom_item.stock_qty / IfNull(bom.quantity, 1)).as_("qty_consumed_per_unit")
-		return (
+		items = (
 			frappe.qb.from_(bom_item)
 			.join(bom)
 			.on(bom_item.parent == bom.name)
@@ -84,10 +90,15 @@ class BOMExplodedItemsService:
 				bom_item.rate,
 				bom_item.include_item_in_manufacturing,
 				bom_item.sourced_by_supplier,
-				qty_consumed_per_unit,
+				bom.quantity,
+				bom.process_loss_qty,
+				bom.is_phantom_bom,
 			)
 			.where((bom.name == bom_no) & (bom.docstatus == 1))
 		).run(as_dict=1)
+		for d in items:
+			d.qty_consumed_per_unit = flt(d.stock_qty) / get_exploded_good_qty(d)
+		return items
 
 	@staticmethod
 	def _child_exploded_row(d, stock_qty, operation):

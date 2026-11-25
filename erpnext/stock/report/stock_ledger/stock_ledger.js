@@ -2,6 +2,7 @@
 // License: GNU General Public License v3. See license.txt
 
 frappe.query_reports["Stock Ledger"] = {
+	export_hidden_cols: true,
 	filters: [
 		{
 			fieldname: "company",
@@ -33,7 +34,7 @@ frappe.query_reports["Stock Ledger"] = {
 			get_data: function (txt) {
 				const company = frappe.query_report.get_filter_value("company");
 
-				return frappe.db.get_link_options("Warehouse", txt, {
+				return erpnext.utils.get_link_options("Warehouse", txt, {
 					company: company,
 				});
 			},
@@ -88,9 +89,12 @@ frappe.query_reports["Stock Ledger"] = {
 		},
 		{
 			fieldname: "brand",
-			label: __("Brand"),
-			fieldtype: "Link",
+			label: __("Brands"),
+			fieldtype: "MultiSelectList",
 			options: "Brand",
+			get_data: function (txt) {
+				return frappe.db.get_link_options("Brand", txt);
+			},
 		},
 		{
 			fieldname: "voucher_no",
@@ -125,7 +129,10 @@ frappe.query_reports["Stock Ledger"] = {
 		},
 	],
 	formatter: function (value, row, column, data, default_formatter) {
-		value = default_formatter(value, row, column, data);
+		value = erpnext.utils.format_serial_batch_number(value, row, column, data, default_formatter);
+		if (data && data.stock_ledger_entry && column.fieldname == erpnext.stock_ledger_rate_column(data)) {
+			value = erpnext.stock_ledger_explain_link(value, data);
+		}
 		if (column.fieldname == "out_qty" && data && data.out_qty < 0) {
 			value = "<span style='color:red'>" + value + "</span>";
 		} else if (column.fieldname == "in_qty" && data && data.in_qty > 0) {
@@ -141,6 +148,25 @@ frappe.query_reports["Stock Ledger"] = {
 			frappe.set_route("query-report", "Stock Balance", filters);
 		});
 	},
+};
+
+erpnext.stock_ledger_rate_column = function (data) {
+	return data.out_qty < 0 ? "in_out_rate" : "incoming_rate";
+};
+
+erpnext.stock_ledger_explain_link = function (value, data) {
+	const params = new URLSearchParams({
+		item_code: data.item_code,
+		warehouse: data.warehouse,
+		entry: data.stock_ledger_entry,
+	});
+	const title = __("How was this calculated?");
+	const icon = frappe.utils.icon("info", "xs");
+	const link = `<a href="${frappe.router.make_url([
+		"valuation-rate-breakdown",
+	])}?${params}" title="${title}" aria-label="${title}" class="d-inline-flex flex-shrink-0">${icon}</a>`;
+	const text = $("<div>").html(value).text();
+	return `<div class="d-flex align-items-center justify-content-end" style="gap: 4px">${link}<span class="ellipsis">${text}</span></div>`;
 };
 
 erpnext.utils.add_inventory_dimensions("Stock Ledger", 10);

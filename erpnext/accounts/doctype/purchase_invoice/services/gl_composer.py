@@ -10,6 +10,7 @@ from erpnext.accounts.general_ledger import get_round_off_account_and_cost_cente
 from erpnext.accounts.services.base_gl_composer import BaseGLComposer
 from erpnext.accounts.services.taxes import TaxService
 from erpnext.accounts.utils import get_account_currency
+from erpnext.controllers.buying_controller import get_stock_qty, get_transit_amount
 
 
 class PurchaseInvoiceGLComposer(BaseGLComposer):
@@ -130,6 +131,9 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 		from erpnext.accounts.doctype.purchase_invoice.purchase_invoice import (
 			get_purchase_document_details,
 		)
+		from erpnext.stock.doctype.landed_cost_voucher.landed_cost_voucher import (
+			get_custom_dimension_overrides,
+		)
 
 		doc = self.doc
 		tax_service = TaxService(doc)
@@ -173,7 +177,10 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 		)
 
 		for item in doc.get("items"):
-			if flt(item.base_net_amount) or (doc.get("update_stock") and item.valuation_rate):
+			if flt(item.base_net_amount) or (
+				doc.get("update_stock")
+				and (item.valuation_rate or voucher_wise_stock_value.get((item.name, item.warehouse)))
+			):
 				if item.item_code:
 					frappe.get_cached_value("Item", item.item_code, "asset_category")
 
@@ -209,9 +216,15 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 							)
 						)
 
-						credit_amount = item.base_net_amount
-						if doc.is_internal_supplier and item.valuation_rate:
-							credit_amount = flt(item.valuation_rate * item.stock_qty)
+						rejected_amount = self.make_rejected_warehouse_gl_entry(
+							gl_entries, item, voucher_wise_stock_value, inventory_account_map
+						)
+						credit_amount = self.get_transit_stock_value(item, voucher_wise_stock_value)
+						if credit_amount is None:
+							credit_amount = item.base_net_amount
+							if doc.is_internal_supplier and item.valuation_rate:
+								credit_amount = flt(item.valuation_rate * item.stock_qty)
+							credit_amount += rejected_amount
 
 						# Intentionally passed negative debit amount to avoid incorrect GL Entry validation
 						gl_entries.append(
@@ -248,6 +261,10 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 							)
 
 					else:
+						self.make_rejected_warehouse_gl_entry(
+							gl_entries, item, voucher_wise_stock_value, inventory_account_map
+						)
+
 						if not doc.is_internal_transfer():
 							gl_entries.append(
 								self.get_gl_dict(
@@ -270,25 +287,34 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 
 					# Amount added through landed-cost-voucher
 					if landed_cost_entries:
-						if (item.item_code, item.name) in landed_cost_entries:
-							for account, base_amount in landed_cost_entries[
-								(item.item_code, item.name)
-							].items():
-								gl_entries.append(
-									self.get_gl_dict(
-										{
-											"account": account,
-											"against": item.expense_account,
-											"cost_center": item.cost_center,
-											"remarks": doc.get("remarks") or _("Accounting Entry for Stock"),
-											"credit": flt(base_amount["base_amount"]),
-											"credit_in_account_currency": flt(base_amount["amount"]),
-											"credit_in_transaction_currency": item.net_amount,
-											"project": item.project or doc.project,
-										},
-										item=item,
-									)
+						for entry in landed_cost_entries.get((item.item_code, item.name), []):
+							if not (entry.amount or entry.base_amount):
+								continue
+
+							lcv_account_currency = get_account_currency(entry.expense_account)
+							credit_in_transaction_currency = (
+								flt(entry.amount)
+								if lcv_account_currency == doc.currency
+								else flt(
+									entry.base_amount / doc.conversion_rate, item.precision("net_amount")
 								)
+							)
+
+							gl_dict = self.get_gl_dict(
+								{
+									"account": entry.expense_account,
+									"against": item.expense_account,
+									"cost_center": entry.dimensions.cost_center or item.cost_center,
+									"remarks": doc.get("remarks") or _("Accounting Entry for Stock"),
+									"credit": flt(entry.base_amount),
+									"credit_in_account_currency": flt(entry.amount),
+									"credit_in_transaction_currency": credit_in_transaction_currency,
+									"project": entry.dimensions.project or item.project or doc.project,
+								},
+								item=item,
+							)
+							gl_dict.update(get_custom_dimension_overrides(entry))
+							gl_entries.append(gl_dict)
 
 					# sub-contracting warehouse
 					if flt(item.rm_supp_cost):
@@ -442,8 +468,13 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 				self.update_net_purchase_amount_for_linked_assets(item)
 
 	def get_provisional_accounts(self):
+		from erpnext.stock.doctype.purchase_receipt.services.provisional_accounting import (
+			get_order_billing_provisional_reversals,
+		)
+
 		doc = self.doc
 		self.provisional_accounts = frappe._dict()
+		self.order_provisional_reversals = get_order_billing_provisional_reversals(doc)
 		linked_purchase_receipts = {d.purchase_receipt for d in doc.items if d.purchase_receipt}
 		if not linked_purchase_receipts:
 			return
@@ -480,23 +511,38 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 			}
 
 	def make_provisional_gl_entry(self, gl_entries, item):
+		from erpnext.stock.doctype.purchase_receipt.services.provisional_accounting import (
+			ProvisionalAccountingService,
+		)
+
+		service = ProvisionalAccountingService(self.doc)
 		if item.purchase_receipt:
 			pr_item = self.provisional_accounts.get(item.pr_detail, {})
 			if pr_item.get("has_provisional_entry"):
-				purchase_receipt_doc = frappe.get_cached_doc("Purchase Receipt", item.purchase_receipt)
+				conversion_rate = frappe.get_cached_value(
+					"Purchase Receipt", item.purchase_receipt, "conversion_rate"
+				)
 
-				# Intentionally passing purchase invoice item to handle partial billing
-				purchase_receipt_doc.add_provisional_gl_entry(
+				service.add_provisional_gl_entry(
 					item,
 					gl_entries,
 					self.doc.posting_date,
 					pr_item.get("provisional_account"),
 					reverse=1,
-					item_amount=(
-						(min(item.qty, pr_item.get("qty")) * pr_item.get("rate"))
-						* purchase_receipt_doc.get("conversion_rate")
-					),
+					item_amount=(min(item.qty, pr_item.get("qty")) * pr_item.get("rate")) * conversion_rate,
 				)
+			return
+
+		for row, qty in self.order_provisional_reversals.get(item.name, []):
+			service.add_provisional_gl_entry(
+				item,
+				gl_entries,
+				self.doc.posting_date,
+				row.provisional_expense_account,
+				reverse=1,
+				item_amount=qty * flt(row.rate) * flt(row.conversion_rate),
+				pr_detail=row.name,
+			)
 
 	def update_net_purchase_amount_for_linked_assets(self, item):
 		doc = self.doc
@@ -510,7 +556,9 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 			fields=["name", "asset_quantity"],
 		)
 		for asset in assets:
-			purchase_amount = flt(item.valuation_rate) * asset.asset_quantity
+			purchase_amount = (
+				flt(item.valuation_rate) * flt(item.conversion_factor or 1) * asset.asset_quantity
+			)
 			frappe.db.set_value(
 				"Asset",
 				asset.name,
@@ -552,29 +600,110 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 
 		return stock_asset_rbnb or item.expense_account
 
+	def make_rejected_warehouse_gl_entry(
+		self, gl_entries, item, voucher_wise_stock_value, inventory_account_map
+	) -> float:
+		"""Book the material the invoice moved into the rejected warehouse.
+
+		An internal transfer carries the value credited out of the in-transit warehouse along with
+		the accepted material, so the entry against it is that warehouse, and the caller credits it
+		for both. On an ordinary invoice the supplier entry already holds the cost.
+		"""
+		doc = self.doc
+		if not (item.rejected_warehouse and flt(item.rejected_qty)):
+			return 0.0
+
+		transfers_rejected_material = doc.is_internal_transfer()
+
+		rejected_amount = flt(
+			voucher_wise_stock_value.get((item.name, item.rejected_warehouse)),
+			item.precision("base_net_amount"),
+		)
+		if not rejected_amount:
+			return 0.0
+
+		rejected_account = doc.get_inventory_account_dict(item, inventory_account_map, "rejected_warehouse")
+		gl_entries.append(
+			self.get_gl_dict(
+				{
+					"account": rejected_account["account"],
+					"against": item.expense_account if transfers_rejected_material else doc.supplier,
+					"cost_center": item.cost_center,
+					"project": item.project or doc.project,
+					"remarks": doc.get("remarks") or _("Accounting Entry for Stock"),
+					"debit": rejected_amount,
+					"debit_in_transaction_currency": flt(
+						rejected_amount / doc.conversion_rate, item.precision("net_amount")
+					),
+				},
+				rejected_account["account_currency"],
+				item=item,
+			)
+		)
+
+		return rejected_amount if transfers_rejected_material else 0.0
+
+	def get_transit_stock_value(self, item, voucher_wise_stock_value) -> float | None:
+		"""Stock value an internal transfer took out of the in-transit warehouse, negative for a return.
+
+		None when the rejected material stays in transit, as its stock value cannot be told apart then.
+		"""
+		if not (item.from_warehouse and self.doc.is_internal_transfer()):
+			return None
+
+		if item.rejected_warehouse == item.from_warehouse:
+			return None
+
+		stock_value = voucher_wise_stock_value.get((item.name, item.from_warehouse))
+		return None if stock_value is None else -flt(stock_value)
+
 	def make_stock_adjustment_entry(self, gl_entries, item, voucher_wise_stock_value, account_currency):
 		doc = self.doc
 		net_amt_precision = item.precision("base_net_amount")
-		val_rate_db_precision = 6 if cint(item.precision("valuation_rate")) <= 6 else 9
 
 		warehouse_debit_amount = flt(
-			flt(item.valuation_rate, val_rate_db_precision) * flt(item.qty) * flt(item.conversion_factor),
+			flt(item.valuation_rate) * get_stock_qty(item, item.qty),
 			net_amt_precision,
 		)
 
-		if doc.is_return and doc.update_stock and (doc.is_internal_supplier or not doc.return_against):
+		transit_stock_value = self.get_transit_stock_value(item, voucher_wise_stock_value)
+		if transit_stock_value is not None:
+			# The accepted and rejected warehouses together take what left transit, plus the landed
+			# cost; round each part as it is posted so the entries balance.
+			rejected_stock_value = voucher_wise_stock_value.get((item.name, item.rejected_warehouse))
+			warehouse_debit_amount = flt(
+				flt(transit_stock_value, net_amt_precision)
+				- flt(rejected_stock_value, net_amt_precision)
+				+ flt(item.landed_cost_voucher_amount),
+				net_amt_precision,
+			)
+
+		if (
+			transit_stock_value is None
+			and doc.is_return
+			and doc.update_stock
+			and (doc.is_internal_supplier or not doc.return_against)
+		):
 			net_rate = item.base_net_amount
 			if item.sales_incoming_rate:
-				net_rate = item.qty * item.sales_incoming_rate
+				# Material of a transfer goes back at the rate it came in with, the rejected
+				# material along with the accepted.
+				net_rate = get_transit_amount(item, item.qty) + get_transit_amount(item, item.rejected_qty)
 
 			stock_amount = net_rate + item.item_tax_amount + flt(item.landed_cost_voucher_amount)
 			warehouse_debit_amount = flt(
 				voucher_wise_stock_value.get((item.name, item.warehouse)), net_amt_precision
 			)
 
-			if flt(stock_amount, net_amt_precision) != flt(warehouse_debit_amount, net_amt_precision):
+			# The rejected warehouse carries the rest of what the invoice paid for, and is booked
+			# by its own entry, so it is not a variance.
+			returned_stock_value = warehouse_debit_amount + flt(
+				voucher_wise_stock_value.get((item.name, item.rejected_warehouse)), net_amt_precision
+			)
+
+			if flt(stock_amount, net_amt_precision) != flt(returned_stock_value, net_amt_precision):
 				cost_of_goods_sold_account = self.get_stock_variance_account(item)
-				stock_adjustment_amt = stock_amount - warehouse_debit_amount
+				stock_adjustment_amt = stock_amount - returned_stock_value
 
 				gl_entries.append(
 					self.get_gl_dict(
@@ -594,7 +723,7 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 
 		elif (
 			doc.update_stock
-			and voucher_wise_stock_value.get((item.name, item.warehouse))
+			and (transit_stock_value is not None or voucher_wise_stock_value.get((item.name, item.warehouse)))
 			and warehouse_debit_amount
 			!= flt(voucher_wise_stock_value.get((item.name, item.warehouse)), net_amt_precision)
 		):
@@ -878,17 +1007,24 @@ class PurchaseInvoiceGLComposer(BaseGLComposer):
 				else:
 					round_off_account = round_off_for_opening
 
+			round_off_account_currency = get_account_currency(round_off_account)
 			gl_entries.append(
 				self.get_gl_dict(
 					{
 						"account": round_off_account,
 						"against": doc.supplier,
-						"debit_in_account_currency": doc.rounding_adjustment,
+						"debit_in_transaction_currency": flt(
+							doc.rounding_adjustment, doc.precision("rounding_adjustment")
+						),
+						"debit_in_account_currency": doc.base_rounding_adjustment
+						if round_off_account_currency == doc.company_currency
+						else doc.rounding_adjustment,
 						"debit": doc.base_rounding_adjustment,
 						"cost_center": round_off_cost_center
 						if doc.use_company_roundoff_cost_center
 						else (doc.cost_center or round_off_cost_center),
 					},
+					round_off_account_currency,
 					item=doc,
 				)
 			)

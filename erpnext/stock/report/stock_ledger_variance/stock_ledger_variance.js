@@ -12,6 +12,7 @@ const DIFFERENCE_FIELD_NAMES = [
 ];
 
 frappe.query_reports["Stock Ledger Variance"] = {
+	export_hidden_cols: true,
 	filters: [
 		{
 			fieldname: "company",
@@ -34,13 +35,16 @@ frappe.query_reports["Stock Ledger Variance"] = {
 		},
 		{
 			fieldname: "warehouse",
-			fieldtype: "Link",
+			fieldtype: "MultiSelectList",
 			label: __("Warehouse"),
 			options: "Warehouse",
-			get_query: function () {
-				return {
-					filters: { is_group: 0, disabled: 0 },
-				};
+			get_data: function (txt) {
+				let company = frappe.query_report.get_filter_value("company");
+				let filters = { is_group: 0, disabled: 0 };
+				if (company) {
+					filters.company = company;
+				}
+				return erpnext.utils.get_link_options("Warehouse", txt, filters);
 			},
 		},
 		{
@@ -73,7 +77,7 @@ frappe.query_reports["Stock Ledger Variance"] = {
 	],
 
 	formatter(value, row, column, data, default_formatter) {
-		value = default_formatter(value, row, column, data);
+		value = erpnext.utils.format_serial_batch_number(value, row, column, data, default_formatter);
 
 		if (DIFFERENCE_FIELD_NAMES.includes(column.fieldname) && Math.abs(data[column.fieldname]) > 0.001) {
 			value = "<span style='color:red'>" + value + "</span>";

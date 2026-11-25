@@ -72,6 +72,7 @@ class AccountsSettings(Document):
 		default_ageing_range: DF.Data | None
 		delete_linked_ledger_entries: DF.Check
 		determine_address_tax_category_from: DF.Literal["Billing Address", "Shipping Address"]
+		disable_include_dimensions: DF.Check
 		enable_accounting_dimensions: DF.Check
 		enable_common_party_accounting: DF.Check
 		enable_discounts_and_margin: DF.Check
@@ -186,14 +187,12 @@ class AccountsSettings(Document):
 			)
 
 	def validate_and_sync_auto_reconcile_config(self):
-		if self.has_value_changed("auto_reconciliation_job_trigger"):
-			if (
-				cint(self.auto_reconciliation_job_trigger) > 0
-				and cint(self.auto_reconciliation_job_trigger) < 60
-			):
-				sync_auto_reconcile_config(self.auto_reconciliation_job_trigger)
-			else:
-				frappe.throw(_("Cron Interval should be between 1 and 59 Min"))
+		interval_changed = self.has_value_changed("auto_reconciliation_job_trigger")
+		if interval_changed and not 0 < cint(self.auto_reconciliation_job_trigger) < 60:
+			frappe.throw(_("Cron Interval should be between 1 and 59 Min"))
+
+		if self.auto_reconcile_payments:
+			sync_auto_reconcile_config(self.auto_reconciliation_job_trigger)
 
 		if self.has_value_changed("reconciliation_queue_size"):
 			if cint(self.reconciliation_queue_size) < 5 or cint(self.reconciliation_queue_size) > 100:
@@ -203,8 +202,8 @@ class AccountsSettings(Document):
 		if self.add_taxes_from_item_tax_template and self.add_taxes_from_taxes_and_charges_template:
 			frappe.throw(
 				_("You cannot enable both the settings '{0}' and '{1}'.").format(
-					frappe.bold(_(self.meta.get_label("add_taxes_from_item_tax_template"))),
-					frappe.bold(_(self.meta.get_label("add_taxes_from_taxes_and_charges_template"))),
+					frappe.bold(self.meta.get_translated_label("add_taxes_from_item_tax_template")),
+					frappe.bold(self.meta.get_translated_label("add_taxes_from_taxes_and_charges_template")),
 				),
 				title=_("Auto Tax Settings Error"),
 			)
@@ -219,6 +218,13 @@ class AccountsSettings(Document):
 		doctypes += get_child_docs(doctypes)
 
 		set_allow_on_submit_for_dimension_fields(doctypes)
+
+
+@frappe.whitelist(methods=["POST"])
+def get_posting_date_confirmation() -> int:
+	return cint(
+		frappe.db.get_single_value("Accounts Settings", "confirm_before_resetting_posting_date", cache=False)
+	)
 
 
 def toggle_accounting_dimension_sections(hide):

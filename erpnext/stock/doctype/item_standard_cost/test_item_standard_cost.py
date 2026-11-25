@@ -2,9 +2,14 @@
 # See license.txt
 
 import frappe
-from frappe.utils import add_days, flt, today
+from frappe.utils import add_days, flt, nowtime, today
 
+from erpnext.controllers.sales_and_purchase_return import make_return_doc
 from erpnext.stock.doctype.item.test_item import make_item
+from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle import (
+	get_batch_from_bundle,
+	get_serial_nos_from_bundle,
+)
 from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 from erpnext.tests.utils import ERPNextTestSuite
 
@@ -351,6 +356,123 @@ class TestItemStandardCost(ERPNextTestSuite):
 		)
 		self.assertEqual(booked, 200)
 
+	def reconciliation_difference(self, reco):
+		# the reconciliation's value difference as the ledger, the document and the GL carry it
+		sle_difference = frappe.db.get_value(
+			"Stock Ledger Entry", {"voucher_no": reco.name, "is_cancelled": 0}, "stock_value_difference"
+		)
+		stock_adjustment = frappe.get_cached_value("Company", PI_COMPANY, "stock_adjustment_account")
+		booked = sum(
+			flt(gle.credit) - flt(gle.debit)
+			for gle in frappe.get_all(
+				"GL Entry",
+				{"voucher_no": reco.name, "account": stock_adjustment, "is_cancelled": 0},
+				["debit", "credit"],
+			)
+		)
+		return (
+			flt(sle_difference),
+			flt(frappe.db.get_value("Stock Reconciliation", reco.name, "difference_amount")),
+			booked,
+		)
+
+	def test_backdated_entry_before_reconciliation_is_reposted(self):
+		# the in-place shift stops at the next Stock Reconciliation, whose value difference and GL
+		# depend on the balance before it, so that case still needs a repost
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(
+			item.name, rate=100, company=PI_COMPANY, effective_date=add_days(today(), -10)
+		)
+		make_stock_entry(
+			item_code=item.name,
+			target=PI_STORES,
+			company=PI_COMPANY,
+			qty=10,
+			basic_rate=100,
+			posting_date=add_days(today(), -8),
+		)
+		reco = create_stock_reconciliation(
+			item_code=item.name,
+			warehouse=PI_STORES,
+			qty=12,
+			rate=100,
+			company=PI_COMPANY,
+			posting_date=add_days(today(), -4),
+		)
+		self.assertEqual(self.reconciliation_difference(reco), (200, 200, 200))
+
+		make_stock_entry(
+			item_code=item.name,
+			target=PI_STORES,
+			company=PI_COMPANY,
+			qty=5,
+			basic_rate=100,
+			posting_date=add_days(today(), -6),
+		)
+
+		# a repost is queued for the item and warehouse; in tests it runs on submit
+		repost = frappe.db.get_value(
+			"Repost Item Valuation",
+			{"item_code": item.name, "warehouse": PI_STORES, "docstatus": 1},
+			"status",
+		)
+		self.assertEqual(repost, "Completed")
+
+		# the count of 12 now follows a balance of 15, so it writes off 300
+		self.assertEqual(self.reconciliation_difference(reco), (-300, -300, -300))
+
+	def test_cancel_before_reconciliation_is_reposted(self):
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(
+			item.name, rate=100, company=PI_COMPANY, effective_date=add_days(today(), -10)
+		)
+		make_stock_entry(
+			item_code=item.name,
+			target=PI_STORES,
+			company=PI_COMPANY,
+			qty=12,
+			basic_rate=100,
+			posting_date=add_days(today(), -8),
+		)
+		issue = make_stock_entry(
+			item_code=item.name,
+			source=PI_STORES,
+			company=PI_COMPANY,
+			qty=2,
+			posting_date=add_days(today(), -3),
+		)
+		reco = create_stock_reconciliation(
+			item_code=item.name,
+			warehouse=PI_STORES,
+			qty=15,
+			rate=100,
+			company=PI_COMPANY,
+			posting_date=add_days(today(), -1),
+		)
+		self.assertEqual(self.reconciliation_difference(reco), (500, 500, 500))
+
+		issue.reload()
+		issue.cancel()
+
+		# a repost is queued for the item and warehouse; in tests it runs on submit
+		repost = frappe.db.get_value(
+			"Repost Item Valuation",
+			{"item_code": item.name, "warehouse": PI_STORES, "docstatus": 1},
+			"status",
+		)
+		self.assertEqual(repost, "Completed")
+
+		# without the issue the count of 15 follows a balance of 12, so it adds 300
+		self.assertEqual(self.reconciliation_difference(reco), (300, 300, 300))
+
 	def test_opening_reconciliation_creates_standard_cost(self):
 		# With no Item Standard Cost yet, an opening Stock Reconciliation may set the rate; that rate is
 		# captured into an Item Standard Cost record so the resulting stock (and later transactions) are
@@ -477,6 +599,176 @@ class TestItemStandardCost(ERPNextTestSuite):
 		# The revaluation is reverted, so the standard cost it created is cancelled and the rate reverts.
 		self.assertEqual(frappe.db.get_value("Item Standard Cost", isc_name, "docstatus"), 2)
 		self.assertEqual(flt(get_item_standard_rate(item.name, PI_COMPANY)), 100)
+
+	def test_entries_before_revaluation_time_and_their_cancellation_blocked(self):
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -60))
+		receipt = make_stock_entry(
+			item_code=item.name,
+			target=TEST_WAREHOUSE,
+			qty=10,
+			basic_rate=100,
+			posting_date=add_days(today(), -20),
+		)
+		make_stock_entry(
+			item_code=item.name,
+			target=TEST_WAREHOUSE,
+			qty=5,
+			basic_rate=100,
+			posting_date=add_days(today(), -1),
+			posting_time="10:00:00",
+		)
+		create_item_standard_cost(item.name, rate=110, effective_date=add_days(today(), -1))
+
+		issue = make_stock_entry(
+			item_code=item.name,
+			source=TEST_WAREHOUSE,
+			qty=4,
+			posting_date=add_days(today(), -1),
+			posting_time="00:00:05",
+			do_not_submit=True,
+		)
+		self.assertRaises(frappe.ValidationError, issue.submit)
+		self.assertRaises(frappe.ValidationError, receipt.cancel)
+
+	def test_cancelling_movement_at_revaluation_time_is_blocked(self):
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		receipt = make_stock_entry(item_code=item.name, target=TEST_WAREHOUSE, qty=10, basic_rate=100)
+		create_item_standard_cost(item.name, rate=110, effective_date=today())
+
+		self.assertRaises(frappe.ValidationError, receipt.cancel)
+
+	def test_reconciliation_rate_change_must_cover_all_stocked_warehouses(self):
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		for warehouse in (TEST_WAREHOUSE, "_Test Warehouse 1 - _TC"):
+			make_stock_entry(
+				item_code=item.name,
+				target=warehouse,
+				qty=10,
+				basic_rate=100,
+				posting_date=add_days(today(), -20),
+			)
+
+		reco = create_stock_reconciliation(
+			item_code=item.name, warehouse=TEST_WAREHOUSE, qty=10, rate=150, do_not_save=True
+		)
+		self.assertRaises(frappe.ValidationError, reco.insert)
+
+	def test_reconciliation_created_standard_cost_cannot_be_cancelled_directly(self):
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		make_stock_entry(
+			item_code=item.name,
+			target=TEST_WAREHOUSE,
+			qty=10,
+			basic_rate=100,
+			posting_date=add_days(today(), -20),
+		)
+		reco = create_stock_reconciliation(item_code=item.name, warehouse=TEST_WAREHOUSE, qty=10, rate=150)
+
+		isc = frappe.get_doc("Item Standard Cost", {"revaluation_entry": reco.name, "docstatus": 1})
+		self.assertRaises(frappe.ValidationError, isc.cancel)
+		self.assertEqual(frappe.db.get_value("Stock Reconciliation", reco.name, "docstatus"), 1)
+
+	def test_accounts_manager_can_change_rate_with_stock_on_hand(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		make_stock_entry(
+			item_code=item.name,
+			target=TEST_WAREHOUSE,
+			qty=10,
+			basic_rate=100,
+			posting_date=add_days(today(), -20),
+		)
+
+		user = create_user("test_isc_accounts@example.com", "Accounts Manager")
+		user.add_roles("Accounts User")
+		frappe.set_user(user.name)
+		try:
+			isc = create_item_standard_cost(item.name, rate=110, effective_date=today())
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(frappe.db.get_value("Stock Reconciliation", isc.revaluation_entry, "docstatus"), 1)
+
+		frappe.set_user(user.name)
+		try:
+			frappe.get_doc("Item Standard Cost", isc.name).cancel()
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(frappe.db.get_value("Stock Reconciliation", isc.revaluation_entry, "docstatus"), 2)
+
+	def test_frozen_period_rate_change_follows_caller_role(self):
+		from frappe.core.doctype.user_permission.test_user_permission import create_user
+
+		item = create_standard_cost_item()
+		create_item_standard_cost(
+			item.name, rate=100, company=PI_COMPANY, effective_date=add_days(today(), -30)
+		)
+		make_stock_entry(
+			item_code=item.name,
+			to_warehouse=PI_STORES,
+			company=PI_COMPANY,
+			qty=10,
+			basic_rate=100,
+			posting_date=add_days(today(), -20),
+		)
+		frappe.db.set_value(
+			"Company",
+			PI_COMPANY,
+			{"accounts_frozen_till_date": today(), "role_allowed_for_frozen_entries": "Accounts Manager"},
+		)
+
+		user = create_user("test_isc_accounts@example.com", "Accounts Manager")
+		user.add_roles("Accounts User")
+		frappe.set_user(user.name)
+		try:
+			isc = create_item_standard_cost(item.name, rate=110, company=PI_COMPANY, effective_date=today())
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(frappe.db.get_value("Stock Reconciliation", isc.revaluation_entry, "docstatus"), 1)
+
+	def test_negative_stock_gives_clear_message(self):
+		item = create_standard_cost_item(allow_negative_stock=1)
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		make_stock_entry(
+			item_code=item.name, source=TEST_WAREHOUSE, qty=3, posting_date=add_days(today(), -20)
+		)
+
+		isc = create_item_standard_cost(item.name, rate=110, effective_date=today(), submit=False)
+		self.assertRaisesRegex(frappe.ValidationError, "negative stock", isc.submit)
+
+	def test_source_reconciliation_can_correct_negative_stock_with_new_rate(self):
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item(allow_negative_stock=1)
+		create_item_standard_cost(item.name, rate=100, effective_date=add_days(today(), -30))
+		make_stock_entry(
+			item_code=item.name, source=TEST_WAREHOUSE, qty=3, posting_date=add_days(today(), -20)
+		)
+
+		reco = create_stock_reconciliation(item_code=item.name, warehouse=TEST_WAREHOUSE, qty=5, rate=120)
+
+		self.assertEqual(reco.docstatus, 1)
+		self.assertEqual(
+			frappe.db.get_value("Bin", {"item_code": item.name, "warehouse": TEST_WAREHOUSE}, "actual_qty"), 5
+		)
 
 	def test_backdated_transaction_blocked(self):
 		item = create_standard_cost_item()
@@ -694,6 +986,41 @@ class TestItemStandardCost(ERPNextTestSuite):
 			)
 			self.assertEqual(flt(stock_value), qty * 150)
 
+	def test_batch_outgoing_rate_follows_the_revalued_standard_rate(self):
+		from erpnext.stock.utils import _get_incoming_rate
+
+		frappe.db.set_single_value("Stock Settings", "do_not_use_batchwise_valuation", 1)
+		item = create_standard_cost_item(
+			has_batch_no=1, create_new_batch=1, batch_number_series="SC-BATCH-.####"
+		)
+		create_item_standard_cost(
+			item.name, rate=100, company=PI_COMPANY, effective_date=add_days(today(), -5)
+		)
+		receipt = make_stock_entry(
+			item_code=item.name,
+			to_warehouse=PI_STORES,
+			company=PI_COMPANY,
+			qty=3,
+			basic_rate=100,
+			use_serial_batch_fields=1,
+			posting_date=add_days(today(), -3),
+		)
+		create_item_standard_cost(item.name, rate=150, company=PI_COMPANY, effective_date=today())
+
+		rate = _get_incoming_rate(
+			{
+				"item_code": item.name,
+				"warehouse": PI_STORES,
+				"company": PI_COMPANY,
+				"qty": 3,
+				"serial_and_batch_bundle": receipt.items[0].serial_and_batch_bundle,
+				"posting_date": today(),
+				"posting_time": nowtime(),
+			}
+		)
+
+		self.assertEqual(rate, 150)
+
 	def test_serialized_item_revalued_across_warehouses(self):
 		item = create_standard_cost_item(has_serial_no=1, serial_no_series="SC-SER-.####")
 		create_item_standard_cost(
@@ -727,6 +1054,123 @@ class TestItemStandardCost(ERPNextTestSuite):
 				"Bin", {"item_code": item.name, "warehouse": warehouse}, "stock_value"
 			)
 			self.assertEqual(flt(stock_value), qty * 150)
+			# the revaluation moves no serial: each one stays active where it was
+			self.assertEqual(
+				frappe.db.count(
+					"Serial No", {"item_code": item.name, "warehouse": warehouse, "status": "Active"}
+				),
+				qty,
+			)
+
+		# and the revalued serials can still be issued, at the new standard rate
+		issue = make_stock_entry(
+			item_code=item.name,
+			from_warehouse=PI_FG,
+			company=PI_COMPANY,
+			qty=2,
+			use_serial_batch_fields=1,
+		)
+		self.assertEqual(flt(issue.items[0].basic_rate), 150)
+
+	def test_serialized_item_counted_down_keeps_the_entered_serials(self):
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item(has_serial_no=1, serial_no_series="SC-CNT-.####")
+		create_item_standard_cost(item.name, rate=100, company=PI_COMPANY)
+		make_stock_entry(
+			item_code=item.name,
+			to_warehouse=PI_STORES,
+			company=PI_COMPANY,
+			qty=3,
+			basic_rate=100,
+			use_serial_batch_fields=1,
+		)
+		serial_nos = frappe.get_all(
+			"Serial No", {"item_code": item.name}, pluck="serial_no", order_by="serial_no"
+		)
+
+		# count 2 of the 3: the row names which serials are still there
+		reco = create_stock_reconciliation(
+			item_code=item.name,
+			warehouse=PI_STORES,
+			qty=2,
+			rate=100,
+			company=PI_COMPANY,
+			use_serial_batch_fields=1,
+			reconcile_all_serial_batch=0,
+			serial_no="\n".join(serial_nos[:2]),
+		)
+
+		status = {
+			row.serial_no: row.status
+			for row in frappe.get_all("Serial No", {"item_code": item.name}, ["serial_no", "status"])
+		}
+		self.assertEqual([status[serial_no] for serial_no in serial_nos], ["Active", "Active", "Delivered"])
+		bin_data = frappe.db.get_value(
+			"Bin",
+			{"item_code": item.name, "warehouse": PI_STORES},
+			["actual_qty", "stock_value"],
+			as_dict=True,
+		)
+		self.assertEqual((flt(bin_data.actual_qty), flt(bin_data.stock_value)), (2, 200))
+		self.assertEqual(flt(reco.difference_amount), -100)
+
+		# the two counted serials remain issuable
+		issue = make_stock_entry(
+			item_code=item.name,
+			from_warehouse=PI_STORES,
+			company=PI_COMPANY,
+			qty=2,
+			use_serial_batch_fields=1,
+		)
+		issued = frappe.get_all(
+			"Serial No",
+			{"name": ("in", get_serial_nos_from_bundle(issue.items[0].serial_and_batch_bundle))},
+			pluck="serial_no",
+		)
+		self.assertEqual(sorted(issued), serial_nos[:2])
+
+	def test_batched_item_counted_up_follows_the_batch(self):
+		from erpnext.stock.doctype.batch.batch import get_batch_qty
+		from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
+			create_stock_reconciliation,
+		)
+
+		item = create_standard_cost_item(
+			has_batch_no=1, create_new_batch=1, batch_number_series="SC-BAT-.####"
+		)
+		create_item_standard_cost(item.name, rate=100, company=PI_COMPANY)
+		receipt = make_stock_entry(
+			item_code=item.name, to_warehouse=PI_STORES, company=PI_COMPANY, qty=3, basic_rate=100
+		)
+		batch_no = get_batch_from_bundle(receipt.items[0].serial_and_batch_bundle)
+
+		reco = create_stock_reconciliation(
+			item_code=item.name,
+			warehouse=PI_STORES,
+			qty=5,
+			rate=100,
+			company=PI_COMPANY,
+			use_serial_batch_fields=1,
+			reconcile_all_serial_batch=0,
+			batch_no=batch_no,
+		)
+
+		self.assertEqual(flt(get_batch_qty(batch_no, PI_STORES, item.name)), 5)
+		self.assertEqual(flt(reco.difference_amount), 200)
+
+		# all five can be issued from the batch
+		issue = make_stock_entry(
+			item_code=item.name,
+			from_warehouse=PI_STORES,
+			company=PI_COMPANY,
+			qty=5,
+			use_serial_batch_fields=1,
+			batch_no=batch_no,
+		)
+		self.assertEqual(flt(issue.items[0].basic_rate), 100)
 
 	def test_standard_rate_cache_invalidated_after_submit(self):
 		from erpnext.stock.doctype.item_standard_cost.item_standard_cost import get_item_standard_rate
@@ -740,6 +1184,35 @@ class TestItemStandardCost(ERPNextTestSuite):
 
 		# The submit must have invalidated the cache, so this reads the freshly submitted rate.
 		self.assertEqual(flt(get_item_standard_rate(item.name, TEST_COMPANY)), 100)
+
+	@ERPNextTestSuite.change_settings(
+		"Buying Settings", {"set_landed_cost_based_on_purchase_invoice_rate": 1}
+	)
+	def test_invoice_rate_change_reposts_standard_cost_receipt_gl(self):
+		from erpnext.stock.doctype.purchase_receipt.mapper import make_purchase_invoice
+		from erpnext.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+
+		ppv_account = ensure_ppv_account(PI_COMPANY)
+		item = create_standard_cost_item()
+		create_item_standard_cost(item.name, rate=100, company=PI_COMPANY)
+
+		receipt = make_purchase_receipt(
+			item_code=item.name, company=PI_COMPANY, warehouse=PI_STORES, qty=10, rate=120
+		)
+		invoice = make_purchase_invoice(receipt.name)
+		invoice.items[0].rate = 130
+		invoice.insert()
+		invoice.submit()
+
+		ppv = sum(
+			flt(row.debit) - flt(row.credit)
+			for row in frappe.get_all(
+				"GL Entry",
+				filters={"voucher_no": receipt.name, "account": ppv_account, "is_cancelled": 0},
+				fields=["debit", "credit"],
+			)
+		)
+		self.assertEqual(ppv, 300)
 
 	def test_pr_books_variance_to_ppv_account(self):
 		# Receiving a Standard Cost item at a rate above the standard must book the difference to the
@@ -767,6 +1240,76 @@ class TestItemStandardCost(ERPNextTestSuite):
 
 		self.assertEqual(booked(ppv_account), 70)
 		self.assertEqual(booked(cogs_account), 0)
+
+	def test_zero_price_purchases_book_standard_cost(self):
+		ppv_account = "Stock Adjustment - TCP1"
+		stock_account = frappe.get_cached_value("Company", PI_COMPANY, "default_inventory_account")
+		item = create_standard_cost_item(
+			item_defaults=[
+				{
+					"company": PI_COMPANY,
+					"default_warehouse": PI_STORES,
+					"purchase_price_variance_account": ppv_account,
+				}
+			]
+		)
+		create_item_standard_cost(
+			item.name, rate=100, company=PI_COMPANY, effective_date=add_days(today(), -1)
+		)
+
+		for doctype, qty in (("Purchase Receipt", 5), ("Purchase Invoice", 3)):
+			with self.subTest(doctype=doctype):
+				purchase = frappe.get_doc(
+					{
+						"doctype": doctype,
+						"company": PI_COMPANY,
+						"supplier": "_Test Supplier",
+						"posting_date": today(),
+						"items": [
+							{
+								"item_code": item.name,
+								"warehouse": PI_STORES,
+								"qty": qty,
+								"rate": 0,
+								"allow_zero_valuation_rate": 1,
+							}
+						],
+					}
+				)
+				if doctype == "Purchase Invoice":
+					purchase.update_stock = 1
+				purchase.insert()
+				purchase.submit()
+
+				for sign in (1, -1):
+					doc = purchase
+					if sign == -1:
+						doc = make_return_doc(doctype, purchase.name)
+						doc.insert()
+						doc.submit()
+
+					filters = {"voucher_type": doctype, "voucher_no": doc.name, "is_cancelled": 0}
+					self.assertEqual(doc.items[0].valuation_rate, 0)
+					self.assertEqual(
+						frappe.db.get_value("Stock Ledger Entry", filters, "stock_value_difference"),
+						sign * qty * 100,
+					)
+					gl_entries = frappe.get_all(
+						"GL Entry", filters=filters, fields=["account", "debit", "credit"]
+					)
+					self.assertEqual(
+						{entry.account: entry.debit - entry.credit for entry in gl_entries},
+						{stock_account: sign * qty * 100, ppv_account: -sign * qty * 100},
+					)
+					if doc.is_return:
+						doc.cancel()
+						self.assertFalse(frappe.db.exists("GL Entry", filters))
+
+				purchase.reload()
+				purchase.cancel()
+				filters["voucher_no"] = purchase.name
+				self.assertFalse(frappe.db.exists("GL Entry", filters))
+				self.assertFalse(frappe.db.exists("Stock Ledger Entry", filters))
 
 	def test_pr_throws_without_ppv_account(self):
 		# Receiving a Standard Cost item with a variance but no PPV account configured must error.

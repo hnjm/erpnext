@@ -14,7 +14,14 @@ from collections import defaultdict
 
 import frappe
 from frappe import _, bold
-from frappe.utils import flt, get_link_to_form
+from frappe.utils import flt, format_datetime, get_datetime, get_link_to_form
+
+from erpnext.stock.utils import get_combine_datetime
+
+SOURCE_DOCUMENT = {
+	"Purchase Receipt": ("Delivery Note", "inter_company_reference"),
+	"Purchase Invoice": ("Sales Invoice", "inter_company_invoice_reference"),
+}
 
 
 class StockInternalTransferService:
@@ -27,8 +34,13 @@ class StockInternalTransferService:
 				self.validate_in_transit_warehouses()
 				self.validate_multi_currency()
 				self.validate_packed_items()
+				self.validate_posting_datetime()
 
-				if self.doc.get("is_internal_supplier") and self.doc.docstatus == 1:
+				if (
+					self.doc.get("is_internal_supplier")
+					and self.doc.docstatus == 1
+					and not self.doc.get("is_return")
+				):
 					self.validate_internal_transfer_qty()
 			else:
 				self.validate_internal_transfer_warehouse()
@@ -42,6 +54,10 @@ class StockInternalTransferService:
 				row.from_warehouse = None
 
 	def validate_in_transit_warehouses(self):
+		# a draft saved with ignore_mandatory (e.g. mapped from a Pick List) gets its warehouses before submit
+		if self.doc.docstatus == 0 and self.doc.flags.ignore_mandatory:
+			return
+
 		if (
 			self.doc.doctype == "Sales Invoice" and self.doc.get("update_stock")
 		) or self.doc.doctype == "Delivery Note":
@@ -65,24 +81,48 @@ class StockInternalTransferService:
 			frappe.throw(_("Internal transfers can only be done in company's default currency"))
 
 	def validate_packed_items(self):
-		if self.doc.doctype in ("Sales Invoice", "Delivery Note Item") and self.doc.get("packed_items"):
+		if self.doc.doctype == "Sales Invoice" and self.doc.get("packed_items"):
 			frappe.throw(_("Packed Items cannot be transferred internally"))
+
+	def validate_posting_datetime(self):
+		"""The receipt takes the cost of the delivery, so it cannot be posted before the delivery."""
+		if self.doc.get("is_return") or not self.doc.is_stock_receipt():
+			return
+
+		source_doctype, reference_field = SOURCE_DOCUMENT[self.doc.doctype]
+		source_name = self.doc.get(reference_field)
+		if not source_name:
+			return
+
+		source_datetime = frappe.db.get_value(
+			"Stock Ledger Entry",
+			{"voucher_type": source_doctype, "voucher_no": source_name, "is_cancelled": 0},
+			"posting_datetime",
+		)
+		posting_datetime = get_combine_datetime(self.doc.posting_date, self.doc.posting_time)
+		if not source_datetime or posting_datetime >= get_datetime(source_datetime):
+			return
+
+		frappe.throw(
+			_("Posting Date and Time {0} cannot be before {1}, when {2} {3} sent this material.").format(
+				bold(format_datetime(posting_datetime)),
+				bold(format_datetime(source_datetime)),
+				source_doctype,
+				get_link_to_form(source_doctype, source_name),
+			),
+			title=_("Invalid Posting Date and Time"),
+		)
 
 	def validate_internal_transfer_qty(self):
 		if self.doc.doctype not in ["Purchase Invoice", "Purchase Receipt"]:
 			return
 
-		inter_company_reference = (
-			self.doc.get("inter_company_reference")
-			if self.doc.doctype == "Purchase Invoice"
-			else self.doc.get("inter_company_invoice_reference")
-		)
-
+		inter_company_reference = self.get_inter_company_reference()
 		item_wise_transfer_qty = self.get_item_wise_inter_transfer_qty(inter_company_reference)
 		if not item_wise_transfer_qty:
 			return
 
-		item_wise_received_qty = self.get_item_wise_inter_received_qty()
+		item_wise_received_qty = self.get_item_wise_inter_received_qty(inter_company_reference)
 		precision = frappe.get_precision(self.doc.doctype + " Item", "qty")
 
 		over_receipt_allowance = frappe.get_single_value("Stock Settings", "over_delivery_receipt_allowance")
@@ -100,14 +140,28 @@ class StockInternalTransferService:
 				)
 
 			if recevied_qty > flt(transferred_qty, precision):
+				from erpnext.controllers.status_updater import OverAllowanceError
+
 				frappe.throw(
 					_("Item {0} cannot be received in more than {1} qty against the {2} {3}").format(
 						bold(key[1]),
 						bold(flt(transferred_qty, precision)),
 						bold(parent_doctype),
 						get_link_to_form(parent_doctype, inter_company_reference),
-					)
+					),
+					OverAllowanceError,
 				)
+
+	def get_inter_company_reference(self):
+		if self.doc.doctype == "Purchase Receipt":
+			return self.doc.get("inter_company_reference")
+
+		if self.doc.get("is_return"):
+			return frappe.db.get_value(
+				"Purchase Invoice", self.doc.return_against, "inter_company_invoice_reference"
+			)
+
+		return self.doc.get("inter_company_invoice_reference")
 
 	def get_item_wise_inter_transfer_qty(self, inter_company_reference):
 		parent_doctype = {
@@ -131,49 +185,58 @@ class StockInternalTransferService:
 			)
 			.where((parent_tab.name == inter_company_reference) & (parent_tab.docstatus == 1))
 		)
+		if parent_doctype == "Delivery Note":
+			query = query.select(child_tab.returned_qty, child_tab.stock_qty, child_tab.conversion_factor)
 
 		data = query.run(as_dict=True)
 		item_wise_transfer_qty = defaultdict(float)
 		for row in data:
-			item_wise_transfer_qty[(row.name, row.item_code)] += flt(row.qty)
+			returned_qty = flt(row.get("returned_qty")) / (flt(row.get("conversion_factor")) or 1)
+			item_wise_transfer_qty[(row.name, row.item_code)] += flt(row.qty) - returned_qty
+
+		if parent_doctype == "Delivery Note":
+			self.add_component_transfer_qty(item_wise_transfer_qty, inter_company_reference, data)
 
 		return item_wise_transfer_qty
 
-	def get_item_wise_inter_received_qty(self):
-		child_doctype = self.doc.doctype + " Item"
+	def add_component_transfer_qty(self, item_wise_transfer_qty, delivery_note, bundle_rows):
+		"""Components of a bundle row travel on their own, net of the share of the bundle returned."""
+		from erpnext.stock.doctype.delivery_note.mapper import get_pending_component_qty
 
-		parent_tab = frappe.qb.DocType(self.doc.doctype)
-		child_tab = frappe.qb.DocType(child_doctype)
+		bundle_rows = {row.name: row for row in bundle_rows}
+		for packed in frappe.get_all(
+			"Packed Item",
+			filters={"parent": delivery_note, "parenttype": "Delivery Note"},
+			fields=["name", "item_code", "qty", "parent_detail_docname"],
+		):
+			if bundle_row := bundle_rows.get(packed.parent_detail_docname):
+				item_wise_transfer_qty.pop((bundle_row.name, bundle_row.item_code), None)
+				item_wise_transfer_qty[(packed.name, packed.item_code)] += get_pending_component_qty(
+					packed, bundle_row
+				)
 
-		query = (
-			frappe.qb.from_(self.doc.doctype)
-			.inner_join(child_tab)
-			.on(child_tab.parent == parent_tab.name)
-			.select(
-				child_tab.item_code,
-				child_tab.qty,
-			)
-			.where(parent_tab.docstatus == 1)
-		)
+	def get_item_wise_inter_received_qty(self, inter_company_reference):
+		from erpnext.accounts.doctype.sales_invoice.mapper import get_inter_company_items
 
 		if self.doc.doctype == "Purchase Invoice":
-			query = query.select(
-				child_tab.sales_invoice_item.as_("name"),
-			)
-
-			query = query.where(
-				parent_tab.inter_company_invoice_reference == self.doc.inter_company_invoice_reference
-			)
+			reference_field, item_reference_field = "inter_company_invoice_reference", "sales_invoice_item"
+			fields = ["item_code", "qty"]
 		else:
-			query = query.select(
-				child_tab.delivery_note_item.as_("name"),
-			)
+			reference_field, item_reference_field = "inter_company_reference", "delivery_note_item"
+			fields = ["item_code", "qty", "delivery_note_packed_item"]
 
-			query = query.where(parent_tab.inter_company_reference == self.doc.inter_company_reference)
+		other_items = get_inter_company_items(
+			self.doc.doctype,
+			{reference_field: inter_company_reference, "name": ("!=", self.doc.name)},
+			item_reference_field,
+			fields,
+		)
 
-		data = query.run(as_dict=True)
-		item_wise_transfer_qty = defaultdict(float)
-		for row in data:
-			item_wise_transfer_qty[(row.name, row.item_code)] += flt(row.qty)
+		# a cancelled document no longer counts
+		own_items = self.doc.items if self.doc.docstatus == 1 else []
+		item_wise_received_qty = defaultdict(float)
+		for row in [*other_items, *own_items]:
+			reference = row.get("delivery_note_packed_item") or row.get(item_reference_field)
+			item_wise_received_qty[(reference, row.item_code)] += flt(row.qty)
 
-		return item_wise_transfer_qty
+		return item_wise_received_qty

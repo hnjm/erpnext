@@ -5,13 +5,20 @@ frappe.provide("erpnext.buying");
 
 erpnext.landed_cost_taxes_and_charges.setup_triggers("Subcontracting Order");
 
+const get_service_item = (frm, row) =>
+	frm.doc.service_items.find(
+		(service_item) => service_item.purchase_order_item === row.purchase_order_item
+	);
+
 // client script for Subcontracting Order Item is not necessarily required as the server side code will do everything that is necessary.
 // this is just so that the user does not get potentially confused
 frappe.ui.form.on("Subcontracting Order Item", {
 	qty(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		frappe.model.set_value(cdt, cdn, "amount", row.qty * row.rate);
-		const service_item = frm.doc.service_items[row.idx - 1];
+		const service_item = get_service_item(frm, row);
+		if (!service_item) return;
+
 		frappe.model.set_value(
 			service_item.doctype,
 			service_item.name,
@@ -27,10 +34,11 @@ frappe.ui.form.on("Subcontracting Order Item", {
 		);
 	},
 	before_items_remove(frm, cdt, cdn) {
-		const row = locals[cdt][cdn];
-		frm.toggle_enable(["service_items"], true);
-		frm.get_field("service_items").grid.grid_rows[row.idx - 1].remove();
-		frm.toggle_enable(["service_items"], false);
+		const service_item = get_service_item(frm, locals[cdt][cdn]);
+		if (!service_item) return;
+
+		frappe.model.clear_doc(service_item.doctype, service_item.name);
+		frm.refresh_field("service_items");
 	},
 });
 
@@ -101,10 +109,9 @@ frappe.ui.form.on("Subcontracting Order", {
 		frm.set_query("bom", "items", (doc, cdt, cdn) => {
 			let d = locals[cdt][cdn];
 			return {
+				query: "erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom.finished_good_bom_query",
 				filters: {
-					item: d.item_code,
-					is_active: 1,
-					docstatus: 1,
+					finished_good: d.item_code,
 					company: frm.doc.company,
 				},
 			};
@@ -127,9 +134,7 @@ frappe.ui.form.on("Subcontracting Order", {
 
 		frm.set_query("billing_address", erpnext.queries.company_address_query);
 
-		frm.set_query("shipping_address", () => {
-			return erpnext.queries.company_address_query(frm.doc);
-		});
+		frm.set_query("shipping_address", erpnext.queries.company_address_query);
 	},
 
 	onload: (frm) => {
@@ -147,7 +152,7 @@ frappe.ui.form.on("Subcontracting Order", {
 			erpnext.utils.map_current_doc({
 				method: "erpnext.buying.doctype.purchase_order.mapper.make_subcontracting_order",
 				source_name: frm.doc.purchase_order,
-				target_doc: frm,
+				target: frm,
 				freeze: true,
 				freeze_message: __("Mapping Subcontracting Order ..."),
 			});
@@ -174,7 +179,7 @@ frappe.ui.form.on("Subcontracting Order", {
 
 			if (frm.doc.reserve_stock) {
 				if (frm.doc.status !== "Closed") {
-					if (frm.doc.__onload && frm.doc.__onload.has_unreserved_stock) {
+					if (frm.doc.__onload && frm.doc.__onload.unreserved_qty) {
 						frm.add_custom_button(
 							__("Reserve"),
 							() => frm.events.create_stock_reservation_entries(frm),
@@ -303,10 +308,9 @@ frappe.ui.form.on("Subcontracting Order", {
 		});
 
 		frm.doc.supplied_items.forEach((item) => {
-			let unreserved_qty =
-				flt(item.required_qty) - flt(item.supplied_qty) - flt(item.stock_reserved_qty);
+			let unreserved_qty = frm.doc.__onload.unreserved_qty?.[item.name];
 
-			if (unreserved_qty > 0) {
+			if (unreserved_qty) {
 				dialog.fields_dict.items.df.data.push({
 					__checked: 1,
 					subcontracting_order_supplied_item: item.name,
@@ -410,12 +414,13 @@ frappe.ui.form.on("Subcontracting Order", {
 				callback: (r) => {
 					if (!r.exc && r.message) {
 						r.message.forEach((sre) => {
-							if (flt(sre.reserved_qty) > flt(sre.delivered_qty)) {
+							let held_qty = erpnext.stock_reservation.get_held_qty(sre);
+							if (held_qty > 0) {
 								dialog.fields_dict.sr_entries.df.data.push({
 									sre: sre.name,
 									item_code: sre.item_code,
 									warehouse: sre.warehouse,
-									qty: flt(sre.reserved_qty) - flt(sre.delivered_qty),
+									qty: held_qty,
 								});
 							}
 						});
@@ -423,6 +428,11 @@ frappe.ui.form.on("Subcontracting Order", {
 				},
 			})
 			.then((r) => {
+				if (!dialog.fields_dict.sr_entries.df.data.length) {
+					frappe.msgprint(__("No reserved stock to unreserve."));
+					return;
+				}
+
 				dialog.fields_dict.sr_entries.grid.refresh();
 				dialog.show();
 			});
@@ -641,7 +651,7 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 					if (me.has_unsupplied_items()) {
 						this.frm.add_custom_button(
 							__("Material to Supplier"),
-							this.make_stock_entry,
+							() => this.make_stock_entry(),
 							__("Transfer")
 						);
 					}
@@ -686,7 +696,7 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 	make_subcontracting_receipt(items) {
 		frappe.model.open_mapped_doc({
 			method: "erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order.make_subcontracting_receipt",
-			frm: cur_frm,
+			frm: this.frm,
 			args: { items: items || [] },
 			freeze: true,
 			freeze_message: __("Creating Subcontracting Receipt ..."),
@@ -697,8 +707,8 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 		frappe.call({
 			method: "erpnext.controllers.subcontracting_controller.make_rm_stock_entry",
 			args: {
-				subcontract_order: cur_frm.doc.name,
-				order_doctype: cur_frm.doc.doctype,
+				subcontract_order: this.frm.doc.name,
+				order_doctype: this.frm.doc.doctype,
 			},
 			callback: (r) => {
 				var doclist = frappe.model.sync(r.message);
@@ -708,4 +718,4 @@ erpnext.buying.SubcontractingOrderController = class SubcontractingOrderControll
 	}
 };
 
-extend_cscript(cur_frm.cscript, new erpnext.buying.SubcontractingOrderController({ frm: cur_frm }));
+frappe.ui.form.set_controller("Subcontracting Order", erpnext.buying.SubcontractingOrderController);

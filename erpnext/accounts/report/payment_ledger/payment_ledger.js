@@ -31,7 +31,7 @@ function get_filters() {
 			fieldtype: "MultiSelectList",
 			options: "Account",
 			get_data: function (txt) {
-				return frappe.db.get_link_options("Account", txt, {
+				return erpnext.utils.get_link_options("Account", txt, {
 					company: frappe.query_report.get_filter_value("company"),
 				});
 			},
@@ -57,7 +57,7 @@ function get_filters() {
 				let party_type = frappe.query_report.get_filter_value("party_type");
 				if (!party_type) return;
 
-				return frappe.db.get_link_options(party_type, txt);
+				return erpnext.utils.get_link_options(party_type, txt);
 			},
 		},
 		{
@@ -84,10 +84,18 @@ function get_filters() {
 			fieldtype: "Check",
 			width: 100,
 		},
+		{
+			fieldname: "show_cancelled_entries",
+			label: __("Show Cancelled Entries"),
+			fieldtype: "Check",
+			width: 100,
+		},
 	];
 	return filters;
 }
 
 frappe.query_reports["Payment Ledger"] = {
 	filters: get_filters(),
+	// own check area, else checkboxes land in General Ledger's stale one and vanish
+	separate_check_filters: true,
 };

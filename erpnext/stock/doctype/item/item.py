@@ -1,21 +1,24 @@
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
+from collections import defaultdict
 
 import frappe
 from frappe import _, bold
 from frappe.model.document import Document
 from frappe.model.naming import NamingSeries
-from frappe.query_builder import Interval
-from frappe.query_builder.functions import Count, CurDate, UnixTimestamp
+from frappe.query_builder.functions import Count, UnixTimestamp
 from frappe.utils import (
+	add_years,
 	cint,
 	cstr,
+	escape_html,
 	flt,
 	formatdate,
 	get_link_to_form,
 	getdate,
 	now_datetime,
+	nowdate,
 	nowtime,
 	strip,
 )
@@ -30,8 +33,12 @@ from erpnext.controllers.item_variant import (
 	make_variant_item_code,
 	validate_item_variant_attributes,
 )
+from erpnext.setup.doctype.uom.uom import validate_uoms_are_enabled
+from erpnext.setup.utils import get_exchange_rate
+from erpnext.stock.doctype.item.item_search import queue_item
 from erpnext.stock.doctype.item_default.item_default import ItemDefault
 from erpnext.stock.serial_batch_bundle import SerialBatchCreation
+from erpnext.stock.serial_batch_identity import SerialBatchIdentity
 from erpnext.stock.utils import get_valuation_method
 
 
@@ -127,7 +134,6 @@ class Item(Document):
 		opening_stock: DF.Float
 		over_billing_allowance: DF.Float
 		over_delivery_receipt_allowance: DF.Float
-		production_capacity: DF.Int
 		purchase_tax_withholding_category: DF.Link | None
 		purchase_uom: DF.Link | None
 		quality_inspection_template: DF.Link | None
@@ -146,6 +152,7 @@ class Item(Document):
 		taxes: DF.Table[ItemTax]
 		total_projected_qty: DF.Float
 		uoms: DF.Table[UOMConversionDetail]
+		use_serial_no_wise_valuation: DF.Check
 		valuation_method: DF.Literal["", "FIFO", "Moving Average", "LIFO", "Standard Cost"]
 		valuation_rate: DF.Currency
 		variant_based_on: DF.Literal["Item Attribute", "Manufacturer"]
@@ -158,7 +165,9 @@ class Item(Document):
 	def onload(self):
 		self.set_onload("stock_exists", self.stock_ledger_created())
 		self.set_onload("asset_naming_series", get_asset_naming_series())
-		self.set_onload("current_valuation_method", get_valuation_method(self.name))
+		self.set_onload(
+			"current_valuation_method", get_valuation_method(self.name, erpnext.get_default_company())
+		)
 		self.set_onload("asset_exists", self.has_submitted_assets())
 
 	def autoname(self):
@@ -178,17 +187,29 @@ class Item(Document):
 
 	def after_insert(self):
 		"""set opening stock and item price"""
-		if self.standard_rate:
-			for default in self.item_defaults or [frappe._dict()]:
-				self.add_price(default.default_price_list)
+		if self.standard_rate and not self.has_variants:
+			from erpnext.setup.doctype.brand.brand import get_brand_defaults
+			from erpnext.setup.doctype.item_group.item_group import get_item_group_defaults
 
-			frappe.msgprint(
-				_("Item Price created at rate {0}").format(
-					frappe.format(self.standard_rate, {"fieldtype": "Currency"})
-				),
-				indicator="green",
-				alert=True,
-			)
+			group_rows = frappe.get_cached_doc("Item Group", self.item_group).item_group_defaults
+			brand_rows = frappe.get_cached_doc("Brand", self.brand).brand_defaults if self.brand else []
+			companies = {row.company for row in (*self.item_defaults, *group_rows, *brand_rows)}
+			price_lists = {
+				self.get_selling_price_list(
+					get_item_defaults(self.name, company).get("default_price_list")
+					or get_item_group_defaults(self.name, company).get("default_price_list")
+					or get_brand_defaults(self.name, company).get("default_price_list")
+				)
+				for company in companies or {None}
+			}
+			if [price_list for price_list in price_lists if self.add_price(price_list)]:
+				frappe.msgprint(
+					_("Item Price created at rate {0}").format(
+						frappe.format(self.standard_rate, {"fieldtype": "Currency"})
+					),
+					indicator="green",
+					alert=True,
+				)
 
 		if self.opening_stock:
 			if self.opening_stock > 10000 and self.has_serial_no:
@@ -197,6 +218,7 @@ class Item(Document):
 					queue="long",
 					timeout=600,
 					job_name=f"set_opening_stock_for_{self.name}",
+					enqueue_after_commit=True,
 				)
 				frappe.msgprint(
 					_(
@@ -210,6 +232,7 @@ class Item(Document):
 				self.set_opening_stock()
 
 	def validate(self):
+		self.opening_stock = flt(self.opening_stock)
 		if not self.item_name:
 			self.item_name = self.item_code
 
@@ -217,8 +240,12 @@ class Item(Document):
 		self.validate_description()
 		self.add_default_uom_in_conversion_factor_table()
 		self.validate_conversion_factor()
+		self.validate_removed_uoms_not_in_item_price()
 		self.validate_item_type()
 		self.validate_naming_series()
+		if self.is_new():
+			self.validate_opening_stock()
+		self.validate_shelf_life()
 		self.check_for_active_boms()
 		self.fill_customer_code()
 		self.check_item_tax()
@@ -237,12 +264,16 @@ class Item(Document):
 		self.clear_retain_sample()
 		self.validate_retain_sample()
 		self.validate_uom_conversion_factor()
+		self.validate_default_uoms()
 		self.validate_customer_provided_part()
 		self.update_defaults_from_item_group()
 		self.validate_item_defaults()
 		self.validate_auto_reorder_enabled_in_stock_settings()
+		self.validate_serial_and_batch_no_enabled_in_stock_settings()
 		self.cant_change()
 		self.validate_serialized_change_with_bundle()
+		self.validate_serial_no_wise_valuation()
+		self.set_valuation_method_for_serial_no_wise_valuation()
 		self.validate_standard_cost_change()
 		self.validate_item_tax_net_rate_range()
 
@@ -250,8 +281,12 @@ class Item(Document):
 			self.old_item_group = frappe.db.get_value(self.doctype, self.name, "item_group")
 
 	def on_update(self):
+		from erpnext.stock.utils import clear_valuation_method_cache
+
 		self.update_variants()
 		self.update_item_price()
+		clear_valuation_method_cache()
+		queue_item(self.name)
 
 	def validate_description(self):
 		"""Clean HTML description if set"""
@@ -272,7 +307,7 @@ class Item(Document):
 					_(
 						'Image in the description has been removed. To disable this behavior, uncheck "{0}" in {1}.'
 					).format(
-						frappe.get_meta("Stock Settings").get_label("clean_description_html"),
+						frappe.get_meta("Stock Settings").get_translated_label("clean_description_html"),
 						get_link_to_form("Stock Settings"),
 					),
 					alert=True,
@@ -286,33 +321,63 @@ class Item(Document):
 				frappe.throw(_('"Customer Provided Item" cannot have Valuation Rate'))
 			self.default_material_request_type = "Customer Provided"
 
+	def get_selling_price_list(self, price_list=None):
+		if price_list and frappe.get_cached_value("Price List", price_list, "selling"):
+			return price_list
+
+		return frappe.get_single_value("Selling Settings", "selling_price_list") or frappe.db.get_value(
+			"Price List", "Standard Selling"
+		)
+
 	def add_price(self, price_list=None):
 		"""Add a new price"""
+		price_list = self.get_selling_price_list(price_list)
 		if not price_list:
-			price_list = frappe.get_single_value(
-				"Selling Settings", "selling_price_list"
-			) or frappe.db.get_value("Price List", "Standard Selling")
-		if price_list:
-			item_price = frappe.get_doc(
-				{
-					"doctype": "Item Price",
-					"price_list": price_list,
-					"item_code": self.name,
-					"uom": self.stock_uom,
-					"brand": self.brand,
-					"currency": erpnext.get_default_currency(),
-					"price_list_rate": self.standard_rate,
-				}
+			return False
+
+		default_currency = erpnext.get_default_currency()
+		currency = frappe.get_cached_value("Price List", price_list, "currency") or default_currency
+		price_list_rate = flt(self.standard_rate)
+		if default_currency and currency != default_currency:
+			exchange_rate = flt(get_exchange_rate(currency, default_currency, args="for_selling"))
+			if not exchange_rate:
+				return False
+
+			price_list_rate = flt(
+				price_list_rate / exchange_rate,
+				frappe.get_precision("Item Price", "price_list_rate", currency),
 			)
-			item_price.insert()
+
+		frappe.get_doc(
+			{
+				"doctype": "Item Price",
+				"price_list": price_list,
+				"item_code": self.name,
+				"uom": self.stock_uom,
+				"brand": self.brand,
+				"currency": currency,
+				"price_list_rate": price_list_rate,
+			}
+		).insert()
+		return True
+
+	def validate_opening_stock(self):
+		if not self.is_stock_item or not self.opening_stock:
+			return
+
+		if self.has_serial_no and not self.serial_no_series:
+			frappe.throw(
+				_("Serial Number Series is mandatory when entering Opening Stock for a serialized item.")
+			)
+
+		if self.has_batch_no and not self.create_new_batch:
+			frappe.throw(
+				_("Enable Automatically Create New Batch when entering Opening Stock for a batched item.")
+			)
 
 	def set_opening_stock(self):
 		"""set opening stock"""
-		if (
-			not self.is_stock_item
-			or (self.has_serial_no and not self.serial_no_series)
-			or (self.has_batch_no and (not self.create_new_batch or not self.batch_number_series))
-		):
+		if not self.is_stock_item:
 			return
 
 		if self.valuation_rate is None and not self.is_customer_provided_item:
@@ -398,6 +463,19 @@ class Item(Document):
 				).format(self.item_code)
 			)
 
+	def validate_shelf_life(self):
+		if (
+			self.has_batch_no
+			and self.has_expiry_date
+			and self.create_new_batch
+			and cint(self.shelf_life_in_days) <= 0
+		):
+			frappe.throw(
+				_("{0} must be greater than zero.").format(
+					self.get_label_from_fieldname("shelf_life_in_days")
+				)
+			)
+
 	def clear_retain_sample(self):
 		if not self.has_batch_no:
 			self.retain_sample = False
@@ -424,30 +502,10 @@ class Item(Document):
 				frappe.throw(
 					_("Taxes row #{0}: {1} cannot be smaller than {2}").format(
 						tax.idx,
-						bold(_(tax.meta.get_label("maximum_net_rate"))),
-						bold(_(tax.meta.get_label("minimum_net_rate"))),
+						bold(tax.meta.get_translated_label("maximum_net_rate")),
+						bold(tax.meta.get_translated_label("minimum_net_rate")),
 					)
 				)
-
-	def update_template_tables(self):
-		template = frappe.get_cached_doc("Item", self.variant_of)
-
-		# add item taxes from template
-		for d in template.get("taxes"):
-			self.append("taxes", d)
-
-		# copy re-order table if empty
-		if not self.get("reorder_levels"):
-			for d in template.get("reorder_levels"):
-				n = {}
-				for k in (
-					"warehouse",
-					"warehouse_reorder_level",
-					"warehouse_reorder_qty",
-					"material_request_type",
-				):
-					n[k] = d.get(k)
-				self.append("reorder_levels", n)
 
 	def validate_conversion_factor(self):
 		check_list = []
@@ -465,6 +523,29 @@ class Item(Document):
 				frappe.throw(
 					_("Conversion factor for default Unit of Measure must be 1 in row {0}").format(d.idx)
 				)
+
+	def validate_removed_uoms_not_in_item_price(self):
+		"""An Item Price is per one of the Item's UOMs, so that UOM cannot be removed while one uses it."""
+		doc_before_save = self.get_doc_before_save()
+		if not doc_before_save:
+			return
+
+		removed_uoms = {d.uom for d in doc_before_save.uoms} - {d.uom for d in self.uoms}
+		if not removed_uoms:
+			return
+
+		item_price = frappe.db.get_value(
+			"Item Price",
+			{"item_code": self.name, "uom": ("in", list(removed_uoms))},
+			["name", "uom"],
+			as_dict=True,
+		)
+		if item_price:
+			frappe.throw(
+				_("UOM {0} cannot be removed from the Item as Item Price {1} uses it.").format(
+					bold(item_price.uom), get_link_to_form("Item Price", item_price.name)
+				)
+			)
 
 	def validate_item_type(self):
 		if self.has_serial_no == 1 and self.is_stock_item == 0 and not self.is_fixed_asset:
@@ -575,7 +656,8 @@ class Item(Document):
 		_warehouse_before_save = frappe._dict()
 		if not self.is_new() and self._doc_before_save:
 			_warehouse_before_save = {
-				d.name: d.warehouse for d in self._doc_before_save.get("reorder_levels") or []
+				d.name: (d.warehouse, d.warehouse_group)
+				for d in self._doc_before_save.get("reorder_levels") or []
 			}
 
 		for d in self.get("reorder_levels"):
@@ -595,7 +677,7 @@ class Item(Document):
 				frappe.throw(_("Row #{0}: Please set reorder quantity").format(d.idx))
 
 			if d.warehouse_group and d.warehouse:
-				if _warehouse_before_save.get(d.name) == d.warehouse:
+				if _warehouse_before_save.get(d.name) == (d.warehouse, d.warehouse_group):
 					continue
 
 				child_warehouses = get_child_warehouses(d.warehouse_group)
@@ -642,8 +724,10 @@ class Item(Document):
 
 		if merge:
 			self.validate_properties_before_merge(new_name)
+			self.validate_shared_serial_batch_numbers_before_merge(old_name, new_name)
 			self.validate_duplicate_product_bundles_before_merge(old_name, new_name)
-			self.delete_old_bins(old_name)
+			self.validate_duplicate_lead_times_before_merge(old_name, new_name)
+			self.delete_old_bins(old_name, new_name)
 
 	def after_rename(self, old_name, new_name, merge):
 		if merge:
@@ -655,13 +739,28 @@ class Item(Document):
 			)
 
 		frappe.db.set_value("Item", new_name, "item_code", new_name)
+		self.rename_lead_time(new_name)
 
 		if merge:
 			self.set_last_purchase_rate(new_name)
 			self.recalculate_bin_qty(new_name)
 
-	def delete_old_bins(self, old_name):
-		frappe.db.delete("Bin", {"item_code": old_name})
+		queue_item(new_name, drop=old_name)
+
+	def rename_lead_time(self, new_name):
+		"""Keep Item Lead Time named after its item."""
+		lead_time = frappe.db.get_value("Item Lead Time", {"item_code": new_name})
+		if lead_time and lead_time != new_name:
+			frappe.rename_doc("Item Lead Time", lead_time, new_name, show_alert=False)
+
+	def delete_old_bins(self, old_name, new_name=None):
+		if not new_name:
+			frappe.db.delete("Bin", {"item_code": old_name})
+			return
+
+		target_warehouses = frappe.get_all("Bin", filters={"item_code": new_name}, pluck="warehouse")
+		if target_warehouses:
+			frappe.db.delete("Bin", {"item_code": old_name, "warehouse": ("in", target_warehouses)})
 
 	def validate_duplicate_item_in_stock_reconciliation(self, old_name, new_name):
 		sri = frappe.qb.DocType("Stock Reconciliation Item")
@@ -690,20 +789,41 @@ class Item(Document):
 			"Note: To merge the items, create a separate Stock Reconciliation for the old item {0}"
 		).format(frappe.bold(old_name))
 
-		frappe.throw(_(msg), title=_("Cannot Merge"), exc=DataValidationError)
+		frappe.throw(msg, title=_("Cannot Merge"), exc=DataValidationError)
 
 	def validate_properties_before_merge(self, new_name):
 		# Validate properties before merging
 		if not frappe.db.exists("Item", new_name):
 			frappe.throw(_("Item {0} does not exist").format(new_name))
 
-		field_list = ["stock_uom", "is_stock_item", "has_serial_no", "has_batch_no"]
+		field_list = [
+			"stock_uom",
+			"is_stock_item",
+			"has_serial_no",
+			"has_batch_no",
+			"has_variants",
+			"variant_of",
+		]
 		new_properties = [cstr(d) for d in frappe.db.get_value("Item", new_name, field_list)]
+
+		if self.has_variants or cint(frappe.db.get_value("Item", new_name, "has_variants")):
+			frappe.throw(_("Templates cannot be merged"), title=_("Cannot Merge"), exc=DataValidationError)
 
 		if new_properties != [cstr(self.get(field)) for field in field_list]:
 			msg = _("To merge, following properties must be same for both items")
-			msg += ": \n" + ", ".join([_(self.meta.get_label(fld)) for fld in field_list])
+			msg += ": \n" + ", ".join([self.meta.get_translated_label(fld) for fld in field_list])
 			frappe.throw(msg, title=_("Cannot Merge"), exc=DataValidationError)
+
+	def validate_shared_serial_batch_numbers_before_merge(self, old_name, new_name):
+		for doctype in ("Serial No", "Batch"):
+			if shared := SerialBatchIdentity(doctype).get_shared_numbers(old_name, new_name):
+				frappe.throw(
+					_("Cannot merge because both items have {0} {1}").format(
+						_(doctype), ", ".join(escape_html(number) for number in shared)
+					),
+					title=_("Cannot Merge"),
+					exc=DataValidationError,
+				)
 
 	def validate_duplicate_product_bundles_before_merge(self, old_name, new_name):
 		"Block merge if both old and new items have product bundles."
@@ -721,9 +841,24 @@ class Item(Document):
 			)
 			frappe.throw(msg, title=_("Cannot Merge"), exc=DataValidationError)
 
+	def validate_duplicate_lead_times_before_merge(self, old_name, new_name):
+		old_lead_time = frappe.db.get_value("Item Lead Time", {"item_code": old_name})
+		if not (old_lead_time and frappe.db.exists("Item Lead Time", {"item_code": new_name})):
+			return
+
+		frappe.throw(
+			_("Please delete Item Lead Time {0}, before merging {1} into {2}").format(
+				get_link_to_form("Item Lead Time", old_lead_time),
+				frappe.bold(old_name),
+				frappe.bold(new_name),
+			),
+			title=_("Cannot Merge"),
+			exc=DataValidationError,
+		)
+
 	def set_last_purchase_rate(self, new_name):
 		last_purchase_rate = get_last_purchase_details(new_name).get("base_net_rate", 0)
-		frappe.db.set_value("Item", new_name, "last_purchase_rate", last_purchase_rate)
+		frappe.db.set_value("Item", new_name, "last_purchase_rate", last_purchase_rate, update_modified=False)
 
 	def recalculate_bin_qty(self, new_name):
 		from erpnext.stock.stock_balance import repost_stock
@@ -739,11 +874,19 @@ class Item(Document):
 			distinct=True,
 		)
 
+		bin_warehouses = set(frappe.get_all("Bin", filters={"item_code": new_name}, pluck="warehouse"))
+
 		# Delete all existing bins to avoid duplicate bins for the same item and warehouse
 		frappe.db.delete("Bin", {"item_code": new_name})
 
 		for warehouse in repost_stock_for_warehouses:
 			repost_stock(new_name, warehouse)
+
+		for warehouse in bin_warehouses - set(repost_stock_for_warehouses):
+			repost_stock(new_name, warehouse, only_bin=True)
+
+		for warehouse in bin_warehouses | set(repost_stock_for_warehouses):
+			rebuild_bin_reservations(new_name, warehouse)
 
 		frappe.db.set_single_value("Stock Settings", "allow_negative_stock", existing_allow_negative_stock)
 
@@ -774,12 +917,7 @@ class Item(Document):
 			).run()
 
 	def validate_item_defaults(self):
-		companies = {row.company for row in self.item_defaults}
-
-		if len(companies) != len(self.item_defaults):
-			frappe.throw(_("Cannot set multiple Item Defaults for a company."))
-
-		validate_item_default_company_links(self.item_defaults)
+		validate_item_defaults(self.item_defaults)
 
 	def update_defaults_from_item_group(self):
 		"""Get defaults from Item Group"""
@@ -789,19 +927,7 @@ class Item(Document):
 		item_group = frappe.get_cached_doc("Item Group", self.item_group)
 		if item_group.item_group_defaults:
 			for item in item_group.item_group_defaults:
-				self.append(
-					"item_defaults",
-					{
-						"company": item.company,
-						"default_warehouse": item.default_warehouse,
-						"default_price_list": item.default_price_list,
-						"buying_cost_center": item.buying_cost_center,
-						"default_supplier": item.default_supplier,
-						"expense_account": item.expense_account,
-						"selling_cost_center": item.selling_cost_center,
-						"income_account": item.income_account,
-					},
-				)
+				self.append("item_defaults", frappe.copy_doc(item))
 		else:
 			defaults = frappe.defaults.get_defaults() or {}
 
@@ -815,19 +941,6 @@ class Item(Document):
 				self.append(
 					"item_defaults",
 					{"company": defaults.get("company"), "default_warehouse": defaults.default_warehouse},
-				)
-
-		if not self.taxes and item_group.taxes:
-			for tax in item_group.taxes:
-				self.append(
-					"taxes",
-					{
-						"item_tax_template": tax.item_tax_template,
-						"tax_category": tax.tax_category,
-						"valid_from": tax.valid_from,
-						"minimum_net_rate": tax.minimum_net_rate,
-						"maximum_net_rate": tax.maximum_net_rate,
-					},
 				)
 
 	def update_variants(self):
@@ -1009,15 +1122,17 @@ class Item(Document):
 				frappe.throw(_("Variant Based On cannot be changed"))
 
 	def validate_uom(self):
+		validate_uoms_are_enabled([self.stock_uom, *(d.uom for d in self.uoms)])
+		allow_different_uom = frappe.get_cached_value(
+			"Item Variant Settings", "Item Variant Settings", "allow_different_uom"
+		)
+
 		if not self.is_new():
 			check_stock_uom_with_bin(self.name, self.stock_uom)
-		if self.has_variants:
+		if self.has_variants and not allow_different_uom:
 			for d in frappe.db.get_all("Item", filters={"variant_of": self.name}):
 				check_stock_uom_with_bin(d.name, self.stock_uom)
 		if self.variant_of:
-			allow_different_uom = frappe.get_cached_value(
-				"Item Variant Settings", "Item Variant Settings", "allow_different_uom"
-			)
 			if not allow_different_uom:
 				template_uom = frappe.db.get_value("Item", self.variant_of, "stock_uom")
 				if template_uom != self.stock_uom:
@@ -1028,11 +1143,30 @@ class Item(Document):
 					)
 
 	def validate_uom_conversion_factor(self):
-		if self.uoms:
-			for d in self.uoms:
-				value = get_uom_conv_factor(d.uom, self.stock_uom)
-				if value:
-					d.conversion_factor = value
+		for d in self.get("uoms"):
+			if not d.conversion_factor:
+				d.conversion_factor = get_uom_conv_factor(d.uom, self.stock_uom)
+
+			if flt(d.conversion_factor) <= 0:
+				frappe.throw(_("Row {0}: Conversion Factor must be greater than zero.").format(d.idx))
+
+	def validate_default_uoms(self):
+		if not frappe.get_single_value("Stock Settings", "allow_uom_with_conversion_rate_defined_in_item"):
+			return
+
+		allowed_uoms = get_allowed_uoms([self])[self.name]
+		for fieldname in ("sales_uom", "purchase_uom"):
+			uom = self.get(fieldname)
+			if uom and uom not in allowed_uoms:
+				frappe.throw(
+					_(
+						"{0} {1} has no conversion factor in this Item. Add it to the UOMs table, or disable {2} in Stock Settings."
+					).format(
+						_(self.meta.get_label(fieldname)),
+						bold(uom),
+						bold(_("Allow UOM with conversion rate defined in Item")),
+					)
+				)
 
 	def validate_attributes(self):
 		if not (self.has_variants or self.variant_of):
@@ -1054,7 +1188,11 @@ class Item(Document):
 					attributes.append(d.attribute)
 
 	def validate_variant_attributes(self):
-		if self.is_new() and self.variant_of and self.variant_based_on == "Item Attribute":
+		if (
+			self.variant_of
+			and self.variant_based_on == "Item Attribute"
+			and (self.is_new() or self.has_attribute_changes())
+		):
 			# remove attributes with no attribute_value set
 			self.attributes = [d for d in self.attributes if cstr(d.attribute_value).strip()]
 
@@ -1074,6 +1212,16 @@ class Item(Document):
 			# copy variant_of value for each attribute row
 			for d in self.attributes:
 				d.variant_of = self.variant_of
+
+	def has_attribute_changes(self) -> bool:
+		doc_before_save = self.get_doc_before_save()
+		if not doc_before_save:
+			return True
+
+		def get_values(doc):
+			return [(d.attribute, cstr(d.attribute_value)) for d in doc.get("attributes")]
+
+		return get_values(self) != get_values(doc_before_save)
 
 	def validate_standard_cost_change(self):
 		"""Once stock exists, an item's valuation method cannot be switched to or from Standard
@@ -1131,7 +1279,7 @@ class Item(Document):
 			return
 
 		if linked_doc := self._get_linked_submitted_documents(changed_fields):
-			changed_field_labels = [frappe.bold(_(self.meta.get_label(f))) for f in changed_fields]
+			changed_field_labels = [frappe.bold(self.meta.get_translated_label(f)) for f in changed_fields]
 			msg = _(
 				"As there are existing submitted transactions against item {0}, you can not change the value of {1}."
 			).format(self.name, ", ".join(changed_field_labels))
@@ -1143,6 +1291,49 @@ class Item(Document):
 				)
 
 			frappe.throw(msg, title=_("Linked with submitted documents"))
+
+	def validate_serial_no_wise_valuation(self):
+		if self.is_new() or not self._doc_before_save:
+			return
+
+		if not self.use_serial_no_wise_valuation or self._doc_before_save.use_serial_no_wise_valuation:
+			return
+
+		if frappe.db.exists("Serial No", {"item_code": self.name}):
+			frappe.throw(
+				_(
+					"Serial No Wise Valuation cannot be enabled for Item {0} because Serial Nos already exist for it. Valuation for those Serial Nos was not tracked, so enabling it now would value outward entries incorrectly."
+				).format(frappe.bold(self.name)),
+				title=_("Serial Nos Exist"),
+			)
+
+	def set_valuation_method_for_serial_no_wise_valuation(self):
+		if not self.has_serial_no or self.use_serial_no_wise_valuation:
+			return
+
+		# Only the switch turning off forces Moving Average, because the per serial costs already in the
+		# ledger cannot be replayed as a FIFO queue. An item that has always had the switch off keeps its
+		# own method, so an unrelated save cannot silently revalue a ledger nothing reposts.
+		if self._doc_before_save and not self._doc_before_save.use_serial_no_wise_valuation:
+			return
+
+		if not frappe.db.exists("Stock Ledger Entry", {"item_code": self.name, "is_cancelled": 0}):
+			return
+
+		if (
+			not self.is_new()
+			and self._doc_before_save
+			and self.has_value_changed("valuation_method")
+			and self.valuation_method in ("FIFO", "LIFO", "Standard Cost")
+		):
+			frappe.throw(
+				_(
+					"Valuation Method for Item {0} must be Moving Average because Serial No Wise Valuation is disabled. Enable Serial No Wise Valuation to use FIFO, LIFO or Standard Cost."
+				).format(frappe.bold(self.name)),
+				title=_("Invalid Valuation Method"),
+			)
+
+		self.valuation_method = "Moving Average"
 
 	def validate_serialized_change_with_bundle(self):
 		"""Block turning a serialized item non-serialized while any Serial and Batch Bundle still exists
@@ -1181,6 +1372,7 @@ class Item(Document):
 				"Sales Order Item",
 				"Purchase Order Item",
 				"Material Request Item",
+				"Work Order Item",
 				"Product Bundle",
 				"BOM",
 			]
@@ -1199,9 +1391,13 @@ class Item(Document):
 				if linked_doc := frappe.db.get_value(doctype, filters, fieldname, as_dict=True):
 					return linked_doc.update({"doctype": doctype})
 
-			elif doctype in (
-				"Purchase Invoice Item",
-				"Sales Invoice Item",
+			elif (
+				doctype
+				in (
+					"Purchase Invoice Item",
+					"Sales Invoice Item",
+				)
+				and "is_stock_item" not in changed_fields
 			):
 				# If Invoice has Stock impact, only then consider it.
 				if linked_doc := frappe.db.get_value(
@@ -1230,6 +1426,22 @@ class Item(Document):
 					indicator="orange",
 				)
 
+	def validate_serial_and_batch_no_enabled_in_stock_settings(self):
+		if frappe.get_single_value("Stock Settings", "enable_serial_and_batch_no_for_item"):
+			return
+
+		doc_before_save = self.get_doc_before_save()
+		for fieldname in ("has_serial_no", "has_batch_no"):
+			if self.get(fieldname) and not (doc_before_save and doc_before_save.get(fieldname)):
+				frappe.throw(
+					_("Cannot enable {0} as {1} is disabled in {2}").format(
+						bold(self.meta.get_label(fieldname)),
+						bold(_("Activate Serial / Batch No for Item")),
+						get_link_to_form("Stock Settings", "Stock Settings"),
+					),
+					title=_("Serial / Batch No Not Activated"),
+				)
+
 
 def convert_erpnext_to_barcodenumber(erpnext_number, barcode):
 	if erpnext_number == "EAN":
@@ -1243,12 +1455,7 @@ def convert_erpnext_to_barcodenumber(erpnext_number, barcode):
 
 		return erpnext_number
 
-	convert = {
-		"UPC-A": "UPCA",
-		"CODE-39": "CODE39",
-		"ISBN-10": "ISBN10",
-		"ISBN-13": "ISBN13",
-	}
+	convert = {"UPCA": "UPC"}
 
 	if erpnext_number in convert:
 		return convert[erpnext_number]
@@ -1276,7 +1483,8 @@ def get_timeline_data(doctype: str, name: str) -> dict[int, int]:
 		frappe.qb.from_(sle)
 		.select(UnixTimestamp(sle.posting_date), Count("*"))
 		.where(sle.item_code == name)
-		.where(sle.posting_date > CurDate() - Interval(years=1))
+		.where(sle.is_cancelled == 0)
+		.where(sle.posting_date > add_years(nowdate(), -1))
 		.groupby(sle.posting_date)
 		.run()
 	)
@@ -1312,48 +1520,26 @@ def validate_cancelled_item(item_code, docstatus=None):
 
 
 @frappe.request_cache
-def get_last_purchase_details(item_code, doc_name=None, conversion_rate=1.0):
-	"""returns last purchase details in stock uom"""
-	# get last purchase order item details
+def get_last_purchase_details(item_code, doc_name=None, conversion_rate=1.0, conversion_factor=1.0):
+	"""returns last purchase details per stock uom, or per the uom of `conversion_factor`"""
+	# the latest by date wins, a Purchase Order before a Receipt before an Invoice on the same date
+	last_purchases = []
+	for doctype in ("Purchase Order", "Purchase Receipt", "Purchase Invoice"):
+		if details := get_purchase_voucher_details(doctype, item_code, doc_name):
+			purchase_date = getdate(details[0].get("posting_date") or details[0].get("transaction_date"))
+			last_purchases.append((purchase_date, details[0]))
 
-	last_purchase_order = get_purchase_voucher_details("Purchase Order", item_code, doc_name)
+	if not last_purchases:
+		return frappe._dict()
 
-	# get last purchase receipt item details
-	last_purchase_receipt = get_purchase_voucher_details("Purchase Receipt", item_code, doc_name)
+	purchase_date, last_purchase = max(last_purchases, key=lambda purchase: purchase[0])
 
-	purchase_order_date = getdate(
-		last_purchase_order and last_purchase_order[0].transaction_date or "1900-01-01"
-	)
-	purchase_receipt_date = getdate(
-		last_purchase_receipt and last_purchase_receipt[0].posting_date or "1900-01-01"
-	)
-
-	if last_purchase_order and (purchase_order_date >= purchase_receipt_date or not last_purchase_receipt):
-		# use purchase order
-
-		last_purchase = last_purchase_order[0]
-		purchase_date = purchase_order_date
-
-	elif last_purchase_receipt and (purchase_receipt_date > purchase_order_date or not last_purchase_order):
-		# use purchase receipt
-		last_purchase = last_purchase_receipt[0]
-		purchase_date = purchase_receipt_date
-
-	else:
-		last_purchase_invoice = get_purchase_voucher_details("Purchase Invoice", item_code, doc_name)
-
-		if last_purchase_invoice:
-			last_purchase = last_purchase_invoice[0]
-			purchase_date = getdate(last_purchase.posting_date)
-		else:
-			return frappe._dict()
-
-	conversion_factor = flt(last_purchase.conversion_factor)
+	uom_factor = (flt(conversion_factor) or 1.0) / flt(last_purchase.conversion_factor)
 	out = frappe._dict(
 		{
-			"base_price_list_rate": flt(last_purchase.base_price_list_rate) / conversion_factor,
-			"base_rate": flt(last_purchase.base_rate) / conversion_factor,
-			"base_net_rate": flt(last_purchase.base_net_rate) / conversion_factor,
+			"base_price_list_rate": flt(last_purchase.base_price_list_rate) * uom_factor,
+			"base_rate": flt(last_purchase.base_rate) * uom_factor,
+			"base_net_rate": flt(last_purchase.base_net_rate) * uom_factor,
 			"discount_percentage": flt(last_purchase.discount_percentage),
 			"purchase_date": purchase_date,
 		}
@@ -1364,6 +1550,8 @@ def get_last_purchase_details(item_code, doc_name=None, conversion_rate=1.0):
 		{
 			"price_list_rate": out.base_price_list_rate / conversion_rate,
 			"rate": out.base_rate / conversion_rate,
+			# a rate above the price list rate is a margin, not a discount
+			"discount_amount": max(out.base_price_list_rate - out.base_rate, 0) / conversion_rate,
 			"base_rate": out.base_rate,
 			"base_net_rate": out.base_net_rate,
 		}
@@ -1391,12 +1579,16 @@ def get_purchase_voucher_details(doctype, item_code, document_name=None):
 		)
 		.where(parent_doc.docstatus == 1)
 		.where(child_doc.item_code == item_code)
+		# skipped when the last purchase rate is updated on submit
+		.where(child_doc.is_free_item == 0)
+		.where(parent_doc.is_internal_supplier == 0)
 	)
 
 	if document_name:
 		query = query.where(parent_doc.name != document_name)
 
 	if doctype in ("Purchase Receipt", "Purchase Invoice"):
+		query = query.where(parent_doc.is_return == 0)
 		query = query.select(parent_doc.posting_date, parent_doc.posting_time)
 		query = query.orderby(
 			parent_doc.posting_date, parent_doc.posting_time, parent_doc.name, order=Order.desc
@@ -1409,11 +1601,20 @@ def get_purchase_voucher_details(doctype, item_code, document_name=None):
 	return query.limit(1).run(as_dict=1)
 
 
+def rebuild_bin_reservations(item_code, warehouse):
+	from erpnext.stock.utils import get_or_make_bin
+
+	bin_doc = frappe.get_doc("Bin", get_or_make_bin(item_code, warehouse))
+	bin_doc.update_reserved_qty_for_sub_contracting()
+	bin_doc.update_reserved_stock()
+	bin_doc.update_reserved_qty_for_production()
+
+
 def check_stock_uom_with_bin(item, stock_uom):
 	if stock_uom == frappe.db.get_value("Item", item, "stock_uom"):
 		return
 
-	ref_uom = frappe.db.get_value("Stock Ledger Entry", {"item_code": item}, "stock_uom")
+	ref_uom = frappe.db.get_value("Stock Ledger Entry", {"item_code": item, "is_cancelled": 0}, "stock_uom")
 
 	if ref_uom:
 		if cstr(ref_uom) != cstr(stock_uom):
@@ -1431,6 +1632,10 @@ def check_stock_uom_with_bin(item, stock_uom):
 			["ordered_qty", ">", 0],
 			["indented_qty", ">", 0],
 			["planned_qty", ">", 0],
+			["reserved_qty_for_production", ">", 0],
+			["reserved_qty_for_sub_contract", ">", 0],
+			["reserved_qty_for_production_plan", ">", 0],
+			["reserved_stock", ">", 0],
 		],
 		pluck="name",  # only used as an existence check below
 		limit=1,
@@ -1468,6 +1673,7 @@ def set_item_default(item_code, company, fieldname, value):
 		if d.company == company:
 			if not d.get(fieldname):
 				frappe.db.set_value(d.doctype, d.name, fieldname, value)
+				item.clear_cache()
 			return
 
 	# no row found, add a new row for the company
@@ -1478,11 +1684,36 @@ def set_item_default(item_code, company, fieldname, value):
 
 @frappe.whitelist()
 def get_item_details(item_code: str, company: str | None = None):
+	# The whitelisted entry point authorises; _get_item_details is the in-process helper that does
+	# not. Deliberately NOT an `ignore_permissions` argument on this function: it is whitelisted, so
+	# a caller could pass it and skip the check.
+	return _get_item_details(item_code, company, ignore_permissions=False)
+
+
+def _get_item_details(item_code: str, company: str | None = None, ignore_permissions: bool = True):
+	doc = frappe.get_cached_doc("Item", item_code)
+	if not ignore_permissions:
+		# the whole Item document is returned below, so the record itself has to be authorised. This
+		# is the check stock/get_item_details.py already makes before returning details for a
+		# transaction.
+		doc.check_permission()
+
 	out = frappe._dict()
 	if company:
+		if not ignore_permissions:
+			# `company` is caller supplied and scopes the Item Defaults returned alongside the item.
+			# Checked through the caller's own Company restrictions rather than a permission on
+			# Company, so a caller with no Company restriction is unaffected.
+			from erpnext.stock.doctype.company_restriction.company_restriction import (
+				get_allowed_companies,
+			)
+
+			allowed_companies = get_allowed_companies(frappe.session.user, "Item")
+			if allowed_companies and company not in allowed_companies:
+				frappe.throw(_("Not permitted for {0}").format(company), frappe.PermissionError)
+
 		out = get_item_defaults(item_code, company) or frappe._dict()
 
-	doc = frappe.get_cached_doc("Item", item_code)
 	out.update(doc.as_dict())
 
 	return out
@@ -1499,36 +1730,124 @@ def get_uom_conv_factor(uom: str | None, stock_uom: str | None):
 	from_uom, to_uom = uom, stock_uom  # renaming for readability
 
 	exact_match = frappe.db.get_value(
-		"UOM Conversion Factor", {"to_uom": to_uom, "from_uom": from_uom}, ["value"], as_dict=1
+		"UOM Conversion Factor",
+		{"to_uom": to_uom, "from_uom": from_uom, "value": [">", 0]},
+		["value"],
+		as_dict=1,
 	)
 	if exact_match:
 		return exact_match.value
 
 	inverse_match = frappe.db.get_value(
-		"UOM Conversion Factor", {"to_uom": from_uom, "from_uom": to_uom}, ["value"], as_dict=1
+		"UOM Conversion Factor",
+		{"to_uom": from_uom, "from_uom": to_uom, "value": [">", 0]},
+		["value"],
+		as_dict=1,
 	)
-	if inverse_match:
-		return 1 / inverse_match.value
+	if inverse_match and inverse_match.value:
+		return flt(1 / inverse_match.value, frappe.get_precision("UOM Conversion Factor", "value"))
 
-	# This attempts to try and get conversion from intermediate UOM.
+	return _get_conv_factor_via_intermediate_uom(from_uom, to_uom)
+
+
+def _get_conv_factor_via_intermediate_uom(from_uom, to_uom):
 	# case:
 	# 			 g -> mg = 1000
 	# 			 g -> kg = 0.001
 	# therefore	 kg -> mg = 1000  / 0.001 = 1,000,000
+	value = _get_conv_factor_via_shared_uom("from_uom", "to_uom", to_uom, from_uom)
+	if value is None:
+		value = _get_conv_factor_via_shared_uom("to_uom", "from_uom", from_uom, to_uom)
+
+	if value is not None:
+		return flt(value, frappe.get_precision("UOM Conversion Factor", "value"))
+
+
+def _get_conv_factor_via_shared_uom(shared_field, other_field, first_uom, second_uom):
 	first = frappe.qb.DocType("UOM Conversion Factor").as_("first")
 	second = frappe.qb.DocType("UOM Conversion Factor").as_("second")
-	intermediate_match = (
+	# Conversion pairs are not unique, so document names provide stable tie-breakers.
+	match = (
 		frappe.qb.from_(first)
 		.join(second)
-		.on(first.from_uom == second.from_uom)
+		.on((first[shared_field] == second[shared_field]) & (first.category == second.category))
 		.select((first.value / second.value).as_("value"))
-		.where((first.to_uom == to_uom) & (second.to_uom == from_uom))
+		.where(
+			(first[other_field] == first_uom)
+			& (second[other_field] == second_uom)
+			& (first.value > 0)
+			& (second.value > 0)
+		)
+		.orderby(first.name, second.name)
 		.limit(1)
 		.run(as_dict=1)
 	)
 
-	if intermediate_match:
-		return intermediate_match[0].value
+	return match[0].value if match else None
+
+
+def get_allowed_uoms(items: list) -> dict[str, dict[str, float]]:
+	"""Map items to the UOMs Stock Settings allows them, with conversion factors: the stock UOM, the
+	template's UOM conversions when both share a stock UOM, and the item's own. An Item document's own
+	conversions come from its unsaved rows."""
+	conversions = get_uom_conversions({item.name for item in items} | {item.variant_of for item in items})
+	allowed_uoms = {}
+	for item in items:
+		own = item.uoms if isinstance(item, Document) else conversions[item.name]
+		inherited = [row for row in conversions[item.variant_of] if row.stock_uom == item.stock_uom]
+		allowed_uoms[item.name] = {item.stock_uom: 1.0} | {
+			row.uom: row.conversion_factor for row in inherited + own if flt(row.conversion_factor) > 0
+		}
+
+	return allowed_uoms
+
+
+def get_uom_conversions(item_codes: set) -> defaultdict[str, list]:
+	item = frappe.qb.DocType("Item")
+	detail = frappe.qb.DocType("UOM Conversion Detail")
+	rows = (
+		frappe.qb.from_(detail)
+		.join(item)
+		.on(item.name == detail.parent)
+		.select(detail.parent, detail.uom, detail.conversion_factor, item.stock_uom)
+		.where((detail.parenttype == "Item") & detail.parent.isin(list(item_codes - {None})))
+		.orderby(detail.idx)
+		.run(as_dict=True)
+	)
+
+	conversions = defaultdict(list)
+	for row in rows:
+		conversions[row.parent].append(row)
+
+	return conversions
+
+
+def validate_item_uoms(rows: list) -> None:
+	if not frappe.get_single_value("Stock Settings", "allow_uom_with_conversion_rate_defined_in_item"):
+		return
+
+	rows = [row for row in rows if row.item_code and row.uom]
+	if not rows:
+		return
+
+	items = frappe.get_all(
+		"Item",
+		filters={"name": ["in", list({row.item_code for row in rows})]},
+		fields=["name", "stock_uom", "variant_of"],
+	)
+	allowed_uoms = get_allowed_uoms(items)
+	for row in rows:
+		if row.uom not in allowed_uoms.get(row.item_code, {}):
+			frappe.throw(
+				_(
+					"Row #{0}: UOM {1} has no conversion factor in Item {2}. Add it to the Item's UOMs table, or disable {3} in Stock Settings."
+				).format(
+					row.idx,
+					bold(row.uom),
+					bold(row.item_code),
+					bold(_("Allow UOM with conversion rate defined in Item")),
+				)
+			)
 
 
 @frappe.whitelist()
@@ -1554,15 +1873,22 @@ def update_variants(variants, template, publish_progress=True):
 			frappe.publish_progress(count / total * 100, title=_("Updating Variants..."))
 
 
+def validate_item_defaults(item_defaults: list[ItemDefault]) -> None:
+	companies = {row.company for row in item_defaults}
+	if len(companies) != len(item_defaults):
+		frappe.throw(_("Cannot set multiple Item Defaults for a company."))
+
+	validate_item_default_company_links(item_defaults)
+
+
 def validate_item_default_company_links(item_defaults: list[ItemDefault]) -> None:
+	company_links = [
+		(df.options, df.fieldname)
+		for df in frappe.get_meta("Item Default").get_link_fields()
+		if df.options in ("Warehouse", "Cost Center", "Account")
+	]
 	for item_default in item_defaults:
-		for doctype, field in [
-			["Warehouse", "default_warehouse"],
-			["Cost Center", "buying_cost_center"],
-			["Cost Center", "selling_cost_center"],
-			["Account", "expense_account"],
-			["Account", "income_account"],
-		]:
+		for doctype, field in company_links:
 			if item_default.get(field):
 				company = frappe.db.get_value(doctype, item_default.get(field), "company", cache=True)
 				if company and company != item_default.company:
@@ -1579,6 +1905,24 @@ def validate_item_default_company_links(item_defaults: list[ItemDefault]) -> Non
 						title=_("Invalid Item Defaults"),
 					)
 
+		validate_default_inventory_account(item_default)
+
+
+def validate_default_inventory_account(item_default) -> None:
+	if not item_default.default_inventory_account:
+		return
+
+	account_type, is_group = frappe.db.get_value(
+		"Account", item_default.default_inventory_account, ["account_type", "is_group"], cache=True
+	)
+	if account_type != "Stock" or is_group:
+		frappe.throw(
+			_("Row #{0}: Default Inventory Account {1} must be a Stock account that is not a group.").format(
+				item_default.idx, frappe.bold(item_default.default_inventory_account)
+			),
+			title=_("Invalid Item Defaults"),
+		)
+
 
 @frappe.whitelist()
 def get_asset_naming_series():
@@ -1594,41 +1938,39 @@ def get_child_warehouses(warehouse):
 	return get_child_warehouses(warehouse)
 
 
+ITEM_PRICES_LIMIT = 10
+
+
 @frappe.whitelist()
 def get_item_prices(item_code: str):
 	"""Fetch valid item prices for the item prices tab."""
-	if not frappe.has_permission("Item Price", "read"):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	frappe.has_permission("Item Price", "read", throw=True)
 	today = getdate()
 
-	ItemPrice = frappe.qb.DocType("Item Price")
-
-	prices = (
-		frappe.qb.from_(ItemPrice)
-		.select(
-			ItemPrice.name,
-			ItemPrice.price_list,
-			ItemPrice.price_list_rate,
-			ItemPrice.currency,
-			ItemPrice.uom,
-			ItemPrice.customer,
-			ItemPrice.supplier,
-			ItemPrice.buying,
-			ItemPrice.selling,
-			ItemPrice.valid_upto,
-		)
-		.where(ItemPrice.item_code == item_code)
-		.where(ItemPrice.docstatus != 2)
-		.where((ItemPrice.valid_upto.isnull()) | (ItemPrice.valid_upto >= today))
-		.orderby(ItemPrice.price_list)
-		.limit(11)
-		.run(as_dict=True)
+	# get_list, not get_all: otherwise a caller restricted to one Price List sees every party's negotiated rate
+	prices = frappe.get_list(
+		"Item Price",
+		filters={"item_code": item_code, "docstatus": ["!=", 2]},
+		or_filters=[["valid_upto", "is", "not set"], ["valid_upto", ">=", today]],
+		fields=[
+			"name",
+			"price_list",
+			"price_list_rate",
+			"currency",
+			"uom",
+			"customer",
+			"supplier",
+			"buying",
+			"selling",
+			"valid_upto",
+		],
+		order_by="price_list",
+		limit=ITEM_PRICES_LIMIT + 1,
 	)
 
-	has_more = len(prices) == 11
 	return {
-		"prices": prices[:10],
-		"has_more": has_more,
+		"prices": prices[:ITEM_PRICES_LIMIT],
+		"has_more": len(prices) > ITEM_PRICES_LIMIT,
 	}
 
 
@@ -1640,8 +1982,7 @@ def make_opening_stock_entry(
 	valuation_rate: float,
 	warehouse: str | None = None,
 ):
-	if not frappe.has_permission("Item", "write", item_code):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	frappe.has_permission("Item", "write", item_code, throw=True)
 
 	item = frappe.get_doc("Item", item_code)
 

@@ -48,7 +48,7 @@ frappe.ui.form.on("Company", {
 		});
 
 		frm.set_query("default_selling_terms", function () {
-			return { filters: { selling: 1 } };
+			return { filters: { selling: 1, disabled: 0 } };
 		});
 
 		frm.set_query("default_sales_contact", function (doc) {
@@ -59,7 +59,7 @@ frappe.ui.form.on("Company", {
 		});
 
 		frm.set_query("default_buying_terms", function () {
-			return { filters: { buying: 1 } };
+			return { filters: { buying: 1, disabled: 0 } };
 		});
 
 		WAREHOUSE_DEFAULT_FIELDS.forEach((fieldname) => {
@@ -204,7 +204,7 @@ frappe.ui.form.on("Company", {
 			frm.set_value("reporting_currency", "");
 		}
 
-		erpnext.company.set_chart_of_accounts_options(frm.doc);
+		erpnext.company.set_chart_of_accounts_options(frm);
 	},
 
 	make_default_tax_template: function (frm) {
@@ -219,7 +219,7 @@ frappe.ui.form.on("Company", {
 	},
 
 	country: function (frm) {
-		erpnext.company.set_chart_of_accounts_options(frm.doc);
+		erpnext.company.set_chart_of_accounts_options(frm);
 	},
 
 	delete_company_transactions: function (frm) {
@@ -231,60 +231,58 @@ frappe.ui.form.on("Company", {
 			freeze: true,
 			callback: function (r) {
 				if (!r.exc) {
-					frappe.verify_password(function () {
-						var d = frappe.prompt(
-							{
-								fieldtype: "Data",
-								fieldname: "company_name",
-								label: __("Please enter the company name to confirm"),
-								reqd: 1,
-								description: __(
-									"Please make sure you really want to delete all the transactions for {0}. Your master data will remain as it is. This action cannot be undone.",
-									[frappe.utils.bold(frm.doc.name)]
-								),
-							},
-							function (data) {
-								if (data.company_name !== frm.doc.name) {
-									frappe.msgprint(__("Company name does not match"));
-									return;
-								}
-								frappe.call({
-									method: "erpnext.setup.doctype.company.company.create_transaction_deletion_request",
-									args: {
-										company: data.company_name,
-									},
-									freeze: true,
-									callback: function (r, rt) {},
-									onerror: function () {
-										frappe.msgprint(__("Wrong Password"));
-									},
-								});
-							},
-							__("Delete all the Transactions for {0}", [frappe.utils.bold(frm.doc.name)]),
-							__("Delete")
-						);
-						d.get_primary_btn().addClass("btn-danger");
-					});
+					var d = frappe.prompt(
+						{
+							fieldtype: "Data",
+							fieldname: "company_name",
+							label: __("Please enter the company name to confirm"),
+							reqd: 1,
+							description: __(
+								"Please make sure you really want to delete all the transactions for {0}. Your master data will remain as it is. Naming series counters will not be reset. This action cannot be undone.",
+								[frappe.utils.bold(frm.doc.name)]
+							),
+						},
+						function (data) {
+							if (data.company_name !== frm.doc.name) {
+								frappe.msgprint(__("Company name does not match"));
+								return;
+							}
+							frappe.call({
+								method: "erpnext.setup.doctype.company.company.create_transaction_deletion_request",
+								args: {
+									company: data.company_name,
+								},
+								freeze: true,
+								callback: function (r, rt) {},
+								onerror: function () {
+									frappe.msgprint(__("Wrong Password"));
+								},
+							});
+						},
+						__("Delete all the Transactions for {0}", [frappe.utils.bold(frm.doc.name)]),
+						__("Delete")
+					);
+					d.get_primary_btn().addClass("btn-danger");
 				}
 			},
 		});
 	},
 });
 
-erpnext.company.set_chart_of_accounts_options = function (doc) {
-	var selected_value = doc.chart_of_accounts;
-	if (doc.country) {
+erpnext.company.set_chart_of_accounts_options = function (frm) {
+	var selected_value = frm.doc.chart_of_accounts;
+	if (frm.doc.country) {
 		return frappe.call({
 			method: "erpnext.accounts.doctype.account.chart_of_accounts.chart_of_accounts.get_charts_for_country",
 			args: {
-				country: doc.country,
+				country: frm.doc.country,
 				with_standard: true,
 			},
 			callback: function (r) {
 				if (!r.exc) {
 					set_field_options("chart_of_accounts", [""].concat(r.message).join("\n"));
 					if (r.message.includes(selected_value))
-						cur_frm.set_value("chart_of_accounts", selected_value);
+						frm.set_value("chart_of_accounts", selected_value);
 				}
 			},
 		});
@@ -303,12 +301,15 @@ erpnext.company.setup_queries = function (frm) {
 			["round_off_account", { root_type: ["in", ["Expense", "Income"]] }],
 			["round_off_for_opening", { root_type: "Liability", account_type: "Round Off for Opening" }],
 			["write_off_account", { root_type: "Expense" }],
+			["bank_charges_account", { root_type: "Expense" }],
 			["default_deferred_expense_account", {}],
 			["default_deferred_revenue_account", {}],
 			["default_discount_account", {}],
 			["discount_allowed_account", { root_type: "Expense" }],
 			["discount_received_account", { root_type: "Income" }],
 			["exchange_gain_loss_account", { root_type: ["in", ["Expense", "Income"]] }],
+			["exchange_gain_account", { root_type: ["in", ["Expense", "Income"]] }],
+			["exchange_loss_account", { root_type: ["in", ["Expense", "Income"]] }],
 			[
 				"unrealized_exchange_gain_loss_account",
 				{ root_type: ["in", ["Expense", "Income", "Equity", "Liability"]] },
